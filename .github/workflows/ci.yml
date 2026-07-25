@@ -64,8 +64,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # Keep this pinned to the `rust-version` field in Cargo.toml.
-      - name: Install Rust 1.85
-        uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

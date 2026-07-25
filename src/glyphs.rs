@@ -277,7 +277,10 @@ pub fn art(sky: Sky) -> [&'static str; ART_HEIGHT] {
 /// silently shifts every column after them and puts values under the wrong
 /// headers. The set below is restricted to glyphs that measure 2 and draw 2.
 ///
-/// [`mark_width`] asserts this invariant in the tests.
+/// `every_sky_mark_has_a_predictable_display_width` asserts this. Plain code
+/// rather than an intra-doc link: the test is behind `cfg(test)`, so rustdoc
+/// cannot resolve a link to it and `-D warnings` turns that into a build
+/// failure.
 pub fn mark(sky: Sky) -> &'static str {
     match sky {
         Sky::Clear => "🌞",

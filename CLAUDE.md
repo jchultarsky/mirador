@@ -27,11 +27,21 @@ hooks, calm by default so that *not* calm is legible at a glance.
 cargo test                                    # 335 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
+RUSTDOCFLAGS="-D warnings" \
+  cargo doc --no-deps --document-private-items  # CI runs this; it caught a
+                                                # broken intra-doc link that
+                                                # the other three did not
 cargo run -- --print-config > /tmp/m.toml     # scratch config to experiment on
 cargo run -- --config /tmp/m.toml
 ```
 
-**The bar is zero warnings and zero errors, with fmt and clippy clean.** The
+**The bar is zero warnings and zero errors across all four.** Running only the
+first three is how a red build reached `main`: rustdoc rejects a link to a
+`cfg(test)` item, and nothing else notices.
+
+Note that `rust-version` in `Cargo.toml` changes what clippy suggests — raising
+the MSRV to 1.88 turned every nested `if let` into a `collapsible_if` error,
+because let-chains only became available there. The
 crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a targeted
 `#[allow]` *with a comment saying why* — do not widen the allow list in
 `Cargo.toml`.

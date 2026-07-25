@@ -139,6 +139,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The minimum supported Rust version is 1.88, not 1.85. Transitive dependencies
+  pulled in through ratatui (`darling`, `instability`) require 1.88, so the
+  declared floor had simply stopped being true and CI's MSRV job failed against
+  it. `Cargo.toml`, the CI toolchain, the README and CONTRIBUTING now agree.
+- A rustdoc intra-doc link pointed at a `cfg(test)` item, which rustdoc cannot
+  resolve; with `-D warnings` that failed the documentation build.
 - Deleting a task no longer hands its id to the next one added. Ids came from
   `max(id) + 1`, so removing the highest-numbered task gave that number
   straight back, and anything still holding it — the selection, an open edit

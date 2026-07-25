@@ -480,10 +480,10 @@ impl TodoPanel {
                 return KeyOutcome::Consumed;
             }
             KeyCode::Enter => {
-                if let Err(message) = self.commit_form() {
-                    if let Mode::Edit(form) = &mut self.mode {
-                        form.error = Some(message);
-                    }
+                if let Err(message) = self.commit_form()
+                    && let Mode::Edit(form) = &mut self.mode
+                {
+                    form.error = Some(message);
                 }
                 return KeyOutcome::Consumed;
             }
@@ -1021,11 +1021,12 @@ impl Panel for TodoPanel {
             frame.render_stateful_widget(list, rows[2], &mut self.list_state);
         }
 
-        if show_notes {
-            if let Some(notes) = self
+        if show_notes
+            && let Some(notes) = self
                 .selected_id()
                 .and_then(|id| self.store.get(id))
                 .and_then(|t| t.notes.clone())
+        {
             {
                 frame.render_widget(
                     Paragraph::new(Span::styled(notes, Style::default().fg(theme.muted)))

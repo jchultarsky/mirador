@@ -335,10 +335,10 @@ impl NotesPanel {
             Field::Title => {
                 // Enter on the title saves, the way it does in a one-line form.
                 if key.code == KeyCode::Enter {
-                    if let Err(message) = self.commit_form() {
-                        if let Mode::Edit(form) = &mut self.mode {
-                            form.error = Some(message);
-                        }
+                    if let Err(message) = self.commit_form()
+                        && let Mode::Edit(form) = &mut self.mode
+                    {
+                        form.error = Some(message);
                     }
                     return KeyOutcome::Consumed;
                 }
@@ -350,10 +350,10 @@ impl NotesPanel {
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && matches!(key.code, KeyCode::Char('s'))
                 {
-                    if let Err(message) = self.commit_form() {
-                        if let Mode::Edit(form) = &mut self.mode {
-                            form.error = Some(message);
-                        }
+                    if let Err(message) = self.commit_form()
+                        && let Mode::Edit(form) = &mut self.mode
+                    {
+                        form.error = Some(message);
                     }
                     return KeyOutcome::Consumed;
                 }

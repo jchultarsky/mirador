@@ -348,10 +348,10 @@ impl App {
     /// Offer a key to the focused panel, then to the global bindings.
     fn dispatch_key(&mut self, key: KeyEvent) {
         // Offer the key to the focused panel first.
-        if let Some(slot) = self.slots.get_mut(self.focus) {
-            if slot.panel.handle_key(key) == KeyOutcome::Consumed {
-                return;
-            }
+        if let Some(slot) = self.slots.get_mut(self.focus)
+            && slot.panel.handle_key(key) == KeyOutcome::Consumed
+        {
+            return;
         }
 
         // A panel in a modal state gets an absolute veto on global bindings, so

@@ -2,7 +2,7 @@
 name = "mirador"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Julian Chultarsky <jchultarsky@gmail.com>"]
 description = "A personal information dashboard for your terminal: world clocks, weather, tasks, and live system metrics."
 readme = "README.md"
