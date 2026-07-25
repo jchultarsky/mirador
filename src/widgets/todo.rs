@@ -192,6 +192,10 @@ pub struct TodoPanel {
     config: TodoConfig,
     sort: SortMode,
     show_completed: bool,
+    /// What the two above were when the panel was built, so `remember` can tell
+    /// a user pressing `s` or `c` from a config that merely says so.
+    seeded_sort: SortMode,
+    seeded_show_completed: bool,
     filter: String,
     mode: Mode,
     /// Task ids in display order, recomputed whenever the list changes.
@@ -219,6 +223,8 @@ impl TodoPanel {
             config,
             sort,
             show_completed,
+            seeded_sort: sort,
+            seeded_show_completed: show_completed,
             filter: String::new(),
             mode: Mode::List,
             view: Vec::new(),
@@ -869,6 +875,15 @@ impl Panel for TodoPanel {
         if today != self.today {
             self.today = today;
             self.refresh_view();
+        }
+    }
+
+    fn remember(&self, state: &mut crate::state::UiState) {
+        if self.sort != self.seeded_sort {
+            state.todo_sort = Some(self.sort.label().to_string());
+        }
+        if self.show_completed != self.seeded_show_completed {
+            state.todo_show_completed = Some(self.show_completed);
         }
     }
 

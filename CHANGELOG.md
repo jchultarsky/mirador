@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Settings changed from the keyboard are remembered across restarts.**
+  Weather units, the task sort order, whether completed tasks show, seconds on
+  the clock, and the pomodoro durations. The watchlist already did this for
+  symbols; this is the same answer generalised.
+
+  mirador still never rewrites your config — the property that makes it safe to
+  hand-edit and keep in git. The config *seeds* a setting and a small state
+  file beside your tasks records where you moved it since. Deleting that file
+  puts everything back, which the file's own header says, because a preference
+  you cannot remember setting needs an obvious way out.
+
+  **Only what you actually changed is written.** Pressing `u` records the units
+  and nothing else. The first version reported every panel's current value,
+  which pins the config's own settings into the state file the moment any one
+  preference moves — after which editing the config silently stops working.
+  That passed its tests and was caught by running it.
+
+  Panel sizes are deliberately excluded: `Ctrl+arrow` resizing is geometry
+  rather than preference, and remembering it would mean a saved width quietly
+  overruling a `[layout]` edited by hand.
 - **Pomodoro panel.** A focus timer in the same block numerals the clock uses:
   `space` starts and pauses, `n` skips a phase, `r` restores the current one,
   and `+`/`-` change the length of the phase you are in. Focus is brass and

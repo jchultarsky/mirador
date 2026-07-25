@@ -13,6 +13,7 @@ mod migrate;
 mod note;
 mod panel;
 mod quote;
+mod state;
 mod task;
 mod textarea;
 mod textfield;
@@ -151,9 +152,24 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let (config, _path) = Config::load(args.config)?;
+    let (mut config, _path) = Config::load(args.config)?;
+
+    // Preferences changed from the keyboard on a previous run are applied over
+    // the config *before* any panel exists, so every panel is constructed with
+    // the values the user last chose and none of them needs restoring code.
+    // The config still seeds; this only records where things moved since.
+    let state_path = Config::state_path().ok();
+    let saved = state_path
+        .as_deref()
+        .map(crate::state::UiState::load)
+        .unwrap_or_default();
+    config.apply_state(&saved);
+
     let mouse = config.general.mouse;
     let mut app = App::new(config)?;
+    if let Some(path) = state_path {
+        app.remember_preferences_at(path, saved);
+    }
 
     // `ratatui::init` installs a panic hook that restores the terminal, so a
     // panic leaves the user with a working shell rather than a broken one.

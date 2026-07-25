@@ -131,6 +131,37 @@ mirador --config-path
 Edit `[weather].location` to your own city and you are done. Nothing else is
 required: no account, no API key, no environment variables.
 
+### Remembered settings
+
+Some settings you change with a keystroke are remembered across restarts:
+
+| Setting | Key | Panel |
+| --- | --- | --- |
+| Weather units | `u` | Weather |
+| Task sort order | `s` | Tasks |
+| Whether completed tasks show | `c` | Tasks |
+| Seconds on the clock | `s` | Clock |
+| Pomodoro durations | `+` / `-` | Pomodoro |
+| Watchlist symbols | `a` / `d` | Markets |
+
+**mirador never rewrites your config.** That is what makes it safe to
+hand-edit and keep in git, so these live in a small state file beside your
+tasks instead. The config *seeds* a setting; the state file records where you
+moved it since.
+
+Only what you actually changed is written. Pressing `u` records the units and
+nothing else, so editing any other value in your config still takes effect —
+if mirador wrote everything, the first keystroke would silently freeze the
+rest of your config in place. Delete the state file and every remembered
+setting falls back to what the config says; it is listed at the top of the
+file itself, because a preference you cannot remember setting needs an obvious
+way back.
+
+Panel sizes are the deliberate exception. `Ctrl+arrow` resizing lasts for the
+session only: it is geometry rather than preference, in the same vocabulary as
+`[layout]`, and remembering it would mean a saved width quietly overruling a
+layout you had since edited by hand.
+
 ### Upgrading
 
 **A new widget will not appear in a config you already have.** mirador never

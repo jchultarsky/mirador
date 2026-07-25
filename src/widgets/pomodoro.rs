@@ -5,10 +5,10 @@
 //! persisted: a timer that survived a restart would be lying about how long you
 //! have been sitting there.
 //!
-//! Durations are adjustable from the panel and last for the session, the same
-//! bargain panel resizing makes. mirador never rewrites its config, so `+` and
-//! `-` change the timer in front of you and `[pomodoro]` decides where it
-//! starts.
+//! Durations are adjustable from the panel and outlive the session: `[pomodoro]`
+//! seeds them and [`crate::state`] records where you moved since, so mirador
+//! still never rewrites the config. Only a phase you actually adjusted is
+//! remembered — see [`Panel::remember`].
 
 use std::time::{Duration, Instant};
 
@@ -35,7 +35,7 @@ const FRAME_HEIGHT: u16 = 2;
 /// Longest interval the panel will let you dial in, in minutes. Well past any
 /// real pomodoro, but a bound stops `+` held down from producing a timer that
 /// no longer fits its own display.
-const MAX_MINUTES: u64 = 180;
+pub const MAX_MINUTES: u64 = 180;
 
 /// Rows the panel needs besides the numerals: the phase label above, and the
 /// meter and pip line below.
@@ -101,6 +101,10 @@ impl Phase {
 /// A pomodoro timer panel.
 pub struct PomodoroPanel {
     config: PomodoroConfig,
+    /// The durations the panel was built with. `remember` compares against
+    /// these per phase, so lengthening a focus interval does not also pin the
+    /// break lengths you never touched into the state file.
+    seeded: PomodoroConfig,
     phase: Phase,
     /// When the current phase ends. `None` whenever the timer is not running.
     ends_at: Option<Instant>,
@@ -124,6 +128,7 @@ impl PomodoroPanel {
     pub fn new(config: PomodoroConfig) -> Self {
         let first = Duration::from_secs(config.focus_minutes * 60);
         Self {
+            seeded: config.clone(),
             config,
             phase: Phase::Focus,
             ends_at: None,
@@ -496,6 +501,18 @@ impl Panel for PomodoroPanel {
                 Paragraph::new(Line::from(spans)),
                 Rect::new(area.x, cursor, area.width, 1),
             );
+        }
+    }
+
+    fn remember(&self, state: &mut crate::state::UiState) {
+        if self.config.focus_minutes != self.seeded.focus_minutes {
+            state.pomodoro_focus_minutes = Some(self.config.focus_minutes);
+        }
+        if self.config.short_break_minutes != self.seeded.short_break_minutes {
+            state.pomodoro_short_break_minutes = Some(self.config.short_break_minutes);
+        }
+        if self.config.long_break_minutes != self.seeded.long_break_minutes {
+            state.pomodoro_long_break_minutes = Some(self.config.long_break_minutes);
         }
     }
 
@@ -907,6 +924,31 @@ mod tests {
                 binding.key
             );
         }
+    }
+
+    #[test]
+    fn only_a_duration_you_changed_is_remembered() {
+        use crate::panel::Panel as _;
+
+        let mut p = panel();
+        let mut state = crate::state::UiState::default();
+        p.remember(&mut state);
+        assert_eq!(
+            state,
+            crate::state::UiState::default(),
+            "an untouched timer must write nothing, or the config's own values \
+             get pinned into the state file and editing the config stops working"
+        );
+
+        p.adjust(1); // focus only
+        let mut state = crate::state::UiState::default();
+        p.remember(&mut state);
+        assert_eq!(state.pomodoro_focus_minutes, Some(26));
+        assert_eq!(
+            state.pomodoro_short_break_minutes, None,
+            "a break you never touched must not be pinned by adjusting focus"
+        );
+        assert_eq!(state.pomodoro_long_break_minutes, None);
     }
 
     #[test]

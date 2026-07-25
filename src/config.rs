@@ -484,7 +484,10 @@ impl Config {
 
     /// Reject configs that would produce an unusable dashboard, with a message
     /// that says how to fix it rather than just what is wrong.
-    fn validate(&self) -> Result<()> {
+    /// `pub(crate)` so the state tests can assert that no remembered preference,
+    /// however mangled, can produce a config that would have been rejected had
+    /// it come from the file.
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.layout.rows.is_empty() {
             anyhow::bail!(
                 "`[layout]` has no rows, so there is nothing to draw. \
@@ -559,6 +562,63 @@ impl Config {
         match &self.stocks.file {
             Some(p) => Ok(expand_tilde(p)),
             None => Ok(Self::default_data_dir()?.join("watchlist.toml")),
+        }
+    }
+
+    /// Where remembered UI preferences live. Not configurable: it is mirador's
+    /// own bookkeeping rather than something you curate, and a config key
+    /// pointing at it would invite exactly the confusion this file avoids.
+    pub fn state_path() -> Result<PathBuf> {
+        Ok(crate::state::default_path(&Self::default_data_dir()?))
+    }
+
+    /// Apply remembered preferences over the config.
+    ///
+    /// Runs before any panel is built, so panels see a config that already
+    /// reflects where the user left things and need no loading code of their
+    /// own. An absent field means the config keeps its say.
+    ///
+    /// Values are *validated* rather than trusted: a sort mode or unit string
+    /// that no longer parses is dropped and the config's value stands. The file
+    /// outlives the version that wrote it, and a preference from a build where
+    /// `smart` meant something else should not take a dashboard down.
+    pub fn apply_state(&mut self, state: &crate::state::UiState) {
+        if let Some(units) = &state.weather_units
+            && matches!(units.as_str(), "metric" | "imperial")
+        {
+            self.weather.units.clone_from(units);
+        }
+        if let Some(sort) = &state.todo_sort
+            && sort.parse::<crate::task::SortMode>().is_ok()
+        {
+            self.todo.sort.clone_from(sort);
+        }
+        if let Some(show) = state.todo_show_completed {
+            self.todo.show_completed = show;
+        }
+        if let Some(show) = state.clocks_show_seconds {
+            self.clocks.show_seconds = show;
+        }
+        // Durations are clamped rather than dropped: the panel already bounds
+        // them, so an out-of-range figure means a hand-edited file and the
+        // nearest legal value is what was meant.
+        for (slot, saved) in [
+            (
+                &mut self.pomodoro.focus_minutes,
+                state.pomodoro_focus_minutes,
+            ),
+            (
+                &mut self.pomodoro.short_break_minutes,
+                state.pomodoro_short_break_minutes,
+            ),
+            (
+                &mut self.pomodoro.long_break_minutes,
+                state.pomodoro_long_break_minutes,
+            ),
+        ] {
+            if let Some(minutes) = saved {
+                *slot = minutes.clamp(1, crate::widgets::pomodoro::MAX_MINUTES);
+            }
         }
     }
 }

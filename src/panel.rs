@@ -123,6 +123,20 @@ pub trait Panel {
         false
     }
 
+    /// Contribute any preference this panel wants remembered across restarts.
+    ///
+    /// Write a setting only when it differs from the value the panel was built
+    /// with. A panel that reports everything pins the config's own values into
+    /// the state file the first time any *other* preference moves, and editing
+    /// the config then silently stops working — which is the failure this whole
+    /// mechanism exists to avoid. Comparing against the seed is what keeps
+    /// "changed by the user" and "merely configured" apart.
+    ///
+    /// There is no matching load hook on purpose. Remembered preferences are
+    /// applied to the config before any panel is built, so a panel sees the
+    /// right values in its constructor and needs no restoring code at all.
+    fn remember(&self, _state: &mut crate::state::UiState) {}
+
     /// Called once before the terminal is torn down, so panels can flush state.
     fn shutdown(&mut self) {}
 }
