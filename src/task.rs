@@ -258,6 +258,14 @@ pub struct TaskStore {
     tasks: Vec<Task>,
     /// Set when the in-memory list has changes not yet written to disk.
     dirty: bool,
+    /// High-water mark for ids, which only ever climbs.
+    ///
+    /// Deriving the next id from `max(id) + 1` hands a deleted task's id
+    /// straight to the next one added, so anything still holding the old id —
+    /// the selection, an open edit form, a pending delete confirmation — would
+    /// silently act on a different task. Rebuilt from the file on load, which
+    /// is safe because nothing holds an id across a restart.
+    next_id: u64,
     /// The last save error, surfaced in the panel so failures are never silent.
     pub last_error: Option<String>,
 }
@@ -276,10 +284,12 @@ impl TaskStore {
             Vec::new()
         };
 
+        let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
         Ok(Self {
             path,
             tasks,
             dirty: false,
+            next_id,
             last_error: None,
         })
     }
@@ -294,15 +304,11 @@ impl TaskStore {
         &self.tasks
     }
 
-    /// The smallest unused id.
-    fn next_id(&self) -> u64 {
-        self.tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1
-    }
-
     /// Append a task and return its id.
     pub fn add(&mut self, mut task: Task) -> u64 {
-        task.id = self.next_id();
-        let id = task.id;
+        let id = self.next_id;
+        self.next_id += 1;
+        task.id = id;
         self.tasks.push(task);
         self.dirty = true;
         id
@@ -559,6 +565,43 @@ mod tests {
         assert!(store.remove(b));
         let c = store.add(task(0, "c"));
         assert_ne!(c, a, "a reused id would rewrite the wrong task");
+        // The one that actually mattered: `b` was the highest id, so deriving
+        // the next id from `max(id) + 1` handed `b` straight back. Anything
+        // still holding it — the selection, an open edit form, a pending
+        // delete — would then act on `c` instead.
+        assert_ne!(c, b, "the removed task's id must not be handed out again");
+    }
+
+    #[test]
+    fn the_id_mark_only_climbs_across_many_add_and_remove_cycles() {
+        let dir = tempdir();
+        let mut store = TaskStore::load(dir.join("todos.toml")).unwrap();
+        let mut seen = std::collections::HashSet::new();
+
+        // Repeatedly add and immediately remove: every cycle leaves the store
+        // empty, which is the case that reset `max(id)` to nothing.
+        for _ in 0..20 {
+            let id = store.add(task(0, "churn"));
+            assert!(seen.insert(id), "id {id} was handed out twice");
+            assert!(store.remove(id));
+        }
+        assert!(store.tasks().is_empty());
+    }
+
+    #[test]
+    fn ids_resume_above_the_file_after_a_reload() {
+        let dir = tempdir();
+        let path = dir.join("todos.toml");
+        let mut store = TaskStore::load(&path).unwrap();
+        let a = store.add(task(0, "a"));
+        let b = store.add(task(0, "b"));
+        store.save().unwrap();
+
+        // Reloading rebuilds the mark from the file. Safe precisely because
+        // nothing holds an id across a restart.
+        let mut reloaded = TaskStore::load(&path).unwrap();
+        let c = reloaded.add(task(0, "c"));
+        assert!(c > a && c > b, "{c} must be above everything in the file");
     }
 
     #[test]

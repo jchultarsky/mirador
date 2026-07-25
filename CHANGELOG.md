@@ -139,6 +139,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deleting a task no longer hands its id to the next one added. Ids came from
+  `max(id) + 1`, so removing the highest-numbered task gave that number
+  straight back, and anything still holding it — the selection, an open edit
+  form, a pending delete confirmation — would silently act on a different task.
+  The store now keeps a high-water mark that only climbs, rebuilt from the file
+  on load, which is safe because nothing holds an id across a restart.
 - A dropped column no longer slides every value after it under the wrong
   header. Row cells were indexed by *surviving* column position while callers
   pass them in declared order, so a narrow forecast showed the feels-like

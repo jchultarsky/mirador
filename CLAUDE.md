@@ -24,7 +24,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 333 tests, all fast, no network
+cargo test                                    # 335 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 cargo run -- --print-config > /tmp/m.toml     # scratch config to experiment on
@@ -250,8 +250,6 @@ inline `[theme]` table from a `theme = "name"` string).
    date grid only, deliberately offline; events are a separate, larger panel.
 3. Theme system per above.
 4. "What changed since I last looked" markers.
-5. **`task.rs` reuses ids after a deletion** (`max(id) + 1`). `note.rs` hit the
-   same bug and now keeps a high-water mark; port that fix across.
 
 ## Housekeeping
 
