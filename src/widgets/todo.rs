@@ -209,10 +209,10 @@ pub struct TodoPanel {
 impl TodoPanel {
     /// Build the panel, loading tasks from `path`.
     pub fn new(config: TodoConfig, path: std::path::PathBuf) -> anyhow::Result<Self> {
-        let store = TaskStore::load(path)?;
+        let today = jiff::Zoned::now().date();
+        let store = TaskStore::load_or_seed(path, today)?;
         let sort = config.sort.parse().unwrap_or_default();
         let show_completed = config.show_completed;
-        let today = jiff::Zoned::now().date();
 
         let mut panel = Self {
             store,
@@ -1191,6 +1191,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("todos.toml");
+        // An empty file rather than no file: the panel seeds examples when the
+        // file is absent, and these tests are about the panel, not the seed.
+        // Writing it first exercises the same branch a second run takes.
+        std::fs::write(&path, "").unwrap();
         let panel = TodoPanel::new(TodoConfig::default(), path).unwrap();
         (panel, TempDir(dir))
     }

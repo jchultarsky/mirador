@@ -110,6 +110,26 @@ impl NoteStore {
         })
     }
 
+    /// Load, seeding one example note when there is no file yet.
+    ///
+    /// Same reasoning as the task list: an empty master-detail panel shows
+    /// neither a list nor a body, so first run is the one moment it explains
+    /// nothing at all. One note rather than several — the panel's whole point
+    /// is that you can read a body without pressing anything, and a single
+    /// selected note demonstrates that better than a list to scroll.
+    ///
+    /// Seeded only when the file is *absent*, so deleting it is permanent.
+    pub fn load_or_seed(path: impl Into<PathBuf>, today: Date) -> Result<Self> {
+        let path = path.into();
+        let first_run = !path.exists();
+        let mut store = Self::load(path)?;
+        if first_run {
+            store.add(example_note(today));
+            store.save_reporting();
+        }
+        Ok(store)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -217,6 +237,26 @@ impl NoteStore {
     }
 }
 
+/// The note written on first run. The id is assigned by the store.
+fn example_note(today: Date) -> Note {
+    Note {
+        body: "You are reading it in the detail pane. That is the point of the \
+               panel: a note's whole value is the text inside it, so making you \
+               press a key to see any of it would turn \"glance at the \
+               dashboard\" into \"operate the dashboard\".\n\n\
+               a writes a new note and e edits this one. Tab moves between the \
+               title and the body, Enter inside the body is an ordinary new \
+               line, and Ctrl+S saves. d deletes, and / searches bodies as well \
+               as titles — the title you wrote in a hurry is often not what you \
+               later search for.\n\n\
+               Notes live in a plain TOML file next to your tasks, written \
+               atomically, and you can edit it by hand or keep it in git. \
+               Delete this one once you have your own."
+            .into(),
+        ..Note::new(0, "This is a note", today)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +279,39 @@ mod tests {
 
     fn today() -> Date {
         Date::new(2026, 7, 25).unwrap()
+    }
+
+    #[test]
+    fn a_first_run_is_seeded_and_an_emptied_file_stays_empty() {
+        let dir = std::env::temp_dir().join(format!("mirador-note-{}-seed", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDir(dir.clone());
+        let path = dir.join("notes.toml");
+
+        let mut s = NoteStore::load_or_seed(&path, jiff::civil::date(2026, 7, 25)).unwrap();
+        assert_eq!(s.notes().len(), 1, "first run must show one example note");
+        assert_eq!(s.last_error, None, "seeding must not fail silently");
+        assert!(
+            path.exists(),
+            "the seed must be written, not held in memory"
+        );
+        assert!(
+            !s.notes()[0].body.is_empty(),
+            "an empty body defeats the point: the detail pane would be blank"
+        );
+
+        // Deleting it writes an empty file; meeting it again next run would
+        // make it impossible to get rid of.
+        let id = s.notes()[0].id;
+        s.remove(id);
+        s.save().unwrap();
+
+        let reopened = NoteStore::load_or_seed(&path, jiff::civil::date(2026, 7, 25)).unwrap();
+        assert!(
+            reopened.notes().is_empty(),
+            "an emptied file must stay empty across a restart"
+        );
     }
 
     #[test]

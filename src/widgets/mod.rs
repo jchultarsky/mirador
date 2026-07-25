@@ -177,6 +177,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Not a test: renders what a brand-new user sees, with nothing on disk,
+    /// so the seeded examples can be eyeballed the way they will be met.
+    /// Run with `cargo test dump_first_run -- --ignored --nocapture`.
+    ///
+    /// Worth looking at after touching the seeds: they are the first and for
+    /// some users the only impression of the task and notes panels, and the
+    /// wording has to fit the columns at an ordinary terminal size.
+    #[test]
+    #[ignore = "renders the first-run dashboard to stdout for eyeballing, not an assertion"]
+    fn dump_first_run() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // An empty directory is the whole point: the stores seed themselves.
+        let dir = std::env::temp_dir().join("mirador-dump-first-run");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut config = Config::default();
+        config.todo.file = Some(dir.join("todos.toml"));
+        config.notes.file = Some(dir.join("notes.toml"));
+        config.stocks.file = Some(dir.join("watchlist.toml"));
+        config.weather.latitude = Some(42.36);
+        config.weather.longitude = Some(-71.06);
+
+        let mut app = crate::app::App::new(config).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
+        terminal.draw(|f| app.render_for_test(f)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        println!("\n+{}+", "-".repeat(100));
+        for y in 0..buf.area.height {
+            let mut line = String::new();
+            for x in 0..buf.area.width {
+                line.push_str(buf[(x, y)].symbol());
+            }
+            println!("|{line}|");
+        }
+        println!("+{}+", "-".repeat(100));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Not a test: renders the dashboard to text so it can be eyeballed.
     /// Run with `cargo test dump_dashboard -- --ignored --nocapture`.
     #[test]

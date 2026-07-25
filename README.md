@@ -17,25 +17,27 @@ nothing shimmers, and nothing is designed to pull you back to it.
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
 ```
-╭─ Clocks ─────────────────────╮╭─ Weather — Boston, Massachusetts ──────────╮
-│ Local   09:41:07  Sat 25 Jul ││ ☀ 74°F  clear                              │
-│ UTC     13:41:07  Sat 25 Jul ││ feels 76°F   wind 7 mph   humidity 58%     │
-│ London  14:41:07  Sat 25 Jul ││ Sat  ☀   81° /  63°                        │
-│ Tokyo   22:41:07  Sat 25 Jul ││ Sun  ⛅   78° /  61°   20%                  │
-╰──────────────────────────────╯╰────────────────────────────────────────────╯
-┏━ Tasks (4) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ 4 open · 1 overdue · 1 today   sort: smart                                 ┃
-┃ ▸ [ ] !!! Renew the domain               #admin            2 days late     ┃
-┃   [ ] !!  Reply to the design review     #work             today           ┃
-┃   [ ] !   Publish 0.0.0 placeholder      #mirador #rust    in 3 days       ┃
-┃   [ ]     Read the ratatui layout docs                     Fri 07 Aug      ┃
-┃ Reserve the crates.io name before someone else does.                       ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-╭─ CPU (10 cores) ─────────────╮╭─ Network ──────────────────────────────────╮
-│  12.4%  average   120s window││ ↓    1.2 MB/s    ↑    184 KB/s             │
-│ ▁▂▃▂▁▁▂▅▇▆▃▂▁▁▂▂▁▁▁▂▃▂▁▁▁▂▁▁ ││ ▁▁▂▁▁▃▇█▅▂▁▁▁▂▁▁▁▁▂▁▁▁▁▁▂▁▁▁▁▁▁▁▁▁▂▁▁▁▁▁▁ │
-╰──────────────────────────────╯╰────────────────────────────────────────────╯
+╭┤1 Clock├───────────┤EDT├╮╭┤2 Weather — Boston, Massachusetts├────┤at 15:45├╮
+│ 15:52:41                ││ 75°F  clear                                     │
+│    SATURDAY 25 JULY     ││ feels 75°F                                      │
+│ ZONE          TIME      ││ NEXT HOURS ──────────────────────────────────── │
+│ UTC           19:52:41  ││ HOUR  SKY              TEMP FEELS  RAIN    WIND │
+│ London        20:52:41  ││ 16:00 🌞 clear         75°F   76°    0%  10 mph │
+│ Tokyo         04:52:41… ││ 17:00 🌞 clear         75°F   74°    0%  10 mph │
+╰─────── s seconds ───────╯╰─────────────────────────────────────────────────╯
+╭┤3 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
+│ 1 overdue   1 due today   3 open   by smart                                │
+│   DONE PRI TASK                              TAGS                      DUE │
+│   [ ]  ▮▮▮ Renew the domain                  #admin            2 days late │
+│   [ ]  ▮▮  Reply to the design review        #work                   today │
+│   [ ]  ▮   Read the ratatui layout docs      #rust              Fri 07 Aug │
+│                                                                            │
+│ Card on file expired; the registrar will not auto-renew.                   │
+╰────────────────────────────────────────────────────────────────────────────╯
+ mirador   Tab focus   ? keys   q quit
 ```
+
+*Every screen in this README is a real capture, not a mock-up.*
 
 ## Why
 
@@ -71,14 +73,148 @@ rather than unsupported.
 mirador
 ```
 
-On first run it writes a commented config file and starts with a sensible
-default layout. To find the config:
+On first run it writes a commented config file, lays out all eight panels, and
+seeds the task list and notes with a few examples so nothing starts blank. The
+examples are ordinary entries — they explain the keys and then you delete them
+with `d`. They are seeded only when there is no file yet, so once you clear
+them they stay cleared.
+
+To find the config:
 
 ```sh
 mirador --config-path
 ```
 
-Edit `[weather].location` to your own city and you are done.
+Edit `[weather].location` to your own city and you are done. Nothing else is
+required: no account, no API key, no environment variables.
+
+## The panels
+
+Eight widgets, each answering one question. Put the ones you want in the
+layout and drop the rest — an unused widget costs nothing but is also not
+built.
+
+### Tasks
+
+The reason this project exists. Other terminal dashboards tend to render a
+to-do list as a flat checklist; this one has due dates, priorities, tags,
+notes, filtering and full editing without leaving the dashboard.
+
+```
+╭┤3 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
+│ 1 overdue   1 due today   3 open   by smart                                │
+│   DONE PRI TASK                              TAGS                      DUE │
+│   [ ]  ▮▮▮ Renew the domain                  #admin            2 days late │
+│   [ ]  ▮▮  Reply to the design review        #work                   today │
+│   [ ]  ▮   Read the ratatui layout docs      #rust              Fri 07 Aug │
+│                                                                            │
+│ Card on file expired; the registrar will not auto-renew.                   │
+╰────────────────────────────────────────────────────────────────────────────╯
+```
+
+The selected task's note sits at the foot of the panel, so a one-line summary
+in the list does not mean losing the detail behind it. Priority reads as bars
+rather than colour alone, and an overdue task is red *and* counted in the
+header — the same fact twice, because colour is the first thing a terminal
+theme can take away from you.
+
+`smart` sort is the default and means: unfinished first, then overdue, then by
+priority, then by due date. `s` cycles to plain `due`, `priority`, `created`
+or `title` when you want something simpler.
+
+### Notes
+
+Free-form notes in a master-detail layout, the shape a mail client uses.
+
+```
+╭┤2 Notes├───────────────────────────────┤1├╮
+│ 1 note                                    │
+│   TITLE                              DATE │
+│   Release checklist                ·25 J… │
+│ ───────────────────────────────────────── │
+│ Release checklist                         │
+│ written 22 Jul 2026   edited 25 Jul 2026  │
+│ Bump the version, run the four gates, tag │
+│ v-something, and let CI build the three   │
+╰───────────────────────────────────────────╯
+```
+
+The body is visible without pressing anything, which is the whole point: a
+note's value is the text inside it, and making you press a key to see any of
+it turns "glance at the dashboard" into "operate the dashboard". `/` searches
+bodies as well as titles, because the title you wrote in a hurry is often not
+what you later search for.
+
+### Clock and calendar
+
+The first configured zone renders large; the rest become a table showing their
+offset *relative to that zone*, which is the number you actually want when
+scheduling across one. The calendar prints month grids in the shape `cal`
+does, with today marked.
+
+```
+╭┤1 Calendar├───────────────────╮
+│      July 2026                │
+│ Su Mo Tu We Th Fr Sa          │
+│           1  2  3  4          │
+│  5  6  7  8  9 10 11          │
+│ 12 13 14 15 16 17 18          │
+│ 19 20 21 22 23 24 25          │
+│ 26 27 28 29 30 31             │
+╰───── n/p month · t today ─────╯
+```
+
+The calendar is deliberately offline — it reads no mail server and no account.
+`months` sets how many sit across; a taller panel stacks more rather than
+leaving a void, up to a year in view.
+
+### Weather
+
+Current conditions and an hourly forecast from [Open-Meteo](https://open-meteo.com),
+which needs no key and no account. `u` switches between imperial and metric at
+runtime, converting what is already on screen rather than re-fetching.
+
+A failed refresh keeps the last reading and shows its age in amber rather than
+blanking the panel — weather two hours old is still useful, and an empty panel
+is not. Columns drop as the panel narrows, in the order that costs you least.
+
+### Markets
+
+A watchlist with the last price, the day's change, and an intraday sparkline.
+
+```
+╭┤1 Markets├──────────────────────────────────────────────────────────────┤3├╮
+│   SYMBOL         LAST       CHG        % TODAY                             │
+│ ▸ AAPL         333.02    +11.36   +3.53% ▂▄▅▆▇█▇▇▇▇▇▇                      │
+│   MSFT         381.70     +0.12   +0.03% ▄▃▅▇▆▇▆▆▇▆▆▃                      │
+│   ^GSPC       7411.98     +3.68   +0.05% ▃▃▃▆▇▇▅▆▅▂▁▂                      │
+│ via yahoo                                                                  │
+╰─────────────────────── a add · d remove · r refresh ───────────────────────╯
+```
+
+`a` adds a symbol and `d` removes one, and those edits stick — the watchlist
+is a data file rather than config, which is what lets the panel own it. See
+[Market data](#market-data) before filing a bug about HTTP 429.
+
+### CPU and network
+
+Braille history graphs with the colour gradient running vertically by
+magnitude, so the profile stays put as data scrolls and a graph left on screen
+all day does not shimmer.
+
+```
+╭┤2 CPU├──┤18 cores├╮╭┤3 Network├───┤all├╮
+│   9.0% LOAD   7s  ││ ↓    611 B/s   ↑  │
+│                   ││                 ⡀ │
+│                   ││                ⡄⡇ │
+│ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣶⣶⣴ ││ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣿⣿ │
+│ PER CORE          ││                ⡇  │
+│ ▁▁▁▁▁▁▂▂▁▁▁▁▃▁▁▁▁ ││ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣷⣼ │
+╰───────────────────╯╰───────────────────╯
+```
+
+Both buffers grow to fill the panel, so `history` is a floor on what is kept
+rather than a cap on what a wider panel can draw.
 
 ## Keys
 
@@ -229,10 +365,66 @@ needs to know it exists.
 
 ## Acknowledgements
 
-Built with [ratatui](https://ratatui.rs). Weather data from
-[Open-Meteo](https://open-meteo.com). Dates and timezones handled by
-[jiff](https://github.com/BurntSushi/jiff); system metrics by
-[sysinfo](https://github.com/GuillaumeGomez/sysinfo).
+mirador is a thin layer over other people's hard work. Ten direct
+dependencies, every one of them maintained by someone who did not have to.
+
+**[ratatui](https://ratatui.rs)** deserves top billing. Every frame here is
+ratatui: the layout solver, the buffer diffing that makes a redraw cheap
+enough to leave running all day, the widget model that made `Panel` a
+twenty-line trait instead of a framework. The border-embedded titles and hints
+this project leans on are ratatui's block API being more flexible than it had
+any obligation to be. It is the successor to
+[tui-rs](https://github.com/fdehau/tui-rs) by Florian Dehau, carried forward
+by a community that kept it alive rather than letting it archive — and it
+brings [crossterm](https://github.com/crossterm-rs/crossterm) with it, which
+is what makes the same binary work on macOS, Linux and Windows terminals.
+
+| Crate | What it does here |
+| --- | --- |
+| [ratatui](https://ratatui.rs) | Every widget, layout and redraw |
+| [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal control, key and mouse events |
+| [jiff](https://github.com/BurntSushi/jiff) | Dates, IANA timezones, the "2 days late" arithmetic |
+| [sysinfo](https://github.com/GuillaumeGomez/sysinfo) | CPU and network counters, per platform |
+| [ureq](https://github.com/algesten/ureq) | Blocking HTTP for weather and quotes |
+| [serde](https://serde.rs) + [toml](https://github.com/toml-rs/toml) + [serde_json](https://github.com/serde-rs/json) | Config, tasks and notes as hand-editable TOML; JSON from the APIs |
+| [anyhow](https://github.com/dtolnay/anyhow) | Error context that survives to the message a user reads |
+| [dirs](https://github.com/dirs-dev/dirs-rs) | Finding the right config and data directory per platform |
+| [unicode-width](https://github.com/unicode-rs/unicode-width) | Measuring text in display cells, without which every table misaligns |
+
+`unicode-width` is worth singling out: measuring `chars()` instead of display
+cells is a bug this project shipped once, and one emoji is enough to slide
+every column after it under the wrong header.
+
+### Services
+
+**[Open-Meteo](https://open-meteo.com)** provides the weather, free and
+without an API key or an account, which is the only reason the weather panel
+can exist in a tool that refuses to bundle credentials. Their
+[terms](https://open-meteo.com/en/terms) are generous to open source and they
+deserve the traffic; if you build on them at scale, pay them.
+
+Market data comes from Yahoo Finance's public chart endpoint. It is not a
+documented API and mirador treats it accordingly — one request per symbol, no
+faster than once a minute, never persisted to disk. `QuoteSource` is a trait
+so it can be replaced when it inevitably changes.
+
+### Prior art
+
+Techniques were taken deliberately from projects that solved these problems
+first, and are described in `CLAUDE.md` where they are implemented:
+
+- **[btop](https://github.com/aristocratos/btop)** and its ancestor
+  **[bpytop](https://github.com/aristocratos/bpytop)** — the braille level
+  table, and the insight that a gradient should run vertically by magnitude so
+  a graph does not shimmer as data scrolls. The CPU and network panels are
+  wearing their ideas.
+- **[clock-tui](https://github.com/race604/clock-tui)** — run-length row
+  encoding for block numerals, which turns thirteen glyphs and free integer
+  scaling into about twenty lines.
+- **[gitui](https://github.com/gitui-org/gitui)**,
+  **[lazygit](https://github.com/jesseduffield/lazygit)** and ratatui's own
+  tutorial — focus by dimming the unfocused rather than brightening the
+  focused, hints in the bottom border, the jump key in the title.
 
 ## License
 

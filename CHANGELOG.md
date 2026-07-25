@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- First run is no longer blank. The task list and notes seed a few examples
+  when their file does not exist yet, and the examples are the documentation:
+  they name the keys, carry a due date in each direction, a priority, a tag and
+  a note, so the table has something to line up and an overdue row shows what
+  overdue looks like. They are ordinary entries and `d` deletes them.
+
+  Keyed on the file being *absent* rather than empty, so clearing them sticks —
+  the opposite would make them impossible to get rid of. Their titles are held
+  to what the task column can show at 120 columns, since an instruction
+  truncated to `Press ? for every key, h…` is worse than no instruction.
 - A startup hint naming widgets your layout does not place, on the right of the
   status bar, plus a section in the help overlay. A config written by an earlier
   version silently lacks every widget added since — an absent widget is a valid
@@ -146,6 +156,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A config with no `[layout]` section no longer silently loses three panels.
+  The Rust default described a five-widget dashboard while the shipped file
+  described eight, so deleting a section you thought was redundant quietly took
+  the calendar, notes and watchlist with it. They now describe the same
+  dashboard, and a test fails if they drift apart again.
 - The minimum supported Rust version is 1.95, not 1.85. The declared floor had
   stopped being true: `sysinfo` requires 1.95 and ratatui's tree requires 1.88.
   `Cargo.toml`, the CI toolchain, the README and CONTRIBUTING now agree.
