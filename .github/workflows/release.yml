@@ -13,8 +13,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Runs before anything is built, so a bad tag costs seconds rather than three
+  # target builds and a published release nobody wanted.
+  verify:
+    name: verify the tag
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.classify.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The binary reports the version baked in from Cargo.toml, not the tag it
+      # was built from. Nothing reconciled the two, so tagging v0.2.0 without
+      # bumping the manifest would ship archives named v0.2.0 full of a binary
+      # answering `mirador 0.1.0` — and a published release cannot be quietly
+      # corrected. A v0.0.0-rc.1 test tag did exactly this and nothing objected.
+      #
+      # Equality is exact, so a pre-release tag needs a pre-release version in
+      # the manifest: v0.2.0-rc.1 requires version = "0.2.0-rc.1". That is the
+      # point rather than an inconvenience — an rc binary should say it is one.
+      - name: Check the tag matches the crate version
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          crate=$(grep -m1 -E '^version = "' Cargo.toml | sed -E 's/^version = "(.+)"/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+
+          if [ -z "$crate" ]; then
+            echo "::error::could not read a version from Cargo.toml"
+            exit 1
+          fi
+
+          echo "Cargo.toml version: $crate"
+          echo "tag:                $GITHUB_REF_NAME (version $tag)"
+
+          if [ "$crate" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate. Bump the version in Cargo.toml and Cargo.lock, commit, then move the tag."
+            exit 1
+          fi
+
+      # A semver pre-release identifier is the hyphen: 0.2.0-rc.1 is one,
+      # 0.2.0 is not. Without this every tag published as a normal release and
+      # took over "Latest", which is how a throwaway rc ended up presented as
+      # the current version of the project. GitHub refuses to mark a
+      # prerelease as latest, so this one flag settles both.
+      - name: Classify the tag
+        id: classify
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF_NAME#v}" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "publishing ${GITHUB_REF_NAME} with prerelease=$prerelease"
+
   build:
     name: build ${{ matrix.target }}
+    needs: verify
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -62,7 +118,7 @@ jobs:
 
   release:
     name: publish release
-    needs: build
+    needs: [verify, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -76,3 +132,8 @@ jobs:
             *.tar.gz
             *.tar.gz.sha256
           generate_release_notes: true
+          prerelease: ${{ needs.verify.outputs.prerelease }}
+          # Without this, a glob matching nothing is not an error and the
+          # release publishes with no binaries attached — the one failure that
+          # looks like success from the Actions tab.
+          fail_on_unmatched_files: true
