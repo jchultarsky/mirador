@@ -31,6 +31,7 @@ pub struct Config {
     pub notes: NotesConfig,
     pub stocks: StocksConfig,
     pub calendar: CalendarConfig,
+    pub pomodoro: PomodoroConfig,
     pub cpu: CpuConfig,
     pub network: NetworkConfig,
 }
@@ -96,7 +97,7 @@ impl Default for Layout {
         Self {
             rows: vec![
                 row(34, &[("clocks", 26), ("calendar", 34), ("weather", 40)]),
-                row(42, &[("todo", 58), ("notes", 42)]),
+                row(42, &[("todo", 44), ("notes", 30), ("pomodoro", 26)]),
                 row(24, &[("stocks", 40), ("cpu", 30), ("network", 30)]),
             ],
         }
@@ -338,6 +339,53 @@ impl Default for CalendarConfig {
     }
 }
 
+/// Pomodoro timer settings.
+///
+/// These are the *starting* values. `+` and `-` change the timer in the panel,
+/// and those changes last for the session — mirador never rewrites this file.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PomodoroConfig {
+    /// Length of a focus interval, in minutes.
+    pub focus_minutes: u64,
+    /// Length of the break after an ordinary focus interval.
+    pub short_break_minutes: u64,
+    /// Length of the break that closes a set.
+    pub long_break_minutes: u64,
+    /// Focus intervals per set, after which the long break falls due.
+    pub rounds_before_long_break: u32,
+    /// Begin the next phase the moment the current one ends, rather than
+    /// waiting for a keypress.
+    pub auto_start: bool,
+    /// Sound a notification when a phase ends. Off by default: a dashboard you
+    /// leave open all day has no business making noise you did not ask for.
+    pub chime: bool,
+    /// What to run for that notification, as a program and its arguments.
+    ///
+    /// Empty means the terminal bell, which costs nothing and lets your
+    /// terminal and OS decide whether that is a sound, a flash, or nothing at
+    /// all. Set it to play an actual file if you want a specific chime — see
+    /// the commented examples in the default config.
+    ///
+    /// Run directly rather than through a shell, so there is no quoting to get
+    /// wrong and no shell to inject into.
+    pub chime_command: Vec<String>,
+}
+
+impl Default for PomodoroConfig {
+    fn default() -> Self {
+        Self {
+            focus_minutes: 25,
+            short_break_minutes: 5,
+            long_break_minutes: 15,
+            rounds_before_long_break: 4,
+            auto_start: false,
+            chime: false,
+            chime_command: Vec::new(),
+        }
+    }
+}
+
 /// CPU chart settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -465,6 +513,26 @@ impl Config {
             anyhow::bail!(
                 "`[weather].units` is `{}`; expected `metric` or `imperial`.",
                 self.weather.units
+            );
+        }
+        // A zero-length phase would end on the tick it started and spin the
+        // timer through the cycle; a zero-round set would divide by zero
+        // deciding when the long break falls. Both are caught here rather than
+        // clamped silently, because a `0` in a config is someone's intent, not
+        // a typo to guess at.
+        for (key, minutes) in [
+            ("focus_minutes", self.pomodoro.focus_minutes),
+            ("short_break_minutes", self.pomodoro.short_break_minutes),
+            ("long_break_minutes", self.pomodoro.long_break_minutes),
+        ] {
+            if minutes == 0 {
+                anyhow::bail!("`[pomodoro].{key}` is 0; a phase needs at least one minute.");
+            }
+        }
+        if self.pomodoro.rounds_before_long_break == 0 {
+            anyhow::bail!(
+                "`[pomodoro].rounds_before_long_break` is 0; a set needs at least one focus \
+                 interval before the long break."
             );
         }
         Ok(())

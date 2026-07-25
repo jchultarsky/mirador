@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pomodoro panel.** A focus timer in the same block numerals the clock uses:
+  `space` starts and pauses, `n` skips a phase, `r` restores the current one,
+  and `+`/`-` change the length of the phase you are in. Focus is brass and
+  breaks are moss, with the phase named above the numerals as well, because
+  colour alone is a poor way to tell someone whether they are meant to be
+  working. A paused timer greys out rather than blinking — this is a dashboard
+  you leave open, and a flashing clock is the opposite of that.
+
+  `+` and `-` move the phase length and the time left together, so adding a
+  minute part-way through does not rewind you to the start. A phase that ends
+  while you were away advances exactly one step against a fresh clock rather
+  than chaining from the deadline it missed, so a laptop resumed after an hour
+  does not race through six phases catching up.
+
+  An optional chime, **off by default**, rings when a phase ends. With no
+  command configured it is the terminal bell, which lets your terminal decide
+  whether that means a sound, a flash, or nothing. mirador ships no audio
+  library on purpose: playing a file means linking the platform audio stack,
+  and on Linux that is a C library and its dev headers on every builder — a
+  large amount of machinery for one notification. `chime_command` names a
+  player instead, run directly with no shell in the way, and a player that
+  cannot start is reported in the panel rather than silently doing nothing.
+
 ### Fixed
 
 - The README's checksum command no longer prints a warning. `dist` writes its
