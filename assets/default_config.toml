@@ -192,11 +192,15 @@ show_sparkline = true
 #
 # A month grid in the shape `cal` prints, with today marked. `n` and `p` step a
 # month, the arrow keys step a month or a year, `t` returns to today, and the
-# scroll wheel steps a month. The panel draws as many of `months` as its size
-# allows, side by side if it is wide and stacked if it is tall.
+# scroll wheel steps a month.
+#
+# `months` is how many sit side by side, and so how wide the panel ever gets —
+# past that it hands the columns to its neighbours instead of spreading out. It
+# is a floor on how many are shown, not a ceiling: a tall panel stacks further
+# rows of months rather than leaving a void, up to a year in view at once.
 # ---------------------------------------------------------------------------
 [calendar]
-months      = 2          # this month and the next
+months      = 2          # months across; more stack when there is height
 week_starts = "sunday"   # sunday | monday
 
 # ---------------------------------------------------------------------------

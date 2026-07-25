@@ -1187,9 +1187,53 @@ mod tests {
 
     #[test]
     fn a_bounded_row_gives_its_leftover_height_to_the_row_below() {
-        // The clock/calendar row is bounded on every panel; the task row is
-        // not. The whole point of the mechanism: reclaim the void under the
-        // calendar and give it to the list that ran out of room.
+        // The clock is bounded on height — numerals, date, zone table, and
+        // nothing that grows past that. The CPU graph is not. The whole point
+        // of the mechanism: reclaim the void under the clock and give it to
+        // something that fills it.
+        //
+        // The calendar is deliberately *not* used here: it stacks another row
+        // of months when given height, so it is bounded on width only.
+        let config = Config {
+            layout: LayoutConfig {
+                rows: vec![
+                    LayoutRow {
+                        height: 50,
+                        panels: vec![LayoutPanel {
+                            widget: "clocks".into(),
+                            width: 100,
+                        }],
+                    },
+                    LayoutRow {
+                        height: 50,
+                        panels: vec![LayoutPanel {
+                            widget: "cpu".into(),
+                            width: 100,
+                        }],
+                    },
+                ],
+            },
+            ..Config::default()
+        };
+
+        let app = App::new(config).unwrap();
+        let bound = app.slots[0]
+            .panel
+            .max_height()
+            .expect("the clock is bounded");
+        let rects = app.geometry(Rect::new(0, 0, 120, bound * 3));
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].height, bound, "the clock takes only what it uses");
+        assert_eq!(
+            rects[0].height + rects[1].height,
+            bound * 3,
+            "and the height it gave up must be used, not lost"
+        );
+        assert_eq!(rects[1].y, rects[0].height, "the rows stay flush");
+    }
+
+    #[test]
+    fn a_calendar_keeps_its_height_because_it_stacks_more_months_into_it() {
         let config = Config {
             layout: LayoutConfig {
                 rows: vec![
@@ -1214,18 +1258,10 @@ mod tests {
 
         let app = App::new(config).unwrap();
         let rects = app.geometry(Rect::new(0, 0, 120, 60));
-        assert_eq!(rects.len(), 2);
-        assert!(
-            rects[0].height < 30,
-            "the calendar must not keep half the screen: {:?}",
-            rects[0]
-        );
         assert_eq!(
-            rects[0].height + rects[1].height,
-            60,
-            "and the height it gave up must be used, not lost"
+            rects[0].height, 30,
+            "extra height becomes another row of months, so none is handed back"
         );
-        assert_eq!(rects[1].y, rects[0].height, "the rows stay flush");
     }
 
     #[test]

@@ -81,6 +81,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The calendar stacks further rows of months into spare height, up to a year on
+  screen. `[calendar].months` is now how many sit *across* — and so how wide the
+  panel ever gets — rather than how many exist; it is a floor on the number
+  shown, not a ceiling. The width cap stays, so the panel still hands surplus
+  columns to its neighbours instead of spreading out.
+- The stock watchlist declares a maximum width. Every column but the sparkline
+  is fixed and the sparkline is capped, so past that the table only drifts
+  apart; the columns go to the CPU and network graphs, which have no such limit.
 - Panels may declare the size past which more space does nothing for them, and
   the layout hands their surplus to a neighbour that can use it. A clock cannot
   use a hundred columns and a calendar cannot use more than its months need;

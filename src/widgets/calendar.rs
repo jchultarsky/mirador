@@ -42,9 +42,17 @@ const GAP: u16 = 3;
 const MONTH_HEIGHT: u16 = 8;
 const WEEK_ROWS: usize = 6;
 
-/// Border on both sides plus the one column of interior padding on each,
-/// which a `max_*` figure has to include because it describes the whole panel.
-const FRAME_AND_PADDING: u16 = 4;
+/// Columns the frame costs: a border each side plus one column of interior
+/// padding each side. A `max_*` figure describes the whole panel, so it has to
+/// include them.
+const FRAME_WIDTH: u16 = 4;
+
+/// Rows the frame costs. Only the two borders — the padding is horizontal.
+const FRAME_HEIGHT: u16 = 2;
+
+/// Never put more than a year on screen at once. Past that the grid stops
+/// being something you read and becomes something you search.
+const MAX_MONTHS: usize = 12;
 
 /// How far the view has been scrolled, in whole months.
 type MonthOffset = i32;
@@ -228,13 +236,19 @@ fn month_block(
 
 /// How many months fit, and in what grid.
 ///
-/// Returns `(columns, rows)`, each at least one so there is always something
-/// to draw; ratatui clips a block that genuinely does not fit.
-fn grid_shape(area: Rect, wanted: usize) -> (usize, usize) {
-    let columns = usize::from((area.width + GAP) / (MONTH_WIDTH + GAP)).max(1);
-    let rows = usize::from(area.height / MONTH_HEIGHT).max(1);
-    let columns = columns.min(wanted.max(1));
-    let rows = rows.min(wanted.div_ceil(columns.max(1)).max(1));
+/// `months_across` caps the columns, which is what keeps the panel from
+/// spreading sideways across a wide screen and starving its neighbours. Rows
+/// then fill whatever height there is: `[calendar].months` is a floor on how
+/// many months are shown, not a ceiling, so a tall panel stacks a second row
+/// rather than leaving a void under the first.
+///
+/// Returns `(columns, rows)`, each at least one so there is always something to
+/// draw; ratatui clips a block that genuinely does not fit.
+fn grid_shape(area: Rect, months_across: usize) -> (usize, usize) {
+    let fits_across = usize::from((area.width + GAP) / (MONTH_WIDTH + GAP)).max(1);
+    let columns = fits_across.min(months_across.max(1));
+    let fits_down = usize::from(area.height / MONTH_HEIGHT).max(1);
+    let rows = fits_down.min(MAX_MONTHS.div_ceil(columns).max(1));
     (columns, rows)
 }
 
@@ -255,18 +269,22 @@ impl Panel for CalendarPanel {
     }
 
     fn max_width(&self) -> Option<u16> {
-        // Every configured month side by side, plus the frame and its padding.
-        // A month grid is a fixed-width object: past this the panel is drawing
-        // the same calendar with more blank around it, so the columns are
-        // better spent on the weather table or the task list next door.
+        // Months are laid out `months` across and no wider, so past this the
+        // panel would be drawing the same grid with more blank around it. The
+        // columns are better spent on the weather table or the task list.
         let months = u16::from(self.config.months.clamp(1, 12));
-        Some(months * MONTH_WIDTH + (months - 1) * GAP + FRAME_AND_PADDING)
+        Some(months * MONTH_WIDTH + (months - 1) * GAP + FRAME_WIDTH)
     }
 
     fn max_height(&self) -> Option<u16> {
-        // One row of months. Stacking is what the panel falls back to when it
-        // is too narrow, not something to claim height for.
-        Some(MONTH_HEIGHT + FRAME_AND_PADDING)
+        // Enough rows to reach a year at the configured width. Unlike the
+        // width, this is a limit the panel rarely meets — extra height becomes
+        // another row of months rather than a void, so there is little to
+        // reclaim here and the figure mostly exists to stop the panel taking a
+        // whole tall screen on its own.
+        let columns = usize::from(self.config.months.clamp(1, 12));
+        let rows = u16::try_from(MAX_MONTHS.div_ceil(columns)).unwrap_or(1);
+        Some(rows * MONTH_HEIGHT + FRAME_HEIGHT)
     }
 
     fn refresh_interval(&self) -> std::time::Duration {
@@ -325,8 +343,8 @@ impl Panel for CalendarPanel {
             return;
         }
 
-        let wanted = usize::from(self.config.months.clamp(1, 12));
-        let (columns, rows) = grid_shape(area, wanted);
+        let across = usize::from(self.config.months.clamp(1, 12));
+        let (columns, rows) = grid_shape(area, across);
         let week_start = self.week_start();
         let anchor = first_of_month(self.today);
 
@@ -338,7 +356,7 @@ impl Panel for CalendarPanel {
 
             for column in 0..columns {
                 let index = row * columns + column;
-                if index >= wanted {
+                if index >= MAX_MONTHS {
                     break;
                 }
                 let Some(first) = shift_month(
@@ -569,11 +587,69 @@ mod tests {
     }
 
     #[test]
-    fn two_months_sit_side_by_side_when_they_fit_and_stack_when_they_do_not() {
+    fn months_sit_side_by_side_up_to_the_configured_width() {
         let wide = Rect::new(0, 0, MONTH_WIDTH * 2 + GAP, MONTH_HEIGHT);
         assert_eq!(grid_shape(wide, 2), (2, 1), "both months fit across");
 
-        let tall = Rect::new(0, 0, MONTH_WIDTH, MONTH_HEIGHT * 2);
-        assert_eq!(grid_shape(tall, 2), (1, 2), "one across, so stack them");
+        // Wider than two months still gives two columns: `months` is the width
+        // budget, and spreading further would starve the neighbouring panels.
+        let wider = Rect::new(0, 0, MONTH_WIDTH * 6, MONTH_HEIGHT);
+        assert_eq!(grid_shape(wider, 2).0, 2, "the width cap holds");
+    }
+
+    #[test]
+    fn a_tall_panel_stacks_another_row_of_months_rather_than_leaving_a_void() {
+        let one_row = Rect::new(0, 0, MONTH_WIDTH * 2 + GAP, MONTH_HEIGHT);
+        assert_eq!(grid_shape(one_row, 2), (2, 1));
+
+        let two_rows = Rect::new(0, 0, MONTH_WIDTH * 2 + GAP, MONTH_HEIGHT * 2);
+        assert_eq!(
+            grid_shape(two_rows, 2),
+            (2, 2),
+            "twice the height is four months, not two and a gap"
+        );
+
+        let three_rows = Rect::new(0, 0, MONTH_WIDTH * 2 + GAP, MONTH_HEIGHT * 3);
+        assert_eq!(grid_shape(three_rows, 2), (2, 3));
+    }
+
+    #[test]
+    fn a_single_narrow_column_stacks_downwards() {
+        let tall = Rect::new(0, 0, MONTH_WIDTH, MONTH_HEIGHT * 4);
+        assert_eq!(grid_shape(tall, 2), (1, 4), "one across, four down");
+    }
+
+    #[test]
+    fn a_year_is_the_most_that_is_ever_shown() {
+        // Past twelve the grid stops being something you read.
+        let enormous = Rect::new(0, 0, MONTH_WIDTH * 2 + GAP, MONTH_HEIGHT * 40);
+        let (columns, rows) = grid_shape(enormous, 2);
+        assert!(
+            columns * rows <= MAX_MONTHS,
+            "{columns}x{rows} is more than a year"
+        );
+        assert_eq!(rows, 6, "six rows of two is exactly a year");
+    }
+
+    #[test]
+    fn the_declared_width_matches_what_the_months_actually_need() {
+        // The layout hands the surplus to a neighbour based on this figure, so
+        // a wrong one either starves the calendar or wastes the space anyway.
+        let panel = CalendarPanel::new(CalendarConfig {
+            months: 2,
+            ..CalendarConfig::default()
+        });
+        let declared = panel.max_width().unwrap();
+        let interior = declared - FRAME_WIDTH;
+        assert_eq!(
+            grid_shape(Rect::new(0, 0, interior, MONTH_HEIGHT), 2),
+            (2, 1),
+            "the declared width must fit exactly the months it claims"
+        );
+        assert_eq!(
+            grid_shape(Rect::new(0, 0, interior - 1, MONTH_HEIGHT), 2).0,
+            1,
+            "and one column less must not"
+        );
     }
 }

@@ -26,9 +26,9 @@ const BINDINGS: &[Binding] = &[Binding::primary("s", "seconds")];
 /// are five rows tall at scale 1, and `fitting_scale` is capped at 3.
 const BIG_CLOCK_ROWS: u16 = 15;
 
-/// Border and interior padding on both sides, since `max_*` describes the whole
-/// panel rather than its interior.
-const FRAME_AND_PADDING: u16 = 4;
+/// Rows the frame costs: the two borders. The interior padding is horizontal,
+/// so it does not enter a height figure.
+const FRAME_HEIGHT: u16 = 2;
 
 /// Columns of the secondary zone list.
 const COLUMNS: &[Column] = &[
@@ -161,7 +161,7 @@ impl Panel for ClocksPanel {
         } else {
             u16::try_from(self.secondary.len()).unwrap_or(0) + 2
         };
-        Some(BIG_CLOCK_ROWS + date + zones + FRAME_AND_PADDING)
+        Some(BIG_CLOCK_ROWS + date + zones + FRAME_HEIGHT)
     }
 
     fn refresh_interval(&self) -> std::time::Duration {

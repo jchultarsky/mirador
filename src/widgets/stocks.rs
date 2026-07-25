@@ -43,8 +43,17 @@ const BINDINGS: &[Binding] = &[
     Binding::extra("o", "show file path"),
 ];
 
-/// The narrowest the panel can be and still earn a sparkline column.
+/// Widest the intraday sparkline is drawn.
 const SPARK_WIDTH: u16 = 12;
+
+/// Columns the `▸ ` selection marker occupies to the left of the grid.
+const SELECTION_MARKER: u16 = 2;
+
+/// Columns the frame costs: a border and a padding column on each side.
+const FRAME_WIDTH: u16 = 4;
+
+/// Rows the frame costs. The interior padding is horizontal only.
+const FRAME_HEIGHT: u16 = 2;
 
 const COLUMNS: &[Column] = &[
     Column::fixed("symbol", 8),
@@ -485,6 +494,23 @@ impl Panel for StocksPanel {
         (n > 0).then(|| n.to_string())
     }
 
+    fn max_width(&self) -> Option<u16> {
+        // The columns are all fixed but one, and the exception is the
+        // sparkline, which is capped at SPARK_WIDTH. So the whole table has a
+        // width past which nothing gets wider — it just drifts apart. The
+        // graphs next door have no such limit, so the columns go to them.
+        let fixed: u16 = 8 + 10 + 9 + 8; // symbol, last, chg, %
+        let gutters = 4; // one between each of the five columns
+        Some(fixed + gutters + SPARK_WIDTH + SELECTION_MARKER + FRAME_WIDTH)
+    }
+
+    fn max_height(&self) -> Option<u16> {
+        // Header, a row per symbol, and the status line. A watchlist is a
+        // handful of rows and does not scroll to fill a screen.
+        let rows = u16::try_from(self.watchlist.symbols().len()).unwrap_or(u16::MAX);
+        Some(1 + rows + 1 + FRAME_HEIGHT)
+    }
+
     fn bindings(&self) -> &'static [Binding] {
         BINDINGS
     }
@@ -562,7 +588,7 @@ impl Panel for StocksPanel {
             return;
         }
 
-        let marker = 2u16;
+        let marker = SELECTION_MARKER;
         let grid = Grid::new(COLUMNS, rows[1].width.saturating_sub(marker));
         let spark = if self.config.show_sparkline && rows[1].width >= 56 {
             SPARK_WIDTH.min(rows[1].width.saturating_sub(48))

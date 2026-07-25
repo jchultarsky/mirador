@@ -48,9 +48,9 @@ const BINDINGS: &[Binding] = &[
     Binding::primary("u", "units"),
 ];
 
-/// Border and interior padding on both sides, since `max_*` describes the whole
-/// panel rather than its interior.
-const FRAME_AND_PADDING: u16 = 4;
+/// Rows the frame costs: the two borders. The interior padding is horizontal,
+/// so it does not enter a height figure.
+const FRAME_HEIGHT: u16 = 2;
 
 /// One slot of the hourly forecast.
 #[derive(Debug, Clone)]
@@ -537,7 +537,7 @@ impl Panel for WeatherPanel {
             u16::try_from(glyphs::ART_HEIGHT).unwrap_or(4)
                 + 2  // the "next hours" rule and the column header
                 + hours
-                + FRAME_AND_PADDING,
+                + FRAME_HEIGHT,
         )
     }
 
