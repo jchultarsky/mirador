@@ -294,6 +294,32 @@ impl TaskStore {
         })
     }
 
+    /// Load, seeding a handful of example tasks when there is no file yet.
+    ///
+    /// An empty list on first run is the worst version of this panel: the one
+    /// thing it exists to show is missing, and every key that would fill it is
+    /// invisible until you press `?`. The examples are ordinary tasks — they
+    /// carry the due dates, priorities, tags and notes a real one would, so the
+    /// columns have something to line up — and deleting them is the point.
+    ///
+    /// Seeded only when the file is *absent*, never when it is present and
+    /// empty. Clearing the list writes an empty file, so a user who deletes all
+    /// of these does not meet them again on the next run.
+    pub fn load_or_seed(path: impl Into<PathBuf>, today: Date) -> Result<Self> {
+        let path = path.into();
+        let first_run = !path.exists();
+        let mut store = Self::load(path)?;
+        if first_run {
+            for task in example_tasks(today) {
+                store.add(task);
+            }
+            // Reported rather than propagated: a seeding failure is not worth
+            // refusing to start over, and `last_error` puts it in the panel.
+            store.save_reporting();
+        }
+        Ok(store)
+    }
+
     /// The file this store reads and writes.
     pub fn path(&self) -> &Path {
         &self.path
@@ -421,6 +447,65 @@ impl TaskStore {
             Err(e) => self.last_error = Some(format!("{e:#}")),
         }
     }
+}
+
+/// The tasks written on first run. Ids are assigned by the store.
+///
+/// These teach the panel's keys by being the thing the keys operate on, which
+/// is why they are worded as instructions rather than as a plausible errand
+/// list. Between them they exercise every column — priority, tags, a due date
+/// in each direction, and a note — so a first run shows the table doing its
+/// job rather than a blank grid with headers over it.
+fn example_tasks(today: Date) -> Vec<Task> {
+    // Deliberately relative to `today`: fixed dates would be years overdue by
+    // the time anyone reads them, and "overdue" is a state worth showing on
+    // purpose rather than by accident.
+    let in_days = |n: i32| today.checked_add(jiff::Span::new().days(n)).ok();
+
+    vec![
+        Task {
+            priority: Priority::High,
+            tags: vec!["mirador".into()],
+            due: in_days(1),
+            notes: Some(
+                "Everything here is editable in place. Tab and Shift+Tab move \
+                 between fields, Enter saves, Esc cancels. While a form is open \
+                 the global keys are suppressed, so typing a q into a title \
+                 cannot quit the dashboard."
+                    .into(),
+            ),
+            ..Task::new(0, "Press e to edit this task", today)
+        },
+        Task {
+            priority: Priority::Medium,
+            tags: vec!["mirador".into()],
+            due: in_days(3),
+            ..Task::new(0, "Press a to add your own", today)
+        },
+        Task {
+            tags: vec!["mirador".into()],
+            notes: Some(
+                "Sort cycles with s, / filters on title, tag and note text, and \
+                 c shows completed tasks. Press o for the path to the TOML file \
+                 behind all of this — it is plain text you can edit or keep in \
+                 git."
+                    .into(),
+            ),
+            ..Task::new(0, "Press ? to see every key", today)
+        },
+        Task {
+            priority: Priority::Low,
+            tags: vec!["example".into()],
+            due: in_days(-1),
+            notes: Some(
+                "A task past its due date reads in red, and the counter in the \
+                 border frames it as overdue. This one is here to show that; \
+                 delete it with d once you have seen it."
+                    .into(),
+            ),
+            ..Task::new(0, "This one is overdue", today)
+        },
+    ]
 }
 
 /// Ordering for two tasks under a given sort mode.
@@ -694,6 +779,97 @@ mod tests {
         let mut store = TaskStore::load(&path).unwrap();
         store.save().unwrap();
         assert!(!path.exists(), "a clean store must not create a file");
+    }
+
+    #[test]
+    fn a_first_run_is_seeded_with_examples_and_written_to_disk() {
+        let dir = tempdir();
+        let path = dir.join("todos.toml");
+        let store = TaskStore::load_or_seed(&path, today()).unwrap();
+
+        assert!(!store.tasks().is_empty(), "first run must not be empty");
+        assert_eq!(store.last_error, None, "seeding must not fail silently");
+        assert!(
+            path.exists(),
+            "the seed must be written, not held in memory"
+        );
+
+        // The examples exist to demonstrate the columns, so every column the
+        // table can draw needs at least one task exercising it.
+        let tasks = store.tasks();
+        assert!(tasks.iter().any(|t| t.due.is_some()), "no due date");
+        assert!(tasks.iter().any(|t| t.notes.is_some()), "no note");
+        assert!(tasks.iter().any(|t| !t.tags.is_empty()), "no tag");
+        assert!(
+            tasks.iter().any(|t| t.priority != Priority::None),
+            "no priority"
+        );
+        assert!(
+            tasks
+                .iter()
+                .any(|t| matches!(t.due_state(today()), DueState::Overdue(_))),
+            "no overdue task, so nothing shows what overdue looks like"
+        );
+    }
+
+    #[test]
+    fn seeded_titles_fit_the_task_column_at_an_ordinary_width() {
+        // The default layout gives the task panel 58% of the width, and the
+        // DONE, PRI, TAGS and DUE columns take the rest, which leaves twenty-five
+        // cells for the title on a 120-column terminal. These titles
+        // are instructions, so a truncated one is a instruction you cannot
+        // read — "Press ? for every key, h…" was the version that prompted
+        // this test. Measured in display cells, not chars, for the usual
+        // reason.
+        const BUDGET: usize = 25;
+        for task in example_tasks(today()) {
+            let width = unicode_width::UnicodeWidthStr::width(task.title.as_str());
+            assert!(
+                width <= BUDGET,
+                "seeded title is {width} cells, over the {BUDGET} the column \
+                 can show at 120 columns: {:?}",
+                task.title
+            );
+        }
+    }
+
+    #[test]
+    fn seeding_happens_only_when_the_file_is_absent() {
+        let dir = tempdir();
+        let path = dir.join("todos.toml");
+
+        // Deleting every example writes an empty file. Meeting them again on
+        // the next run would make them impossible to get rid of.
+        let mut store = TaskStore::load_or_seed(&path, today()).unwrap();
+        let ids: Vec<u64> = store.tasks().iter().map(|t| t.id).collect();
+        for id in ids {
+            store.remove(id);
+        }
+        store.save().unwrap();
+
+        let reopened = TaskStore::load_or_seed(&path, today()).unwrap();
+        assert!(
+            reopened.tasks().is_empty(),
+            "an emptied list must stay empty across a restart"
+        );
+    }
+
+    #[test]
+    fn seeded_ids_are_unique_and_do_not_collide_with_later_additions() {
+        let dir = tempdir();
+        let mut store = TaskStore::load_or_seed(dir.join("todos.toml"), today()).unwrap();
+        let seeded: Vec<u64> = store.tasks().iter().map(|t| t.id).collect();
+
+        let added = store.add(Task::new(0, "mine", today()));
+        assert!(
+            !seeded.contains(&added),
+            "a task added after seeding reused a seeded id"
+        );
+
+        let mut unique = seeded.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), seeded.len(), "seeded ids are not unique");
     }
 
     #[test]

@@ -122,7 +122,8 @@ pub struct NotesPanel {
 
 impl NotesPanel {
     pub fn new(config: NotesConfig, path: std::path::PathBuf) -> anyhow::Result<Self> {
-        let store = NoteStore::load(path)?;
+        let today = jiff::Zoned::now().date();
+        let store = NoteStore::load_or_seed(path, today)?;
         let mut panel = Self {
             store,
             config,
@@ -132,7 +133,7 @@ impl NotesPanel {
             list_state: ListState::default(),
             body_scroll: 0,
             status: None,
-            today: jiff::Zoned::now().date(),
+            today,
             list_area: None,
             detail_area: None,
         };
@@ -847,7 +848,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mirador-notes-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let p = NotesPanel::new(NotesConfig::default(), dir.join("notes.toml")).unwrap();
+        let path = dir.join("notes.toml");
+        // An empty file rather than no file: the panel seeds an example note
+        // when the file is absent, and these tests are about the panel, not
+        // the seed. This is the branch every run after the first one takes.
+        std::fs::write(&path, "").unwrap();
+        let p = NotesPanel::new(NotesConfig::default(), path).unwrap();
         (p, TempDir(dir))
     }
 

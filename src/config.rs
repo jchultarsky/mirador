@@ -77,41 +77,27 @@ pub struct Layout {
 
 impl Default for Layout {
     fn default() -> Self {
+        // Kept identical to the `[layout]` block in assets/default_config.toml,
+        // and `the_rust_default_layout_matches_the_shipped_one` fails if they
+        // drift. They are reached by different routes — the shipped file on a
+        // true first run, this on any config that omits `[layout]` — and when
+        // they disagreed, deleting the section silently cost three panels.
+        let row = |height: u16, panels: &[(&str, u16)]| LayoutRow {
+            height,
+            panels: panels
+                .iter()
+                .map(|(widget, width)| LayoutPanel {
+                    widget: (*widget).into(),
+                    width: *width,
+                })
+                .collect(),
+        };
+
         Self {
             rows: vec![
-                LayoutRow {
-                    height: 30,
-                    panels: vec![
-                        LayoutPanel {
-                            widget: "clocks".into(),
-                            width: 40,
-                        },
-                        LayoutPanel {
-                            widget: "weather".into(),
-                            width: 60,
-                        },
-                    ],
-                },
-                LayoutRow {
-                    height: 45,
-                    panels: vec![LayoutPanel {
-                        widget: "todo".into(),
-                        width: 100,
-                    }],
-                },
-                LayoutRow {
-                    height: 25,
-                    panels: vec![
-                        LayoutPanel {
-                            widget: "cpu".into(),
-                            width: 50,
-                        },
-                        LayoutPanel {
-                            widget: "network".into(),
-                            width: 50,
-                        },
-                    ],
-                },
+                row(34, &[("clocks", 26), ("calendar", 34), ("weather", 40)]),
+                row(42, &[("todo", 58), ("notes", 42)]),
+                row(24, &[("stocks", 40), ("cpu", 30), ("network", 30)]),
             ],
         }
     }
@@ -566,6 +552,56 @@ mod tests {
         config
             .validate()
             .expect("the bundled default config must always validate");
+    }
+
+    #[test]
+    fn the_rust_default_layout_matches_the_shipped_one() {
+        let shipped: Config = toml::from_str(DEFAULT_CONFIG).expect("must parse");
+
+        let shape = |layout: &Layout| -> Vec<(u16, Vec<(String, u16)>)> {
+            layout
+                .rows
+                .iter()
+                .map(|r| {
+                    let panels = r
+                        .panels
+                        .iter()
+                        .map(|p| (p.widget.clone(), p.width))
+                        .collect();
+                    (r.height, panels)
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            shape(&shipped.layout),
+            shape(&Layout::default()),
+            "the shipped config and the Rust default describe different \
+             dashboards. Both are first impressions — the file on a true first \
+             run, the Rust default for any config that omits [layout] — so a \
+             gap here means deleting one section silently removes panels."
+        );
+    }
+
+    #[test]
+    fn the_default_layout_places_every_widget() {
+        // A widget nobody can see is a widget nobody knows exists. The startup
+        // hint names what is missing, but the default should have nothing to
+        // name: shipping a dashboard that hides a third of itself is a poor
+        // first run, and this is exactly how notes and stocks went unseen.
+        let layout = Layout::default();
+        let placed: Vec<&str> = layout
+            .rows
+            .iter()
+            .flat_map(|r| r.panels.iter().map(|p| p.widget.as_str()))
+            .collect();
+
+        for widget in crate::widgets::WIDGET_NAMES {
+            assert!(
+                placed.contains(widget),
+                "the default layout does not place `{widget}`"
+            );
+        }
     }
 
     #[test]

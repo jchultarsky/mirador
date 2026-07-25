@@ -29,7 +29,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 335 tests, all fast, no network
+cargo test                                    # 343 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 RUSTDOCFLAGS="-D warnings" \
@@ -184,6 +184,20 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     while a list next door runs out. Return `None` for anything that scrolls or
     scales; return a figure only when more space genuinely buys the reader
     nothing. Both are whole-panel measurements, frame and padding included.
+16. **First run must not be blank, and the defaults must agree.** The task and
+    notes stores seed examples via `load_or_seed`, keyed on the file being
+    *absent* — never on it being empty, or deleting the examples would not
+    stick. The seeded titles are instructions, so they have to fit the task
+    column at an ordinary width; `seeded_titles_fit_the_task_column_at_an_ordinary_width`
+    pins that at 25 cells, which is what the default layout leaves at 120
+    columns. Separately, `Layout::default()` and the `[layout]` block in
+    `assets/default_config.toml` must describe the same dashboard — they are
+    reached by different routes, and when they diverged, a config without a
+    `[layout]` section silently lost three panels.
+
+    Note for tests: constructing `TodoPanel`/`NotesPanel` against a path with
+    no file now seeds it. Panel tests write an empty file first, which is the
+    branch every run after the first one takes.
 
 ## Visual system
 
