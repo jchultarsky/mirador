@@ -4,6 +4,9 @@ Context for anyone (human or agent) picking this repo up cold. Design rationale
 that belongs to users lives in `README.md` and `CONTRIBUTING.md`; this file is
 the stuff you would otherwise have to reverse-engineer from the diff.
 
+`HANDOFF.md`, while it exists, carries the perishable half: where work stopped
+and what is waiting on a decision. This file is the durable half.
+
 ## What this is
 
 A personal information dashboard for the terminal, in Rust + ratatui. Clock,
