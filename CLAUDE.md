@@ -245,6 +245,15 @@ bottom border; jump key in the title.
 **The four things the dashboard exists to answer:** what time/day is it, what
 tasks are next, what is the portfolio doing, what compute is available.
 
+**The pomodoro panel answers none of them, and is here anyway** — the owner
+asked for it directly. Worth recording rather than leaving the next reader to
+wonder whether the filter was forgotten. It is arguably a fifth question, "how
+is this stretch of work going", and it is the only panel that is *about* the
+time you spend at the dashboard rather than about something outside it. That
+makes it the one panel where a nagging design would do real damage, which is
+why the chime defaults off and a paused timer greys out instead of blinking.
+The filter still holds for anything not asked for by name.
+
 **Identified gaps, agreed:** (1) calendar / next event is the biggest hole —
 tasks are self-paced, a meeting is externally imposed and time-critical;
 (2) nothing shows what *changed* since you last looked; (3) no single "is
