@@ -4,7 +4,7 @@
 [![crates.io](https://img.shields.io/crates/v/mirador.svg)](https://crates.io/crates/mirador)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-dea584.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#install)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#install)
 
 An opinionated personal dashboard for your terminal: world clocks, a calendar,
 weather, a real task list, notes, a market watchlist, and live CPU and network
@@ -48,16 +48,33 @@ cd mirador
 cargo install --path .
 ```
 
-Or download a pre-built binary for macOS (Apple silicon or Intel) or Linux
-x86-64 from the [latest release](https://github.com/jchultarsky/mirador/releases/latest).
-Each archive carries a `.sha256` beside it:
+Or download a pre-built binary from the
+[latest release](https://github.com/jchultarsky/mirador/releases/latest).
+Every archive carries a `.sha256` beside it, so verify it before running:
+
+> The Windows archive and these filenames arrive with the **next** release.
+> `v0.1.0` predates the packaging change and ships macOS and Linux only, under
+> names carrying the version (`mirador-v0.1.0-aarch64-apple-darwin.tar.gz`).
 
 ```sh
-shasum -a 256 -c mirador-v0.1.0-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c mirador-aarch64-apple-darwin.tar.gz.sha256
 ```
 
-Requires Rust 1.95 or newer to build. Tested on macOS and Linux; Windows is
-untested rather than unsupported, and there is no Windows binary yet.
+| Platform | Archive |
+| --- | --- |
+| macOS, Apple silicon | `mirador-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `mirador-x86_64-apple-darwin.tar.gz` |
+| Linux x86-64 | `mirador-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows x86-64 | `mirador-x86_64-pc-windows-msvc.zip` |
+
+Requires Rust 1.95 or newer to build from source.
+
+**On Windows**, the binary is built but not yet exercised — everything under
+it is cross-platform (`crossterm` for the terminal, `sysinfo` for the
+metrics), and nothing in mirador is Unix-specific, but "compiles" and "behaves"
+are different claims and only the first has been checked. Reports welcome.
+Windows on ARM is deliberately absent: `ring`, reached through `ureq`'s TLS,
+does not build for it.
 
 ## Quick start
 

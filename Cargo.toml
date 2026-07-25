@@ -30,6 +30,17 @@ lto = true
 codegen-units = 1
 strip = true
 
+# The profile that 'dist' will build with.
+#
+# `dist init` writes `lto = "thin"` here, which quietly undoes the `lto = true`
+# above — the previous workflow shipped `cargo build --release`, so every
+# release so far has been fat-LTO'd and there is no reason for the binaries to
+# get slower the release we start using dist. Inheriting release unchanged
+# keeps fat LTO, codegen-units = 1 and strip. The cost is build time in CI,
+# which nobody is waiting on.
+[profile.dist]
+inherits = "release"
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -43,3 +54,24 @@ missing_panics_doc = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+
+# Config for 'dist'
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "powershell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Checksums to generate for each App
+checksum = "sha256"
+# Whether to install an updater program
+install-updater = false
+# The archive format to use for non-windows builds (defaults .tar.xz)
+unix-archive = ".tar.gz"
+# The archive format to use for windows builds (defaults .zip)
+windows-archive = ".zip"
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
