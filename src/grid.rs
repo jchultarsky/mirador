@@ -23,7 +23,7 @@ use crate::theme::Theme;
 /// weather glyph like `☀` or an emoji occupies two cells in most terminals, so
 /// counting characters silently shifts every column after it and the values
 /// end up under the wrong headers.
-fn display_width(text: &str) -> usize {
+pub fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 

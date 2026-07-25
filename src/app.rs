@@ -72,6 +72,16 @@ pub struct App {
     focus: usize,
     show_help: bool,
     should_quit: bool,
+    /// Widgets available but not placed by this layout.
+    ///
+    /// A config written by an earlier version silently lacks every widget added
+    /// since — an absent widget is a valid choice, so nothing errors and
+    /// `--migrate-config` has nothing to fix. This is the only way to find out.
+    unused_widgets: Vec<&'static str>,
+    /// Whether the startup hint is still on screen. Cleared by the first input
+    /// of any kind: a dashboard you leave open all day must not nag, and a
+    /// notice that will not go away is a nag.
+    show_widget_hint: bool,
 }
 
 impl std::fmt::Debug for App {
@@ -115,6 +125,7 @@ impl App {
         );
 
         let gradients = config.theme.gradients();
+        let unused_widgets = crate::widgets::unused_widgets(&config);
         Ok(Self {
             config,
             gradients,
@@ -123,6 +134,8 @@ impl App {
             focus: 0,
             show_help: false,
             should_quit: false,
+            show_widget_hint: !unused_widgets.is_empty(),
+            unused_widgets,
         })
     }
 
@@ -193,6 +206,10 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        // Any key at all retires the startup hint. It has been read or it has
+        // been ignored; either way it has had its turn.
+        self.show_widget_hint = false;
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         // Ctrl+C always quits, even mid-form, because a terminal user expects
@@ -368,6 +385,11 @@ impl App {
             return false;
         }
 
+        // A deliberate click or scroll retires the startup hint, as a key does.
+        // Pointer motion deliberately does not: the mouse crossing the window
+        // on its way somewhere else is not the user reading anything.
+        let had_hint = std::mem::take(&mut self.show_widget_hint);
+
         // The help overlay swallows the next input, whatever it is — the same
         // rule keys follow.
         if self.show_help {
@@ -381,19 +403,20 @@ impl App {
         if self.focus_captures_input() {
             let focus = self.focus;
             let Some(area) = self.slots.get(focus).and_then(|slot| slot.area) else {
-                return false;
+                return had_hint;
             };
             if !area.contains(Position::new(event.column, event.row)) {
-                return false;
+                return had_hint;
             }
-            return self
+            let consumed = self
                 .slots
                 .get_mut(focus)
                 .is_some_and(|slot| slot.panel.handle_mouse(event, area) == KeyOutcome::Consumed);
+            return consumed || had_hint;
         }
 
         let Some(index) = self.panel_at(event.column, event.row) else {
-            return false;
+            return had_hint;
         };
 
         let focus_moved = if matches!(event.kind, MouseEventKind::Down(_)) {
@@ -405,13 +428,13 @@ impl App {
         };
 
         let Some(slot) = self.slots.get_mut(index) else {
-            return focus_moved;
+            return focus_moved || had_hint;
         };
         let Some(area) = slot.area else {
-            return focus_moved;
+            return focus_moved || had_hint;
         };
         let consumed = slot.panel.handle_mouse(event, area) == KeyOutcome::Consumed;
-        consumed || focus_moved
+        consumed || focus_moved || had_hint
     }
 
     /// Move focus one panel forward or backward, wrapping at both ends.
@@ -541,7 +564,39 @@ impl App {
             spans.push(Span::styled(format!(" {}", binding.action), muted));
         }
 
+        // The hint rides on the right of the bar it shares with the global
+        // keys, and gives way to them when the terminal is too narrow: knowing
+        // how to quit matters more than knowing what you are not using.
+        if let Some(hint) = self.widget_hint() {
+            let used: usize = spans
+                .iter()
+                .map(|s| crate::grid::display_width(&s.content))
+                .sum();
+            let hint_width = crate::grid::display_width(&hint);
+            let total = usize::from(area.width);
+            // One space of breathing room on each side of the gap.
+            if used + hint_width + 3 <= total {
+                spans.push(Span::styled(
+                    " ".repeat(total - used - hint_width - 1),
+                    muted,
+                ));
+                spans.push(Span::styled(hint, Style::default().fg(theme.label)));
+            }
+        }
+
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    /// The one-line startup notice about widgets this layout does not place.
+    fn widget_hint(&self) -> Option<String> {
+        if !self.show_widget_hint || self.unused_widgets.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{} unused: {}   ? for help ",
+            self.unused_widgets.len(),
+            self.unused_widgets.join(", ")
+        ))
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -576,6 +631,27 @@ impl App {
                 lines.push(section(&slot.panel.title()));
                 lines.extend(panel_keys.iter().map(entry));
             }
+        }
+
+        // The durable half of the unused-widget hint. The status bar notice is
+        // gone after one keypress; this stays, because `?` is where someone
+        // goes when they wonder what else the thing does.
+        if !self.unused_widgets.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(section("widgets not in your layout"));
+            // The overlay clips silently when the content outgrows the screen,
+            // so the actionable line comes before the list: losing the names
+            // still leaves you able to act, losing the instruction does not.
+            // The names go on one wrapped line for the same reason — one line
+            // per widget cost eight rows on a stale config.
+            lines.push(Line::from(Span::styled(
+                "  add to [layout]; --print-config shows how",
+                muted,
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("  {}", self.unused_widgets.join(", ")),
+                Style::default().fg(theme.text),
+            )));
         }
 
         lines.push(Line::from(""));
@@ -764,6 +840,142 @@ mod tests {
         let before = widths(&app);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         assert_ne!(widths(&app), before, "Ctrl+Left was swallowed by the panel");
+    }
+
+    #[test]
+    fn a_layout_missing_widgets_says_so_once_and_then_stops() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        assert!(
+            app.unused_widgets.contains(&"stocks"),
+            "a widget the layout never places must be reported: {:?}",
+            app.unused_widgets
+        );
+        let hint = app.widget_hint().expect("the hint shows at startup");
+        assert!(hint.contains("stocks"), "got `{hint}`");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(
+            app.widget_hint().is_none(),
+            "a dashboard left open all day must not keep nagging"
+        );
+    }
+
+    #[test]
+    fn a_layout_using_everything_gets_no_hint_at_all() {
+        let config = Config {
+            layout: LayoutConfig {
+                rows: crate::widgets::WIDGET_NAMES
+                    .iter()
+                    .map(|name| LayoutRow {
+                        height: 1,
+                        panels: vec![LayoutPanel {
+                            widget: (*name).to_string(),
+                            width: 1,
+                        }],
+                    })
+                    .collect(),
+            },
+            ..Config::default()
+        };
+        let unused = crate::widgets::unused_widgets(&config);
+        assert!(unused.is_empty(), "nothing to suggest: {unused:?}");
+    }
+
+    #[test]
+    fn a_click_retires_the_hint_but_the_pointer_merely_passing_over_does_not() {
+        use ratatui::crossterm::event::MouseButton;
+
+        let mouse = |kind| MouseEvent {
+            kind,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_mouse(mouse(MouseEventKind::Moved));
+        assert!(
+            app.widget_hint().is_some(),
+            "the mouse crossing the window is not the user reading anything"
+        );
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+        assert!(app.widget_hint().is_none(), "a deliberate click retires it");
+    }
+
+    #[test]
+    fn retiring_the_hint_forces_a_redraw_so_it_actually_disappears() {
+        use ratatui::crossterm::event::MouseButton;
+
+        // A click landing on no panel at all still has to repaint, or the
+        // retired hint stays on screen until something else happens to redraw.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let dirty = app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 9_000,
+            row: 9_000,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(dirty, "the hint was cleared, so the screen is out of date");
+    }
+
+    #[test]
+    fn the_help_overlay_renders_at_any_size_with_widgets_to_report() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // The unused-widget section grows the overlay, and the overlay clips
+        // silently rather than erroring — so a size that cannot fit it must
+        // still draw something rather than panic on the arithmetic.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(app.show_help);
+
+        for (width, height) in [(1, 1), (4, 3), (30, 8), (80, 24), (200, 60)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| app.render_for_test(frame))
+                .unwrap_or_else(|e| panic!("help failed to draw at {width}x{height}: {e}"));
+        }
+    }
+
+    #[test]
+    fn the_unused_widget_section_stays_a_fixed_size_however_many_are_unused() {
+        // One line per widget put eight rows into an overlay that clips
+        // silently; the names share a single wrapped line instead.
+        let one = App::new(config_with(&["clocks"])).unwrap();
+        let hint = one.widget_hint().expect("something is unused");
+        assert!(
+            hint.lines().count() == 1,
+            "the status hint must stay one line: `{hint}`"
+        );
+    }
+
+    #[test]
+    fn the_hint_gives_way_to_the_global_keys_on_a_narrow_terminal() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let row_text = |app: &mut App, width: u16| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..width).map(|x| buf[(x, 5)].symbol()).collect()
+        };
+
+        let wide = row_text(&mut app, 160);
+        assert!(wide.contains("unused"), "wide enough for both: `{wide}`");
+
+        let narrow = row_text(&mut app, 44);
+        assert!(
+            !narrow.contains("unused"),
+            "knowing how to quit outranks the hint: `{narrow}`"
+        );
+        assert!(
+            narrow.contains("quit"),
+            "the global keys survive: `{narrow}`"
+        );
     }
 
     #[test]

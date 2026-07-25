@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A startup hint naming widgets your layout does not place, on the right of the
+  status bar, plus a section in the help overlay. A config written by an earlier
+  version silently lacks every widget added since — an absent widget is a valid
+  choice, so nothing errors and `--migrate-config` has nothing to fix, which
+  left reading the release notes as the only way to discover a new panel. The
+  status-bar notice is retired by the first keypress or click, because a
+  dashboard you leave open all day must not nag; the help overlay keeps it, on
+  the grounds that `?` is where you go when you wonder what else there is.
 - Stock watchlist panel: last price, the day's change in currency and percent,
   and an intraday sparkline. `a` adds a symbol, `d` removes one, `r` refreshes.
   The watchlist is stored as a data file rather than in the config, which is
