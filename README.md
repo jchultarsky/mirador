@@ -198,20 +198,23 @@ is a data file rather than config, which is what lets the panel own it. See
 
 ### CPU and network
 
-Braille history graphs with the colour gradient running vertically by
-magnitude, so the profile stays put as data scrolls and a graph left on screen
-all day does not shimmer.
+CPU shows average load, a moving history graph and a per-core meter row.
+Network shows receive and transmit rates as two graphs, plus a session total
+and the peak rate seen.
 
-```
-╭┤2 CPU├──┤18 cores├╮╭┤3 Network├───┤all├╮
-│   9.0% LOAD   7s  ││ ↓    611 B/s   ↑  │
-│                   ││                 ⡀ │
-│                   ││                ⡄⡇ │
-│ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣶⣶⣴ ││ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣿⣿ │
-│ PER CORE          ││                ⡇  │
-│ ▁▁▁▁▁▁▂▂▁▁▁▁▃▁▁▁▁ ││ ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣷⣼ │
-╰───────────────────╯╰───────────────────╯
-```
+Both draw their history in **braille**, which packs two samples into every
+character cell and four levels into every row — twice the horizontal
+resolution of a block-element sparkline in the same space. The colour gradient
+runs *vertically by magnitude*, one colour per row, so the profile stays put
+as data scrolls: a graph left on screen all day changes colour when the load
+changes, not merely because time passed.
+
+> These two panels are the one thing this README will not show you in a code
+> block. Braille is missing from several of the fonts GitHub falls back to, so
+> the glyphs render at a width the surrounding box characters do not share and
+> the panel tears itself apart. The screenshot at the top of this file shows
+> them as they actually look. It is a real terminal, which is the only place
+> the alignment is guaranteed.
 
 Both buffers grow to fill the panel, so `history` is a floor on what is kept
 rather than a cap on what a wider panel can draw.
