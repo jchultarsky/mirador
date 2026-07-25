@@ -130,6 +130,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The watchlist sparkline came back. Bounding the panel's width left the grid
+  one column short of the threshold at which the sparkline column earns its
+  place, so the column was dropped and the space sat empty. The threshold, the
+  panel's maximum width and the width the sparkline is drawn at are now derived
+  from one constant, and the panel asks the grid for the resolved column width
+  instead of recomputing it — three copies of that arithmetic is what let them
+  drift apart in the first place.
+- Month names are centred over their own month. `centred` padded on the left
+  but not the right, so a title line was short of the full block width and
+  every month after the first slid left by the shortfall.
+- The notes list and the reading pane have a rule between them. Without one the
+  panel read as a single list whose last rows had gone strange: the two halves
+  are the same kind of text in the same colours, so nothing else separated them.
 - `Enter` on a task opens it for editing rather than marking it done. Enter
   means "go inside" everywhere else, so binding the most reflexive key in the
   list to a state change on the highlighted row was a trap. Completing a task

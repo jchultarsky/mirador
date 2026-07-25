@@ -55,12 +55,24 @@ const FRAME_WIDTH: u16 = 4;
 /// Rows the frame costs. The interior padding is horizontal only.
 const FRAME_HEIGHT: u16 = 2;
 
+/// Width the four fixed columns and the gutters between all five occupy.
+const FIXED_COLUMNS: u16 = 8 + 10 + 9 + 8 + 4;
+
+/// Grid width at which the sparkline column earns its place: everything else,
+/// plus a sparkline drawn at full size.
+///
+/// Derived rather than written down, because this figure appears in three
+/// places — the column's own drop threshold, the panel's maximum width, and the
+/// width the sparkline is drawn at — and the three drifting apart is exactly
+/// how the column ends up allocated but empty.
+const SPARK_MIN_GRID: u16 = FIXED_COLUMNS + SPARK_WIDTH;
+
 const COLUMNS: &[Column] = &[
     Column::fixed("symbol", 8),
     Column::fixed("last", 10).right(),
     Column::fixed("chg", 9).right(),
     Column::fixed("%", 8).right(),
-    Column::flex("today", 1).drops_below(56),
+    Column::flex("today", 1).drops_below(SPARK_MIN_GRID),
 ];
 
 /// What the background thread has produced for one symbol.
@@ -499,9 +511,7 @@ impl Panel for StocksPanel {
         // sparkline, which is capped at SPARK_WIDTH. So the whole table has a
         // width past which nothing gets wider — it just drifts apart. The
         // graphs next door have no such limit, so the columns go to them.
-        let fixed: u16 = 8 + 10 + 9 + 8; // symbol, last, chg, %
-        let gutters = 4; // one between each of the five columns
-        Some(fixed + gutters + SPARK_WIDTH + SELECTION_MARKER + FRAME_WIDTH)
+        Some(SPARK_MIN_GRID + SELECTION_MARKER + FRAME_WIDTH)
     }
 
     fn max_height(&self) -> Option<u16> {
@@ -590,8 +600,11 @@ impl Panel for StocksPanel {
 
         let marker = SELECTION_MARKER;
         let grid = Grid::new(COLUMNS, rows[1].width.saturating_sub(marker));
-        let spark = if self.config.show_sparkline && rows[1].width >= 56 {
-            SPARK_WIDTH.min(rows[1].width.saturating_sub(48))
+        // Taken from the grid rather than recomputed: the grid already decided
+        // whether the column survived and how wide it is, and a second copy of
+        // that arithmetic is what silently emptied the column before.
+        let spark = if self.config.show_sparkline {
+            grid.column_width("today").min(SPARK_WIDTH)
         } else {
             0
         };

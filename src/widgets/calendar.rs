@@ -154,7 +154,12 @@ fn month_name(month: i8) -> &'static str {
         .unwrap_or("")
 }
 
-/// Centre `text` in `MONTH_WIDTH` cells.
+/// Centre `text` in a field of exactly `MONTH_WIDTH` cells.
+///
+/// The trailing padding matters as much as the leading: a month block is
+/// composed left to right, so a title line that stops short of the full width
+/// drags every month after it leftwards by the shortfall. Uneven remainders go
+/// to the right, which is where `cal` puts them.
 ///
 /// Month names are ASCII, so counting chars is counting cells here.
 fn centred(text: &str) -> String {
@@ -164,7 +169,8 @@ fn centred(text: &str) -> String {
         return text.to_string();
     }
     let left = (width - len) / 2;
-    format!("{:left$}{text}", "")
+    let right = width - len - left;
+    format!("{:left$}{text}{:right$}", "", "")
 }
 
 /// One month as exactly `MONTH_HEIGHT` lines of exactly `MONTH_WIDTH` cells.
@@ -576,6 +582,58 @@ mod tests {
         assert_eq!(p.counter(), Some("+2 mo".to_string()));
         p.scroll(-4);
         assert_eq!(p.counter(), Some("-2 mo".to_string()));
+    }
+
+    #[test]
+    fn every_month_title_is_centred_over_its_own_block() {
+        // The bug this pins: `centred` left-padded without right-padding, so a
+        // title line was short of the full block width and every month after
+        // the first slid left by the shortfall.
+        let theme = Theme::default();
+        let july = Date::new(2026, 7, 1).unwrap();
+
+        for (year, month) in [(2026, 7), (2026, 8), (2026, 9), (2026, 12)] {
+            let first = Date::new(year, month, 1).unwrap();
+            let block = month_block(first, july, Weekday::Sunday, &theme, true);
+            for (index, line) in block.iter().enumerate() {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert_eq!(
+                    text.chars().count(),
+                    usize::from(MONTH_WIDTH),
+                    "{month}/{year} line {index} is {text:?}, not {MONTH_WIDTH} cells"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_title_sits_over_the_weekday_header_it_belongs_to() {
+        let theme = Theme::default();
+        let text_of = |line: &Line<'static>| -> String {
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+
+        for name in ["July 2026", "August 2026", "September 2026", "May 2026"] {
+            let line = centred(name);
+            let leading = line.len() - line.trim_start().len();
+            let trailing = line.len() - line.trim_end().len();
+            assert_eq!(line.chars().count(), usize::from(MONTH_WIDTH));
+            assert!(
+                trailing >= leading && trailing - leading <= 1,
+                "`{name}` is off centre: {leading} left, {trailing} right"
+            );
+        }
+
+        // And the composed block agrees: the weekday header is the full width,
+        // so a correctly padded title cannot shift it.
+        let block = month_block(
+            Date::new(2026, 9, 1).unwrap(),
+            Date::new(2026, 9, 1).unwrap(),
+            Weekday::Sunday,
+            &theme,
+            true,
+        );
+        assert_eq!(text_of(&block[1]), "Su Mo Tu We Th Fr Sa");
     }
 
     #[test]

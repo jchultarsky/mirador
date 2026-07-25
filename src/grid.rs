@@ -182,6 +182,19 @@ impl Grid {
             .any(|(c, w)| c.label == label && *w > 0)
     }
 
+    /// The resolved width of a column, or zero if it was dropped.
+    ///
+    /// For panels that draw something sized to a column — a sparkline, a bar —
+    /// and would otherwise have to re-derive the width the grid already
+    /// computed. Two copies of that arithmetic drift, and the symptom is a
+    /// column that silently renders empty.
+    pub fn column_width(&self, label: &str) -> u16 {
+        self.resolved
+            .iter()
+            .find(|(c, _)| c.label == label)
+            .map_or(0, |(_, w)| *w)
+    }
+
     /// The header row.
     ///
     /// Every column gets the same treatment, which used to require deciding

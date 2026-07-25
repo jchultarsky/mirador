@@ -750,22 +750,34 @@ impl Panel for NotesPanel {
         // both the full width and spends height instead.
         let body = rows[1];
         let side_by_side = self.config.preview.eq_ignore_ascii_case("beside");
-        let (list_area, detail_area) = if side_by_side {
-            let parts =
-                Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
-                    .split(body);
-            (parts[0], parts[1])
-        } else {
-            let parts = Layout::vertical([Constraint::Percentage(45), Constraint::Percentage(55)])
-                .split(body);
-            (parts[0], parts[1])
-        };
 
-        // A one-column gutter so the two halves do not touch.
-        let detail_area = Rect {
-            x: detail_area.x + u16::from(side_by_side),
-            width: detail_area.width.saturating_sub(u16::from(side_by_side)),
-            ..detail_area
+        // A rule between the two halves. Without it the panel reads as one
+        // list whose last few rows have gone strange, rather than as a list
+        // and the note it is pointing at — the two are the same kind of text
+        // in the same colours, so nothing else separates them.
+        let (list_area, detail_area) = if side_by_side {
+            let parts = Layout::horizontal([
+                Constraint::Percentage(42),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(body);
+            for row in 0..parts[1].height {
+                frame.render_widget(
+                    Paragraph::new(Span::styled("│", Style::default().fg(theme.rule))),
+                    Rect::new(parts[1].x + 1, parts[1].y + row, 1, 1),
+                );
+            }
+            (parts[0], parts[2])
+        } else {
+            let parts = Layout::vertical([
+                Constraint::Percentage(45),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(body);
+            crate::frame::rule(frame, parts[1], theme, "");
+            (parts[0], parts[2])
         };
 
         if !self.view.is_empty() && list_area.height > 1 {
