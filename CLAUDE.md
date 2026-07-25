@@ -341,18 +341,21 @@ inline `[theme]` table from a `theme = "name"` string).
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows remains untested.
-- **The crates.io name is reserved.** `mirador` `0.0.0` is published — a
-  reservation, not a release, which leaves `0.1.0` for the first real one.
-  Reservation is first-come with no reclamation, which is why it went out
-  before the software was finished rather than after.
+- **`0.1.0` is released**, on crates.io and as a GitHub release with binaries
+  for macOS arm64, macOS x86-64 and Linux x86-64. `0.0.0` is still on
+  crates.io below it — the name reservation that went out first, since
+  reservation is first-come with no reclamation.
 
-  The published tarball is real source rather than an empty stub, so
-  `cargo install mirador` works and will keep installing `0.0.0` until a
-  further version is published. The README says so; if that stops being true,
-  fix it there too.
-- **The release workflow has never run.** There are no tags and no GitHub
-  releases, so a green CI says nothing about whether releasing works. It
-  builds three targets (linux-gnu x86_64, macOS arm64 and x86_64), tars them
-  with a sha256, and publishes with generated notes. Windows is absent, and
-  adding it is the open question `cargo dist` would answer — see the note in
-  the open-work list before hand-rolling more matrix YAML.
+  Cutting a release is a tag push and a `cargo publish`, in that order. The
+  workflow refuses a tag that disagrees with `rust-version`'s neighbour
+  `version` in Cargo.toml, so bump the manifest, commit, *then* tag. Nothing
+  else is manual; the three targets, the checksums and the release notes are
+  all the workflow's job.
+- **The release workflow has been exercised in both directions**, on throwaway
+  tags since deleted: a tag disagreeing with the manifest is rejected in about
+  five seconds before anything builds, and a matching one publishes three
+  targets with checksums and generated notes. A hyphen in the tag marks the
+  release as a prerelease, which also stops it taking over "Latest".
+
+  Windows is still absent. Adding it is the open question `cargo dist` would
+  answer — see the open-work list before hand-rolling more matrix YAML.

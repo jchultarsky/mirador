@@ -5,7 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-07-25
+
+Initial release.
+
+The Changed and Fixed sections record decisions reversed and defects found
+*before* this first tag rather than after it. Nothing below was ever shipped
+in an earlier version — they are kept because the reasoning is worth having.
 
 ### Added
 
@@ -88,6 +94,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scalable block numerals for the clock, sized to the panel. Seconds ride small
   beside the large `HH:MM` when the full time will not fit.
 - Weather art for ten sky conditions.
+
+- Terminal dashboard with a configurable grid layout. Rows and panels use
+  relative weights, so a layout keeps its proportions at any terminal size.
+- `Panel` trait as the extension seam; each widget owns its own state and
+  refresh cadence, and the application shell handles only layout, focus and
+  event dispatch.
+- **Clocks** widget: any number of world clocks by IANA timezone, with the
+  literal `local` for the system zone. Configurable time and date formats, and
+  optional UTC offsets. Unresolvable zones are reported inline rather than
+  dropped.
+- **Weather** widget: current conditions plus a 1–7 day forecast from
+  Open-Meteo, which needs no API key or account. Location is geocoded from a
+  place name, or given directly as latitude and longitude. All network I/O runs
+  on a background thread, so a slow request never blocks rendering.
+- **To-do** widget with full create, read, update and delete:
+  - Tasks carry a title, notes, due date, priority, tags and completion state.
+  - Add and edit through an in-panel form; delete asks for confirmation.
+  - Due-date input accepts ISO dates, `today`/`tomorrow`, weekday names, and
+    offsets such as `+3d` or `2w`. Unrecognised input is rejected with an
+    explanation.
+  - Five sort modes, including a "smart" default that surfaces overdue work
+    ahead of high-priority work that is not yet due.
+  - Live filtering across titles, tags and notes.
+  - Storage is a plain, hand-editable TOML file. Writes are atomic, and save
+    failures surface in the panel rather than being swallowed.
+- **CPU** widget: average utilisation as a scrolling chart, with per-core
+  meters and configurable warning and critical thresholds.
+- **Network** widget: receive and transmit throughput as scrolling charts, with
+  session totals. Rates are derived from real elapsed time between samples, so
+  a delayed tick reports the correct rate rather than an inflated one.
+- Configuration in a single TOML file, written with full comments on first run.
+  Unknown widget names, malformed colours and invalid units are rejected at
+  startup with actionable messages.
+- Command-line flags: `--config`, `--config-path`, `--print-config`, `--help`
+  and `--version`.
+- Help overlay bound to `?`, listing global bindings and those of the focused
+  panel.
 
 ### Changed
 
@@ -240,49 +283,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a broken column.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
-
-## [0.1.0] - 2026-07-25
-
-Initial release.
-
-### Added
-
-- Terminal dashboard with a configurable grid layout. Rows and panels use
-  relative weights, so a layout keeps its proportions at any terminal size.
-- `Panel` trait as the extension seam; each widget owns its own state and
-  refresh cadence, and the application shell handles only layout, focus and
-  event dispatch.
-- **Clocks** widget: any number of world clocks by IANA timezone, with the
-  literal `local` for the system zone. Configurable time and date formats, and
-  optional UTC offsets. Unresolvable zones are reported inline rather than
-  dropped.
-- **Weather** widget: current conditions plus a 1–7 day forecast from
-  Open-Meteo, which needs no API key or account. Location is geocoded from a
-  place name, or given directly as latitude and longitude. All network I/O runs
-  on a background thread, so a slow request never blocks rendering.
-- **To-do** widget with full create, read, update and delete:
-  - Tasks carry a title, notes, due date, priority, tags and completion state.
-  - Add and edit through an in-panel form; delete asks for confirmation.
-  - Due-date input accepts ISO dates, `today`/`tomorrow`, weekday names, and
-    offsets such as `+3d` or `2w`. Unrecognised input is rejected with an
-    explanation.
-  - Five sort modes, including a "smart" default that surfaces overdue work
-    ahead of high-priority work that is not yet due.
-  - Live filtering across titles, tags and notes.
-  - Storage is a plain, hand-editable TOML file. Writes are atomic, and save
-    failures surface in the panel rather than being swallowed.
-- **CPU** widget: average utilisation as a scrolling chart, with per-core
-  meters and configurable warning and critical thresholds.
-- **Network** widget: receive and transmit throughput as scrolling charts, with
-  session totals. Rates are derived from real elapsed time between samples, so
-  a delayed tick reports the correct rate rather than an inflated one.
-- Configuration in a single TOML file, written with full comments on first run.
-  Unknown widget names, malformed colours and invalid units are rejected at
-  startup with actionable messages.
-- Command-line flags: `--config`, `--config-path`, `--print-config`, `--help`
-  and `--version`.
-- Help overlay bound to `?`, listing global bindings and those of the focused
-  panel.
 
 [Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jchultarsky/mirador/releases/tag/v0.1.0
