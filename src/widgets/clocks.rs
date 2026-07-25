@@ -59,6 +59,9 @@ pub struct ClocksPanel {
     /// Everything else, rendered as a labelled list.
     secondary: Vec<Clock>,
     show_seconds: bool,
+    /// What `show_seconds` was at construction, so `remember` can tell a user
+    /// pressing `s` from a config that merely asks for seconds.
+    seeded_show_seconds: bool,
 }
 
 impl ClocksPanel {
@@ -94,6 +97,7 @@ impl ClocksPanel {
             primary,
             secondary: clocks,
             show_seconds,
+            seeded_show_seconds: show_seconds,
         }
     }
 }
@@ -189,6 +193,12 @@ impl Panel for ClocksPanel {
             return KeyOutcome::Consumed;
         }
         KeyOutcome::Ignored
+    }
+
+    fn remember(&self, state: &mut crate::state::UiState) {
+        if self.show_seconds != self.seeded_show_seconds {
+            state.clocks_show_seconds = Some(self.show_seconds);
+        }
     }
 
     #[allow(clippy::too_many_lines)] // One panel, drawn top to bottom; the

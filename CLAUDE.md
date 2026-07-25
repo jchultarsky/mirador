@@ -113,6 +113,7 @@ glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
 config.rs    TOML config, validation, default file
 migrate.rs   textual in-place upgrade of configs written by older versions
+state.rs     UI-changed preferences, remembered across restarts
 task.rs      task model + atomic TOML store
 note.rs      note model + atomic TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
@@ -185,7 +186,19 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     while a list next door runs out. Return `None` for anything that scrolls or
     scales; return a figure only when more space genuinely buys the reader
     nothing. Both are whole-panel measurements, frame and padding included.
-16. **First run must not be blank, and the defaults must agree.** The task and
+16. **A panel remembers only what the user changed.** `Panel::remember` writes
+    a preference only when it differs from the value the panel was *built*
+    with, which is why every such panel keeps a `seeded_*` copy. Reporting the
+    current value unconditionally looks identical in a unit test and is wrong
+    in practice: the first keystroke on any panel pins every other panel's
+    config values into the state file, and editing the config silently stops
+    working from then on. This was written the wrong way first and caught by
+    running it, not by the tests.
+
+    The app merges into what it loaded rather than starting from nothing, so a
+    preference set last session and untouched this one is not dropped by a
+    panel that has nothing new to say about it.
+17. **First run must not be blank, and the defaults must agree.** The task and
     notes stores seed examples via `load_or_seed`, keyed on the file being
     *absent* — never on it being empty, or deleting the examples would not
     stick. The seeded titles are instructions, so they have to fit the task
@@ -331,11 +344,15 @@ inline `[theme]` table from a `theme = "name"` string).
 
 ## Open work, in priority order
 
-1. **Settings editable from the UI**, starting with `[weather].location`.
-   Blocked on a decision: mirador deliberately *never rewrites the config*, so
-   either that stance changes or edited settings go to a separate state file.
-   The watchlist took the second route and it worked well — that is the
-   precedent, but applying it to *all* settings is still the owner's call.
+1. **Settings editable from the UI — decided and built.** The owner's call was
+   the state file, following the watchlist: config seeds, `state.rs` records
+   where the user moved since, and the config is still never rewritten. Live
+   for weather units, task sort and completed-visibility, clock seconds and
+   pomodoro durations.
+
+   What is *not* covered: `[weather].location`, which was the original example.
+   Editing it needs text entry in the panel rather than a toggle, and that is a
+   UI question rather than a persistence one now that the storage exists.
 2. Calendar panel reading a local `.ics` — the shipped `calendar` widget is a
    date grid only, deliberately offline; events are a separate, larger panel.
 3. Theme system per above.

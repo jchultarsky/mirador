@@ -184,6 +184,9 @@ pub struct WeatherPanel {
     /// round trip behind a keypress, and leave the panel showing the old unit
     /// — or nothing — until it came back.
     imperial: bool,
+    /// What `imperial` was when the panel was built, so `remember` can tell a
+    /// user pressing `u` from a config that simply says `imperial`.
+    seeded_imperial: bool,
 }
 
 /// Convert a temperature between the scales.
@@ -227,6 +230,7 @@ impl WeatherPanel {
             forecast_hours,
             stale_after,
             imperial,
+            seeded_imperial: imperial,
         }
     }
 
@@ -675,6 +679,12 @@ impl Panel for WeatherPanel {
         }
     }
 
+    fn remember(&self, state: &mut crate::state::UiState) {
+        if self.imperial != self.seeded_imperial {
+            state.weather_units = Some(if self.imperial { "imperial" } else { "metric" }.into());
+        }
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {
         let theme = ctx.theme;
         if area.width == 0 || area.height == 0 {
@@ -923,6 +933,7 @@ mod tests {
             forecast_hours: 8,
             stale_after: Duration::from_hours(1),
             imperial,
+            seeded_imperial: imperial,
         }
     }
 

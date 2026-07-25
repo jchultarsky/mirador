@@ -4,6 +4,7 @@
 //! focus ring, the frames and the tick schedule, and forwards everything else
 //! through the [`Panel`] trait.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -19,6 +20,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wr
 use crate::config::Config;
 use crate::frame::{Binding, FrameSpec};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
+use crate::state::UiState;
 use crate::theme::Gradients;
 
 /// Global bindings, used for both the status bar and the help overlay.
@@ -178,6 +180,12 @@ pub struct App {
     /// of any kind: a dashboard you leave open all day must not nag, and a
     /// notice that will not go away is a nag.
     show_widget_hint: bool,
+    /// Where to write remembered preferences, once someone asks for that.
+    /// `None` in tests, which is what keeps them off a real user's file.
+    state_path: Option<PathBuf>,
+    /// The last state written, so a keypress that changed nothing writes
+    /// nothing.
+    saved_state: UiState,
 }
 
 impl std::fmt::Debug for App {
@@ -232,6 +240,8 @@ impl App {
             should_quit: false,
             show_widget_hint: !unused_widgets.is_empty(),
             unused_widgets,
+            state_path: None,
+            saved_state: UiState::default(),
         })
     }
 
@@ -257,6 +267,11 @@ impl App {
                     // release event, which would otherwise double every action.
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.handle_key(key);
+                        // Only keys can move a preference, and only after one
+                        // has been handled can it have moved. Cheap because it
+                        // compares before writing: an arrow key costs a struct
+                        // comparison, not a file.
+                        self.persist_preferences();
                         dirty = true;
                     }
                     Event::Mouse(mouse) => dirty |= self.handle_mouse(mouse),
@@ -273,7 +288,58 @@ impl App {
         for slot in &mut self.slots {
             slot.panel.shutdown();
         }
+        // Once more on the way out, in case the last thing changed was not a
+        // key — and because Ctrl+C reaches here too.
+        self.persist_preferences();
         Ok(())
+    }
+
+    /// Remember preferences to `path` from now on.
+    ///
+    /// Separate from [`App::new`] so that tests, which build apps constantly,
+    /// cannot write to a real user's state file by forgetting to opt out. An
+    /// app with no path set simply never persists.
+    ///
+    /// `loaded` is what was read from that file, and becomes the base every
+    /// later write merges into — so starting up does not rewrite a file it has
+    /// just read, and a preference from an earlier session is not dropped by a
+    /// panel that has nothing new to say about it.
+    pub fn remember_preferences_at(&mut self, path: PathBuf, loaded: UiState) {
+        self.saved_state = loaded;
+        self.state_path = Some(path);
+    }
+
+    /// What every panel currently wants remembered.
+    ///
+    /// Starts from what is already on disk rather than from nothing, so a
+    /// preference set last session and left alone this one survives instead of
+    /// being dropped by the panel that is no longer calling it a change.
+    fn collect_preferences(&self) -> UiState {
+        let mut state = self.saved_state.clone();
+        for slot in &self.slots {
+            slot.panel.remember(&mut state);
+        }
+        state
+    }
+
+    /// Write preferences if any of them moved.
+    ///
+    /// A failed write is deliberately not surfaced. There is no panel that owns
+    /// this to show an error in, and the failure costs a sort order that one
+    /// keystroke restores — putting a warning on a dashboard designed to be
+    /// left open, over that, would be the wrong trade. Task and note saves,
+    /// which can lose something you cannot retype, do surface theirs.
+    fn persist_preferences(&mut self) {
+        let Some(path) = self.state_path.clone() else {
+            return;
+        };
+        let current = self.collect_preferences();
+        if current == self.saved_state {
+            return;
+        }
+        if current.save(&path).is_ok() {
+            self.saved_state = current;
+        }
     }
 
     /// Tick any panel whose refresh interval has elapsed.

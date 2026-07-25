@@ -3,6 +3,12 @@
 # This file was created automatically on first run. Every value below is a
 # default, so you can delete anything you do not want to override.
 #
+# mirador never rewrites this file, so it is safe to hand-edit and to keep in
+# version control. Settings you change with a keystroke — weather units, the
+# task sort, seconds on the clock, pomodoro durations — are remembered in a
+# separate state file beside your tasks, which records only what you actually
+# changed. Delete that file and everything falls back to what is written here.
+#
 # Docs: https://github.com/jchultarsky/mirador#configuration
 
 [general]
@@ -217,8 +223,9 @@ week_starts = "sunday"   # sunday | monday
 # whichever phase you are in by a minute.
 #
 # The values below are where the timer *starts*. Changes made with `+` and `-`
-# last for the session; mirador never rewrites this file, so edit here for a
-# lasting change.
+# are remembered across restarts in mirador's own state file — this file is
+# never rewritten. Only a phase you actually adjusted is remembered, so editing
+# a duration here still works. Delete the state file to go back to these.
 #
 # `chime` is off by default, because a dashboard you leave open all day has no
 # business making noise you did not ask for. With no `chime_command` it rings
