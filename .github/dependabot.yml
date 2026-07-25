@@ -19,3 +19,14 @@ updates:
       interval: monthly
     labels:
       - dependencies
+    ignore:
+      # dtolnay/rust-toolchain publishes a ref per Rust release rather than
+      # ordinary semver tags, and dependabot orders them numerically: it read
+      # the MSRV job's `@1.95.0` pin and proposed `@1.100.0`, a Rust version
+      # that does not exist. The job then fails installing it — a 404 from
+      # static.rust-lang.org — which is what PR #1 was.
+      #
+      # That pin is meant to track `rust-version` in Cargo.toml by hand, and
+      # the other five uses are `@stable`, which never needs bumping. So no
+      # version update to this action is ever wanted here.
+      - dependency-name: dtolnay/rust-toolchain
