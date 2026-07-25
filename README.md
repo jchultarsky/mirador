@@ -1,6 +1,7 @@
 # mirador
 
 [![CI](https://github.com/jchultarsky/mirador/actions/workflows/ci.yml/badge.svg)](https://github.com/jchultarsky/mirador/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/mirador.svg)](https://crates.io/crates/mirador)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-dea584.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#install)
@@ -48,7 +49,7 @@ No accounts. No API keys. No telemetry. Weather comes from
 
 ## Install
 
-From source, which is the only way today:
+From source, which is the way to get the current build:
 
 ```sh
 git clone https://github.com/jchultarsky/mirador
@@ -59,8 +60,10 @@ cargo install --path .
 Requires Rust 1.95 or newer. Tested on macOS and Linux; Windows is untested
 rather than unsupported.
 
-> **Not yet on crates.io.** `cargo install mirador` will not work until the
-> crate is published. Pre-built binaries are not published yet either.
+> **On crates.io, the published version is `0.0.0`** — a reservation of the
+> name, not a release. `cargo install mirador` works and gives you a running
+> dashboard, but it will not track `main` until `0.1.0` ships. Build from
+> source until then. There are no pre-built binaries yet.
 
 ## Quick start
 
