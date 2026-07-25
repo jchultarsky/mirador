@@ -130,6 +130,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A failed weather refresh no longer blanks the panel. It used to replace the
+  last good reading with an error, so on a dashboard left running for days —
+  where a transient network blip is close to certain — one timed-out request
+  cost the whole panel for a full refresh interval. The reading is kept and its
+  age is shown instead: the border counter switches from the observation time
+  to `2h old`, and the panel says so in its own body in amber. A reading is also
+  called stale after twice the refresh interval even when nothing has failed,
+  which catches a fetch thread that quietly stopped or a laptop resumed from
+  sleep. Only a panel that has never loaded anything shows an error.
 - The watchlist sparkline came back. Bounding the panel's width left the grid
   one column short of the threshold at which the sparkline column earns its
   place, so the column was dropped and the space sat empty. The threshold, the

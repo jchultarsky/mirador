@@ -11,7 +11,7 @@
 //! layout left the reader to infer.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratatui::Frame;
@@ -81,22 +81,55 @@ pub struct WeatherData {
 }
 
 /// What the background thread has produced so far.
+///
+/// A failure keeps the last good reading rather than replacing it. On a
+/// dashboard left running for days a transient network blip is close to
+/// certain, and blanking the panel for a whole refresh interval because one
+/// request timed out loses more than it protects. Old data with its age shown
+/// is useful; no data is not. What must never happen is old data presented as
+/// current, which is what `age` and the counter exist to prevent.
 #[derive(Debug, Clone, Default)]
-enum Status {
-    #[default]
-    Loading,
-    Ready(Box<WeatherData>),
-    Failed(String),
+struct State {
+    /// The last successful reading, kept across failures.
+    data: Option<Box<WeatherData>>,
+    /// When that reading landed.
+    fetched: Option<Instant>,
+    /// Why the most recent attempt failed, if it did.
+    error: Option<String>,
+}
+
+impl State {
+    /// How long ago the current reading was fetched.
+    fn age(&self) -> Option<Duration> {
+        self.fetched.map(|at| at.elapsed())
+    }
+}
+
+/// Render a duration the way a person would say it.
+fn describe_age(age: Duration) -> String {
+    let minutes = age.as_secs() / 60;
+    if minutes < 60 {
+        return format!("{minutes}m old");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h old");
+    }
+    format!("{}d old", hours / 24)
 }
 
 /// The weather panel.
 #[derive(Debug)]
 pub struct WeatherPanel {
-    status: Arc<Mutex<Status>>,
+    state: Arc<Mutex<State>>,
     /// Set to true to ask the fetch thread for an immediate refresh.
     refresh: Arc<Mutex<bool>>,
     /// Kept for `max_height`; the rest of the config moves to the fetch thread.
     forecast_hours: u8,
+    /// Twice the refresh interval. Past this a reading is called stale even
+    /// when nothing has failed — a fetch thread that quietly stopped, or a
+    /// laptop resumed from sleep, both look like success from here.
+    stale_after: Duration,
     /// Display units, toggled with `u`.
     ///
     /// Held separately from the fetched data and applied at render, so the
@@ -130,9 +163,10 @@ impl WeatherPanel {
     pub fn new(config: WeatherConfig) -> Self {
         let forecast_hours = config.forecast_hours;
         let imperial = config.units != "metric";
-        let status = Arc::new(Mutex::new(Status::Loading));
+        let stale_after = Duration::from_secs(config.refresh_minutes.max(1) * 60 * 2);
+        let state = Arc::new(Mutex::new(State::default()));
         let refresh = Arc::new(Mutex::new(false));
-        let shared = Arc::clone(&status);
+        let shared = Arc::clone(&state);
         let shared_refresh = Arc::clone(&refresh);
 
         std::thread::Builder::new()
@@ -141,9 +175,10 @@ impl WeatherPanel {
             .expect("spawning the weather thread");
 
         Self {
-            status,
+            state,
             refresh,
             forecast_hours,
+            stale_after,
             imperial,
         }
     }
@@ -173,25 +208,30 @@ impl WeatherPanel {
         data
     }
 
-    fn snapshot(&self) -> Status {
+    fn snapshot(&self) -> State {
         // A poisoned lock means the fetch thread panicked. Recover the value
         // rather than propagating the panic into the render loop: one dead
         // panel should not take the dashboard with it.
-        match self.status.lock() {
+        match self.state.lock() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
+
+    /// Whether the reading on screen should be flagged as old.
+    fn is_stale(&self, state: &State) -> bool {
+        state.error.is_some() || state.age().is_some_and(|age| age > self.stale_after)
+    }
 }
 
 /// Fetch now, then every `refresh_minutes`, until the process exits.
-fn fetch_loop(config: &WeatherConfig, status: &Arc<Mutex<Status>>, refresh: &Arc<Mutex<bool>>) {
+fn fetch_loop(config: &WeatherConfig, state: &Arc<Mutex<State>>, refresh: &Arc<Mutex<bool>>) {
     // Resolve coordinates once; a geocoding failure is fatal for this panel and
     // there is no point retrying it every cycle.
     let located = match resolve_location(config) {
         Ok(v) => v,
         Err(e) => {
-            store(status, Status::Failed(format!("{e:#}")));
+            update(state, |s| s.error = Some(format!("{e:#}")));
             return;
         }
     };
@@ -199,8 +239,14 @@ fn fetch_loop(config: &WeatherConfig, status: &Arc<Mutex<Status>>, refresh: &Arc
     let interval = Duration::from_secs(config.refresh_minutes.max(1) * 60);
     loop {
         match fetch_weather(config, &located) {
-            Ok(data) => store(status, Status::Ready(Box::new(data))),
-            Err(e) => store(status, Status::Failed(format!("{e:#}"))),
+            Ok(data) => update(state, |s| {
+                s.data = Some(Box::new(data));
+                s.fetched = Some(Instant::now());
+                s.error = None;
+            }),
+            // The reading and its timestamp are deliberately left alone, so a
+            // blip shows the last good data with its age rather than nothing.
+            Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
         }
 
         // Sleep in short slices so a manual refresh does not wait out the full
@@ -220,10 +266,10 @@ fn fetch_loop(config: &WeatherConfig, status: &Arc<Mutex<Status>>, refresh: &Arc
     }
 }
 
-fn store(status: &Arc<Mutex<Status>>, value: Status) {
-    match status.lock() {
-        Ok(mut guard) => *guard = value,
-        Err(poisoned) => *poisoned.into_inner() = value,
+fn update(state: &Arc<Mutex<State>>, f: impl FnOnce(&mut State)) {
+    match state.lock() {
+        Ok(mut guard) => f(&mut guard),
+        Err(poisoned) => f(&mut poisoned.into_inner()),
     }
 }
 
@@ -505,22 +551,30 @@ fn urlencode(input: &str) -> String {
 
 impl Panel for WeatherPanel {
     fn title(&self) -> String {
-        match self.snapshot() {
-            Status::Ready(data) => format!("Weather — {}", data.place),
-            _ => "Weather".to_string(),
+        match self.snapshot().data {
+            Some(data) => format!("Weather — {}", data.place),
+            None => "Weather".to_string(),
         }
     }
 
     fn counter(&self) -> Option<String> {
-        match self.snapshot() {
-            // The observation time matters: a dashboard left running all day
-            // should never let you mistake stale data for live data.
-            Status::Ready(data) if !data.observed.is_empty() => {
-                Some(format!("at {}", data.observed))
-            }
-            Status::Loading => Some("loading".to_string()),
-            _ => None,
+        let state = self.snapshot();
+        let Some(data) = &state.data else {
+            return Some(if state.error.is_some() {
+                "offline".to_string()
+            } else {
+                "loading".to_string()
+            });
+        };
+
+        // The observation time matters: a dashboard left running all day must
+        // never let you mistake an old reading for a live one. Once it is stale
+        // the age replaces the time outright, because "at 09:00" is only
+        // alarming if you happen to know what time it is now.
+        if self.is_stale(&state) {
+            return state.age().map(describe_age);
         }
+        (!data.observed.is_empty()).then(|| format!("at {}", data.observed))
     }
 
     fn bindings(&self) -> &'static [Binding] {
@@ -572,36 +626,35 @@ impl Panel for WeatherPanel {
             return;
         }
 
-        let data = match self.snapshot() {
-            Status::Loading => {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        "Fetching weather…",
+        let state = self.snapshot();
+        let is_old = self.is_stale(&state);
+
+        let Some(reading) = state.data.clone() else {
+            // Nothing has ever landed. Only here is the panel genuinely empty.
+            let lines = match &state.error {
+                Some(message) => vec![
+                    Line::from(Span::styled(
+                        "Weather unavailable",
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        message.clone(),
                         Style::default().fg(theme.muted),
                     )),
-                    area,
-                );
-                return;
-            }
-            Status::Failed(message) => {
-                frame.render_widget(
-                    Paragraph::new(vec![
-                        Line::from(Span::styled(
-                            "Weather unavailable",
-                            Style::default()
-                                .fg(theme.error)
-                                .add_modifier(Modifier::BOLD),
-                        )),
-                        Line::from(Span::styled(message, Style::default().fg(theme.muted))),
-                        Line::from(Span::styled("r to retry", Style::default().fg(theme.muted))),
-                    ])
-                    .wrap(Wrap { trim: true }),
-                    area,
-                );
-                return;
-            }
-            Status::Ready(data) => Box::new(self.in_display_units(*data)),
+                    Line::from(Span::styled("r to retry", Style::default().fg(theme.muted))),
+                ],
+                None => vec![Line::from(Span::styled(
+                    "Fetching weather\u{2026}",
+                    Style::default().fg(theme.muted),
+                ))],
+            };
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+            return;
         };
+
+        let data = Box::new(self.in_display_units(*reading));
 
         // The art is the one indulgence in this panel, so it is the first thing
         // dropped when the panel gets short.
@@ -619,7 +672,14 @@ impl Panel for WeatherPanel {
         ])
         .split(area);
 
-        Self::render_now(frame, rows[0], theme, &data, show_art);
+        let notice = is_old.then(|| {
+            let age = state.age().map_or_else(String::new, describe_age);
+            match &state.error {
+                Some(_) => format!("{age} — refresh failing"),
+                None => age,
+            }
+        });
+        Self::render_now(frame, rows[0], theme, &data, show_art, notice.as_deref());
 
         if rows[1].height > 0 {
             crate::frame::rule(frame, rows[1], theme, "next hours");
@@ -639,6 +699,9 @@ impl WeatherPanel {
         theme: &crate::theme::Theme,
         data: &WeatherData,
         show_art: bool,
+        // Set when the reading is old, so the panel says so in its own body
+        // rather than only in the small border counter.
+        stale_notice: Option<&str>,
     ) {
         if area.height == 0 {
             return;
@@ -689,6 +752,17 @@ impl WeatherPanel {
             extras.join("   "),
             Style::default().fg(theme.muted),
         )));
+
+        // Amber rather than red: the reading is still the best available, it is
+        // simply not fresh. Red is for a panel with nothing to show.
+        if let Some(notice) = stale_notice {
+            lines.push(Line::from(Span::styled(
+                notice.to_string(),
+                Style::default()
+                    .fg(theme.warning)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
 
         frame.render_widget(Paragraph::new(lines), readings_area);
     }
@@ -787,11 +861,109 @@ mod tests {
 
     fn panel_showing(imperial: bool) -> WeatherPanel {
         WeatherPanel {
-            status: Arc::new(Mutex::new(Status::Loading)),
+            state: Arc::new(Mutex::new(State::default())),
             refresh: Arc::new(Mutex::new(false)),
             forecast_hours: 8,
+            stale_after: Duration::from_secs(3600),
             imperial,
         }
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_the_last_reading_instead_of_blanking_the_panel() {
+        // The multi-day failure mode: on a dashboard left running, a transient
+        // network blip is close to certain, and throwing away good data for a
+        // whole refresh interval because one request timed out loses more than
+        // it protects.
+        let state = Arc::new(Mutex::new(State::default()));
+        update(&state, |s| {
+            s.data = Some(Box::new(sample_data(true)));
+            s.fetched = Some(Instant::now());
+        });
+        update(&state, |s| s.error = Some("network request failed".into()));
+
+        let snapshot = state.lock().unwrap().clone();
+        assert!(snapshot.data.is_some(), "the reading must survive");
+        assert!(snapshot.error.is_some(), "and the failure must be recorded");
+    }
+
+    #[test]
+    fn a_successful_refresh_clears_a_previous_error() {
+        let state = Arc::new(Mutex::new(State::default()));
+        update(&state, |s| s.error = Some("boom".into()));
+        update(&state, |s| {
+            s.data = Some(Box::new(sample_data(true)));
+            s.fetched = Some(Instant::now());
+            s.error = None;
+        });
+        assert!(state.lock().unwrap().error.is_none());
+    }
+
+    #[test]
+    fn a_reading_is_stale_when_the_refresh_failed_or_when_it_is_simply_old() {
+        let panel = panel_showing(true);
+
+        let fresh = State {
+            data: Some(Box::new(sample_data(true))),
+            fetched: Some(Instant::now()),
+            error: None,
+        };
+        assert!(
+            !panel.is_stale(&fresh),
+            "a good recent reading is not stale"
+        );
+
+        let failing = State {
+            error: Some("timed out".into()),
+            ..fresh.clone()
+        };
+        assert!(panel.is_stale(&failing), "a failing refresh marks it stale");
+
+        // Old enough on its own, with nothing having failed — a fetch thread
+        // that quietly stopped, or a laptop resumed from sleep.
+        let old = State {
+            fetched: Instant::now().checked_sub(Duration::from_secs(7200)),
+            ..fresh.clone()
+        };
+        assert!(panel.is_stale(&old), "age alone is enough");
+    }
+
+    #[test]
+    fn the_counter_shows_the_age_once_stale_and_the_observation_time_otherwise() {
+        let panel = panel_showing(true);
+        update(&panel.state, |s| {
+            s.data = Some(Box::new(sample_data(true)));
+            s.fetched = Some(Instant::now());
+        });
+        assert_eq!(panel.counter(), Some("at 13:00".to_string()));
+
+        // "at 13:00" is only alarming if you happen to know the time now, so
+        // the age replaces it outright rather than sitting beside it.
+        update(&panel.state, |s| s.error = Some("timed out".into()));
+        assert_eq!(panel.counter(), Some("0m old".to_string()));
+    }
+
+    #[test]
+    fn the_counter_distinguishes_never_loaded_from_failed_to_load() {
+        let panel = panel_showing(true);
+        assert_eq!(panel.counter(), Some("loading".to_string()));
+
+        update(&panel.state, |s| s.error = Some("no such host".into()));
+        assert_eq!(
+            panel.counter(),
+            Some("offline".to_string()),
+            "a first fetch that failed is not still loading"
+        );
+    }
+
+    #[test]
+    fn an_age_reads_the_way_a_person_would_say_it() {
+        assert_eq!(describe_age(Duration::from_secs(0)), "0m old");
+        assert_eq!(describe_age(Duration::from_secs(59 * 60)), "59m old");
+        assert_eq!(describe_age(Duration::from_secs(60 * 60)), "1h old");
+        assert_eq!(describe_age(Duration::from_secs(23 * 3600)), "23h old");
+        assert_eq!(describe_age(Duration::from_secs(24 * 3600)), "1d old");
+        assert_eq!(describe_age(Duration::from_secs(5 * 24 * 3600)), "5d old");
     }
 
     #[test]

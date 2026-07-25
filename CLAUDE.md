@@ -24,7 +24,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 322 tests, all fast, no network
+cargo test                                    # 328 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 cargo run -- --print-config > /tmp/m.toml     # scratch config to experiment on
@@ -117,7 +117,16 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     `[cpu].history = 120` capped the graph at 60 cells, so a wider panel drew
     dead space; the buffer now grows to the width. Before adding a count to a
     config, ask what happens when the panel is bigger than the count implies.
-13. **A panel that cannot use more space must say so**, via `Panel::max_width`
+13. **Anything time-dependent must re-derive itself on a tick.** The dashboard
+    runs for days: a `today` captured at construction silently rots, and
+    overdue tasks stop being red. `todo`, `notes` and `calendar` all re-read the
+    date in `tick()` and rebuild when it rolls over.
+14. **A fetch failure must not discard good data — except for prices.** Weather
+    keeps its last reading and shows its age, because old weather is useful and
+    a blank panel is not. Quotes do the opposite and fall back to `–`: a stale
+    price read as live is worse than no price, which is the same reasoning that
+    keeps quotes out of any file on disk.
+15. **A panel that cannot use more space must say so**, via `Panel::max_width`
     / `max_height`. Otherwise proportional layout hands it space it cannot use
     while a list next door runs out. Return `None` for anything that scrolls or
     scales; return a figure only when more space genuinely buys the reader
