@@ -21,7 +21,7 @@ cargo test
 cargo run
 ```
 
-Requires Rust 1.88 or newer.
+Requires Rust 1.95 or newer.
 
 Before pushing, run what CI runs:
 

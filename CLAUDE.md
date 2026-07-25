@@ -39,7 +39,20 @@ cargo run -- --config /tmp/m.toml
 first three is how a red build reached `main`: rustdoc rejects a link to a
 `cfg(test)` item, and nothing else notices.
 
-Note that `rust-version` in `Cargo.toml` changes what clippy suggests — raising
+`rust-version` is driven by dependencies, and `cargo` reports only the *first*
+blocker — chasing them one at a time costs a CI round trip each. Get the real
+floor in one go:
+
+```sh
+cargo metadata --format-version 1 | \
+  jq -r '[.packages[].rust_version | select(.)] | max'
+```
+
+It currently comes from `sysinfo`, not from anything this crate does. Five
+places have to agree: `Cargo.toml`, `.github/workflows/ci.yml` (twice), the
+README and CONTRIBUTING.
+
+Note that `rust-version` also changes what clippy suggests — raising
 the MSRV to 1.88 turned every nested `if let` into a `collapsible_if` error,
 because let-chains only became available there. The
 crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a targeted

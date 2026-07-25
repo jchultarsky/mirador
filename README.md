@@ -57,7 +57,7 @@ cd mirador
 cargo install --path .
 ```
 
-Requires Rust 1.88 or newer. Tested on macOS and Linux.
+Requires Rust 1.95 or newer. Tested on macOS and Linux.
 
 ## Quick start
 
