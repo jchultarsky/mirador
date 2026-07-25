@@ -121,6 +121,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wider showed dead space on the left. The span readout is computed from the
   live sample count, so it stays honest as the buffer grows.
 
+- The README no longer offers `cargo install mirador`. The name is unclaimed on
+  crates.io, so the first command a reader met was one that fails; source
+  install is the only route listed until the crate is published, and the gap is
+  stated rather than left to be discovered. The crates.io badge came out with
+  it — it renders as an error until the crate exists — replaced by MSRV and
+  platform badges that are true today.
 - Labels are bold uppercase rather than letterspaced: `NEXT HOURS`, not
   `N E X T  H O U R S`. Tracking was meant to read as an engraved instrument
   label and instead read as stretched text, and it more than doubled the width
