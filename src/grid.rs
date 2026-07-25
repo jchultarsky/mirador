@@ -93,8 +93,14 @@ impl Column {
 /// Columns resolved against a concrete width.
 #[derive(Debug, Clone)]
 pub struct Grid {
-    /// The columns that survived the width budget, with their resolved widths.
-    resolved: Vec<(Column, u16)>,
+    /// The columns that survived the width budget, each with its resolved
+    /// width and the index it held in the caller's declaration.
+    ///
+    /// The declared index is what keeps a row's cells under the right headers.
+    /// Indexing the caller's cells by *surviving* position instead means that
+    /// dropping one column slides every value after it one header to the left
+    /// — a task's tags appearing under DUE, a forecast's feels-like under RAIN.
+    resolved: Vec<(Column, u16, usize)>,
 }
 
 /// Space between adjacent columns.
@@ -105,10 +111,11 @@ impl Grid {
     pub fn new(columns: &[Column], total: u16) -> Self {
         // Drop optional columns that this width cannot justify, narrowest
         // threshold last, so the most valuable columns survive.
-        let kept: Vec<Column> = columns
+        let kept: Vec<(usize, Column)> = columns
             .iter()
             .copied()
-            .filter(|c| c.min_total == 0 || total >= c.min_total)
+            .enumerate()
+            .filter(|(_, c)| c.min_total == 0 || total >= c.min_total)
             .collect();
 
         if kept.is_empty() {
@@ -120,7 +127,7 @@ impl Grid {
         let gutters = GUTTER * u16::try_from(kept.len().saturating_sub(1)).unwrap_or(0);
         let fixed: u16 = kept
             .iter()
-            .filter_map(|c| match c.width {
+            .filter_map(|(_, c)| match c.width {
                 Width::Fixed(w) => Some(w),
                 Width::Flex(_) => None,
             })
@@ -128,7 +135,7 @@ impl Grid {
 
         let flexible: u16 = kept
             .iter()
-            .filter_map(|c| match c.width {
+            .filter_map(|(_, c)| match c.width {
                 Width::Flex(w) => Some(w.max(1)),
                 Width::Fixed(_) => None,
             })
@@ -140,11 +147,11 @@ impl Grid {
         let mut handed_out = 0u16;
         let flex_count = kept
             .iter()
-            .filter(|c| matches!(c.width, Width::Flex(_)))
+            .filter(|(_, c)| matches!(c.width, Width::Flex(_)))
             .count();
         let mut flex_seen = 0usize;
 
-        for column in kept {
+        for (declared, column) in kept {
             let width = match column.width {
                 Width::Fixed(w) => w,
                 Width::Flex(weight) => {
@@ -163,7 +170,7 @@ impl Grid {
                     }
                 }
             };
-            resolved.push((column, width));
+            resolved.push((column, width, declared));
         }
 
         Self { resolved }
@@ -179,7 +186,7 @@ impl Grid {
     pub fn has(&self, label: &str) -> bool {
         self.resolved
             .iter()
-            .any(|(c, w)| c.label == label && *w > 0)
+            .any(|(c, w, _)| c.label == label && *w > 0)
     }
 
     /// The resolved width of a column, or zero if it was dropped.
@@ -191,8 +198,8 @@ impl Grid {
     pub fn column_width(&self, label: &str) -> u16 {
         self.resolved
             .iter()
-            .find(|(c, _)| c.label == label)
-            .map_or(0, |(_, w)| *w)
+            .find(|(c, _, _)| c.label == label)
+            .map_or(0, |(_, w, _)| *w)
     }
 
     /// The header row.
@@ -208,7 +215,7 @@ impl Grid {
             .add_modifier(Modifier::BOLD);
 
         let mut spans = Vec::new();
-        for (index, (column, width)) in self.resolved.iter().enumerate() {
+        for (index, (column, width, _)) in self.resolved.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::raw(" ".repeat(GUTTER as usize)));
             }
@@ -224,14 +231,17 @@ impl Grid {
     /// A data row. Extra cells are ignored; missing cells render blank.
     pub fn row(&self, cells: &[Span<'_>]) -> Line<'static> {
         let mut spans = Vec::new();
-        for (index, (column, width)) in self.resolved.iter().enumerate() {
+        for (index, (column, width, declared)) in self.resolved.iter().enumerate() {
             if index > 0 {
                 spans.push(Span::raw(" ".repeat(GUTTER as usize)));
             }
             if *width == 0 {
                 continue;
             }
-            let (content, style) = match cells.get(index) {
+            // Indexed by the column's declared position, not its surviving
+            // one, so a dropped column takes its own value with it rather than
+            // shifting every later value under the wrong header.
+            let (content, style) = match cells.get(*declared) {
                 Some(span) => (span.content.as_ref(), span.style),
                 None => ("", Style::default()),
             };
@@ -371,7 +381,7 @@ mod tests {
             Column::flex("c", 3),
         ];
         let grid = Grid::new(&cols, 50);
-        let widths: Vec<u16> = grid.resolved.iter().map(|(_, w)| *w).collect();
+        let widths: Vec<u16> = grid.resolved.iter().map(|(_, w, _)| *w).collect();
         assert_eq!(widths[0], 10);
         // 50 - 10 fixed - 2 gutters = 38 spare, split 1:3.
         assert_eq!(widths[1] + widths[2], 38);
@@ -434,6 +444,60 @@ mod tests {
             width_of(&plain),
             width_of(&wide),
             "a wide glyph must not change the row width"
+        );
+    }
+
+    #[test]
+    fn a_dropped_column_takes_its_own_value_with_it() {
+        // The bug this pins: row cells were indexed by surviving position, so
+        // dropping a middle column slid every later value one header to the
+        // left — a forecast's feels-like appearing under RAIN, a task's tags
+        // under DUE. Silent, and exactly what this module exists to prevent.
+        let cols = [
+            Column::fixed("a", 4),
+            Column::fixed("b", 4).drops_below(100),
+            Column::fixed("c", 4),
+        ];
+        let cells = [Span::raw("AAA"), Span::raw("BBB"), Span::raw("CCC")];
+
+        // Wide: everything shows, in order.
+        let wide = Grid::new(&cols, 100);
+        let text: String = wide
+            .row(&cells)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("AAA") && text.contains("BBB") && text.contains("CCC"));
+
+        // Narrow: `b` is dropped. `c` must stay under its own header, and
+        // `BBB` must not appear anywhere.
+        let narrow = Grid::new(&cols, 20);
+        assert!(!narrow.has("b"), "the test needs `b` dropped");
+        let text: String = narrow
+            .row(&cells)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            !text.contains("BBB"),
+            "a dropped column's value must not be rendered: `{text}`"
+        );
+        assert!(text.contains("AAA") && text.contains("CCC"), "got `{text}`");
+
+        // And the value sits under the right heading: compare cell positions
+        // in the header and the row.
+        let header: String = narrow
+            .header(&Theme::default())
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(
+            header.find('C'),
+            text.find("CCC"),
+            "`CCC` is not under the `C` header: header `{header}` row `{text}`"
         );
     }
 

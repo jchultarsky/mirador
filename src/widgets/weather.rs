@@ -30,17 +30,46 @@ use crate::panel::{Panel, RenderContext};
 /// How long to wait on any single HTTP request.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Fixed widths of the forecast columns.
+const HOUR_W: u16 = 5;
+const TEMP_W: u16 = 5;
+const FEELS_W: u16 = 5;
+const RAIN_W: u16 = 5;
+const WIND_W: u16 = 7;
+
+/// The sky column's mark, its space, and the longest label — `thunderstorm`.
+///
+/// Sky is the flexible column, so it absorbs whatever the fixed ones leave.
+/// This is the width below which it starts truncating labels.
+const SKY_W: u16 = 2 + 1 + 12;
+
+/// The width at which each optional column earns its place.
+///
+/// The rule is one line: a column appears once the grid can seat it *and*
+/// still leave the sky its longest label. Anything lower buys a column of
+/// numbers by turning `partly cloudy` into `partly clou…`, which is a bad
+/// trade — the sky is the column you read first.
+///
+/// These were hand-tuned guesses before, set for a layout that no longer
+/// exists, and they were roughly fifteen columns too conservative: the table
+/// only completed at 62 when it fits comfortably at 47.
+/// `every_optional_column_appears_as_soon_as_it_fits` holds them to the rule.
+const RAIN_MIN: u16 = HOUR_W + SKY_W + TEMP_W + RAIN_W + 3;
+const FEELS_MIN: u16 = HOUR_W + SKY_W + TEMP_W + FEELS_W + RAIN_W + 4;
+const WIND_MIN: u16 = HOUR_W + SKY_W + TEMP_W + FEELS_W + RAIN_W + WIND_W + 5;
+
 /// Columns of the hourly forecast.
 ///
 /// Ordered by how often they are wanted, because the narrow ones drop first.
 const COLUMNS: &[Column] = &[
-    Column::fixed("hour", 5),
-    // Wide enough for the mark plus the longest label, "thunderstorm".
+    Column::fixed("hour", HOUR_W),
     Column::flex("sky", 1),
-    Column::fixed("temp", 5).right(),
-    Column::fixed("feels", 5).right().drops_below(52),
-    Column::fixed("rain", 5).right().drops_below(38),
-    Column::fixed("wind", 7).right().drops_below(62),
+    Column::fixed("temp", TEMP_W).right(),
+    Column::fixed("feels", FEELS_W)
+        .right()
+        .drops_below(FEELS_MIN),
+    Column::fixed("rain", RAIN_W).right().drops_below(RAIN_MIN),
+    Column::fixed("wind", WIND_W).right().drops_below(WIND_MIN),
 ];
 
 const BINDINGS: &[Binding] = &[
@@ -62,14 +91,13 @@ const MAX_FORECAST_HOURS: u16 = 24;
 
 /// Interior width at which the forecast table is complete.
 ///
-/// Not the sum of the columns: the optional ones carry their own
-/// `drops_below` thresholds, and `wind` — the last to appear — needs 62. Once
-/// every column is showing, more width only inflates the flexible sky column,
-/// pushing the numbers away from the labels they belong to. So this is the
-/// point past which the panel should hand its columns to a neighbour.
+/// `wind` is the last column to appear, so its threshold is the point past
+/// which more width only inflates the sky column and pushes the numbers away
+/// from the labels they belong to — and therefore the point past which the
+/// panel should hand its columns to a neighbour.
 ///
 /// Kept in step with `COLUMNS` by `the_declared_width_is_where_the_table_completes`.
-const FORECAST_WIDTH: u16 = 62;
+const FORECAST_WIDTH: u16 = WIND_MIN;
 
 /// One slot of the hourly forecast.
 #[derive(Debug, Clone)]
@@ -895,6 +923,44 @@ mod tests {
             forecast_hours: 8,
             stale_after: Duration::from_secs(3600),
             imperial,
+        }
+    }
+
+    #[test]
+    fn every_optional_column_appears_as_soon_as_it_fits() {
+        // The rule: a column appears at the first width that seats it while
+        // still leaving the sky its longest label. One column narrower it must
+        // be absent, or the threshold is too generous; at the threshold the sky
+        // must not be squeezed, or it is too eager.
+        for (label, threshold) in [("rain", RAIN_MIN), ("feels", FEELS_MIN), ("wind", WIND_MIN)] {
+            let at = Grid::new(COLUMNS, threshold);
+            assert!(at.has(label), "`{label}` missing at its own threshold");
+            assert!(
+                at.column_width("sky") >= SKY_W,
+                "`{label}` at {threshold} squeezes the sky to {} (needs {SKY_W})",
+                at.column_width("sky")
+            );
+
+            let below = Grid::new(COLUMNS, threshold - 1);
+            assert!(
+                !below.has(label),
+                "`{label}` still shows at {}, so its threshold is too high",
+                threshold - 1
+            );
+        }
+    }
+
+    #[test]
+    fn the_sky_label_is_never_truncated_at_any_width_the_table_settles_on() {
+        // Sweeping every width catches a threshold that is individually right
+        // but wrong in combination with another.
+        for total in FORECAST_WIDTH..FORECAST_WIDTH + 40 {
+            let grid = Grid::new(COLUMNS, total);
+            assert!(
+                grid.column_width("sky") >= SKY_W,
+                "sky is {} at total {total}",
+                grid.column_width("sky")
+            );
         }
     }
 

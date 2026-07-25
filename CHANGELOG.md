@@ -139,6 +139,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A dropped column no longer slides every value after it under the wrong
+  header. Row cells were indexed by *surviving* column position while callers
+  pass them in declared order, so a narrow forecast showed the feels-like
+  temperature under RAIN, and a narrow task list would have shown tags under
+  DUE. Silent, and exactly the failure this module exists to prevent.
+- Forecast columns appear as soon as they fit. Their thresholds were hand-tuned
+  for a layout that no longer exists and were about fifteen columns too
+  conservative — the table only completed at 62 when it fits at 47. They are
+  now derived from one rule: a column appears once the grid can seat it and
+  still leave the sky column its longest label. WIND now arrives at 47 rather
+  than 62, RAIN at 33 rather than 38, FEELS at 39 rather than 52, and the
+  weather panel's maximum width drops from 66 to 51, handing the difference to
+  the clock.
 - A failed weather refresh no longer blanks the panel. It used to replace the
   last good reading with an error, so on a dashboard left running for days —
   where a transient network blip is close to certain — one timed-out request
