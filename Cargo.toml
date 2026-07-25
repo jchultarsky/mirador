@@ -67,8 +67,10 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Checksums to generate for each App
 checksum = "sha256"
-# Whether to install an updater program
-install-updater = false
+# Ship the standalone updater alongside the shell and PowerShell installers, so
+# someone who installed without a package manager can run `mirador-update`
+# rather than going back to the releases page. It only ever runs when invoked.
+install-updater = true
 # The archive format to use for non-windows builds (defaults .tar.xz)
 unix-archive = ".tar.gz"
 # The archive format to use for windows builds (defaults .zip)
