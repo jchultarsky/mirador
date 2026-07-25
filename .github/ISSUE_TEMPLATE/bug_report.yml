@@ -1,0 +1,75 @@
+name: Bug report
+description: Something does not work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more precisely you can
+        describe what happened, the faster it gets fixed.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+      placeholder: |
+        I pressed `e` to edit a task with a due date of "fri" and the date came
+        back as the wrong day.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence, starting from a fresh `mirador`.
+      placeholder: |
+        1. Start mirador
+        2. Focus the task panel
+        3. Press `a`, type "test", Tab twice, type "fri"
+        4. Press Enter
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: mirador version
+      description: Output of `mirador --version`.
+      placeholder: mirador 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: Which terminal emulator, and which multiplexer if any.
+      placeholder: Ghostty 1.2, inside tmux 3.5
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: >
+        The part of your config file related to the problem. Please leave out
+        anything you would rather not share.
+      render: toml
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, terminal output, or context that might help.

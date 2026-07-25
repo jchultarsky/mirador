@@ -1,0 +1,10 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/jchultarsky/mirador/discussions
+    about: >
+      For usage questions, config help, or ideas that are not yet a concrete
+      feature request.
+  - name: Security vulnerability
+    url: https://github.com/jchultarsky/mirador/security/advisories/new
+    about: Report security issues privately, not as a public issue.

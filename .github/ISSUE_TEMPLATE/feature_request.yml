@@ -1,0 +1,46 @@
+name: Feature request
+description: Suggest a new widget, option or behaviour
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the problem you are trying to solve, not only the
+        solution you have in mind. That usually leads to a better answer than
+        either of us would have reached alone.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      placeholder: >
+        I keep a separate window open just to watch disk usage, which defeats
+        the point of having a dashboard.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like mirador to do?
+      placeholder: >
+        A `disk` widget showing used and free space per mount, with a bar per
+        filesystem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried instead?
+      description: >
+        Other tools, workarounds, or config tricks. Knowing what falls short
+        helps set the bar for what would actually be an improvement.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Would you be willing to work on this?
+      description: Entirely optional, and not a condition of the request.
+      options:
+        - label: I would be willing to submit a pull request

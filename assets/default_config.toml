@@ -1,0 +1,218 @@
+# mirador configuration
+#
+# This file was created automatically on first run. Every value below is a
+# default, so you can delete anything you do not want to override.
+#
+# Docs: https://github.com/jchultarsky/mirador#configuration
+
+[general]
+# Frame budget in milliseconds. Lower is smoother and uses more CPU.
+tick_rate_ms = 250
+show_borders = true
+show_status_bar = true
+
+# Click a panel to focus it, and scroll the wheel over a list to move through
+# it. The trade: while mirador holds the mouse, your terminal's own
+# click-to-select-text stops working, so copying a value off the dashboard
+# needs the terminal's override modifier — Shift in most, Option in macOS
+# Terminal and iTerm2. Set to false to keep ordinary text selection.
+mouse = true
+
+# ---------------------------------------------------------------------------
+# Layout
+#
+# The dashboard is a grid of rows. `height` and `width` are relative weights,
+# not cell counts, so the proportions hold at any terminal size.
+#
+# Available widgets: clocks, weather, todo, notes, stocks, calendar, cpu, network
+# ---------------------------------------------------------------------------
+[layout]
+rows = [
+  { height = 34, panels = [
+    { widget = "clocks",   width = 26 },
+    # Wide enough for two months side by side on a normal terminal; it falls
+    # back to one when the window is narrow.
+    { widget = "calendar", width = 34 },
+    { widget = "weather",  width = 40 },
+  ] },
+  { height = 42, panels = [
+    { widget = "todo",  width = 58 },
+    { widget = "notes", width = 42 },
+  ] },
+  { height = 24, panels = [
+    { widget = "stocks",  width = 40 },
+    { widget = "cpu",     width = 30 },
+    { widget = "network", width = 30 },
+  ] },
+]
+
+# ---------------------------------------------------------------------------
+# Theme
+#
+# Colours accept a name (`red`, `light-blue`), a hex string (`#d7af87`), a
+# 256-colour index (`179`), or `reset` for your terminal's own default.
+#
+# The shipped palette is an aged instrument panel: brass for the instruments,
+# verdigris for engraved labels, slate for chrome. Body text is `reset` so it
+# inherits whatever foreground you have already tuned your terminal to.
+# ---------------------------------------------------------------------------
+[theme]
+border         = "#3a3a3a"   # frame of an unfocused panel
+border_focused = "#d7af87"   # frame of the focused panel
+rule           = "#303030"   # interior separators
+title          = "#d7af87"
+text           = "reset"     # inherits your terminal foreground
+muted          = "#707070"   # units, hints, secondary values
+label          = "#5f8787"   # column headers and tags
+accent         = "#d7af87"   # selection, focus, the clock
+key            = "#d7af87"   # the key letter in a hint
+success        = "#87af5f"
+warning        = "#d7af5f"
+error          = "#d75f5f"
+track          = "#303030"   # empty part of a meter, graph baseline
+
+# Gradients are three-stop ramps shared by a graph, its meter and its number,
+# so a panel changes temperature all at once. `start` is deliberately dark and
+# desaturated: a quiet graph then recedes into the background on its own.
+# Omit `end` for a flat colour; omit `mid` for a simple two-stop ramp.
+[theme.cpu_gradient]
+start = "#3f5f4f"
+mid   = "#d7af5f"
+end   = "#d75f5f"
+
+[theme.rx_gradient]
+start = "#2f4f3f"
+mid   = "#6f9f5f"
+end   = "#afd787"
+
+[theme.tx_gradient]
+start = "#4a3a5a"
+mid   = "#8a6f9f"
+end   = "#c7afd7"
+
+# ---------------------------------------------------------------------------
+# World clocks
+#
+# `timezone` is an IANA identifier, or the literal "local" for your system zone.
+# Add as many as you like; they render in the order listed.
+# ---------------------------------------------------------------------------
+# The FIRST zone is the large clock; the rest render as a labelled table
+# beneath it, showing their offset relative to that first zone.
+[clocks]
+time_format = "%H:%M:%S"     # format for the secondary zone table
+date_format = "%A %d %B"     # shown under the large clock; empty hides it
+show_offset = true
+show_seconds = true          # seconds ride small beside the big HH:MM
+zones = [
+  { label = "Local",  timezone = "local" },
+  { label = "UTC",    timezone = "UTC" },
+  { label = "London", timezone = "Europe/London" },
+  { label = "Tokyo",  timezone = "Asia/Tokyo" },
+]
+
+# ---------------------------------------------------------------------------
+# Weather
+#
+# Data comes from Open-Meteo (https://open-meteo.com), which needs no API key
+# and no account. `location` is geocoded once on startup; set `latitude` and
+# `longitude` explicitly to skip the lookup entirely.
+# ---------------------------------------------------------------------------
+[weather]
+location        = "Boston, Massachusetts"
+# latitude      = 42.3601
+# longitude     = -71.0589
+units           = "imperial"   # "imperial" (F, mph) or "metric" (C, km/h)
+forecast_hours  = 8            # hours of hourly forecast, 1-24
+refresh_minutes = 30
+
+# ---------------------------------------------------------------------------
+# To-do list
+#
+# Tasks live in a plain TOML file you can edit by hand or keep in git. The
+# default location is your platform data directory; press `o` in the panel to
+# see the exact path.
+# ---------------------------------------------------------------------------
+[todo]
+# file         = "~/notes/todos.toml"
+show_completed = false
+sort           = "smart"       # smart | due | priority | created | title
+date_format    = "%a %d %b"
+horizon_days   = 0             # hide tasks due further out than this; 0 = show all
+
+# ---------------------------------------------------------------------------
+# Notes
+#
+# Free-form notes, listed by title and date with the selected one's body beside
+# the list. `a` writes one, `Enter` opens it, `d` deletes, `/` searches both
+# titles and bodies. In the editor, Tab moves between title and body, Enter in
+# the body is a new line, and Ctrl+S saves.
+#
+# The body sits to the right of the list when the panel is at least
+# `side_by_side_min_width` columns wide, and underneath it when it is narrower.
+# ---------------------------------------------------------------------------
+[notes]
+# file                 = "~/notes/notes.toml"
+date_format            = "%d %b"
+side_by_side_min_width = 70
+
+# ---------------------------------------------------------------------------
+# Stock watchlist
+#
+# Last price, the day's change, and an intraday sparkline. `a` adds a symbol,
+# `d` removes one, `r` refreshes now.
+#
+# `symbols` seeds the watchlist on the FIRST RUN ONLY. After that the watchlist
+# file is the truth, so symbols you add or remove in the UI stick. Only symbols
+# are stored — prices are never written to disk, because a stale price read as
+# live is worse than no price at all.
+#
+# `source` picks where quotes come from. This is pluggable on purpose: the
+# default gates on IP reputation rather than on a key, and blocks datacenter and
+# VPN addresses outright, so the same build works on a laptop and fails on a
+# VPS. If you see persistent HTTP 429, that is what has happened, and no polling
+# rate will fix it.
+#
+# `refresh_secs` is clamped to a minimum of 60, and symbols are requested one at
+# a time `stagger_ms` apart rather than all at once. These services are free and
+# unauthenticated; hammering them gets the address blocked for everyone on it.
+# ---------------------------------------------------------------------------
+[stocks]
+symbols        = ["AAPL", "MSFT", "^GSPC"]
+# file         = "~/notes/watchlist.toml"
+source         = "yahoo"
+refresh_secs   = 120
+stagger_ms     = 400
+show_sparkline = true
+
+# ---------------------------------------------------------------------------
+# Calendar
+#
+# A month grid in the shape `cal` prints, with today marked. `n` and `p` step a
+# month, the arrow keys step a month or a year, `t` returns to today, and the
+# scroll wheel steps a month. The panel draws as many of `months` as its size
+# allows, side by side if it is wide and stacked if it is tall.
+# ---------------------------------------------------------------------------
+[calendar]
+months      = 2          # this month and the next
+week_starts = "sunday"   # sunday | monday
+
+# ---------------------------------------------------------------------------
+# CPU
+# ---------------------------------------------------------------------------
+[cpu]
+history       = 120            # samples kept in the moving chart
+sample_secs   = 1
+show_per_core = true
+warn_pct      = 70.0
+critical_pct  = 90.0
+
+# ---------------------------------------------------------------------------
+# Network
+#
+# Leave `interfaces` empty to aggregate every non-loopback interface, or name
+# the ones you care about, e.g. interfaces = ["en0"].
+# ---------------------------------------------------------------------------
+[network]
+interfaces  = []
+history     = 120
+sample_secs = 1

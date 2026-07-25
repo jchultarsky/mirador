@@ -1,0 +1,15 @@
+# Build artifacts
+/target
+**/*.rs.bk
+
+# Cargo.lock is committed: mirador ships a binary, and a committed lock file
+# makes CI and user builds reproducible.
+
+# Editor and OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local scratch config used during development
+/mirador.local.toml
