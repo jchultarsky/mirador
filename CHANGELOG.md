@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-07-25
+
+### Fixed
+
+- The README on crates.io no longer contradicts its own screenshot. The image
+  is referenced by absolute URL so that it resolves on crates.io as well as
+  GitHub — which means it tracks `main` and updated the moment a new capture
+  landed, while the caption around it stayed frozen at whatever the last
+  publish baked in. The published page ended up showing the pomodoro panel
+  above a caption explaining that the shot predates it. The alt text was stale
+  for the same reason, which matters more, since a screen reader has only that.
+
+  Worth knowing for any future image: a floating URL and fixed prose drift
+  apart by design, so a caption describing the picture has to ship in the same
+  release as the picture.
+
 ## [0.3.0] - 2026-07-25
 
 ### Added
@@ -392,7 +408,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jchultarsky/mirador/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jchultarsky/mirador/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jchultarsky/mirador/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jchultarsky/mirador/releases/tag/v0.1.0
