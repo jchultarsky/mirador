@@ -4,8 +4,10 @@ Context for anyone (human or agent) picking this repo up cold. Design rationale
 that belongs to users lives in `README.md` and `CONTRIBUTING.md`; this file is
 the stuff you would otherwise have to reverse-engineer from the diff.
 
-`HANDOFF.md`, while it exists, carries the perishable half: where work stopped
-and what is waiting on a decision. This file is the durable half.
+There was a `HANDOFF.md` alongside this carrying the perishable half — where
+work stopped, what was waiting on a decision. Its open items are all either
+done or folded in below, so it has been deleted as it asked to be. Write
+another the same way if you hand off mid-flight, and delete it the same way.
 
 ## What this is
 
@@ -57,10 +59,25 @@ README and CONTRIBUTING.
 
 Note that `rust-version` also changes what clippy suggests — raising
 the MSRV to 1.88 turned every nested `if let` into a `collapsible_if` error,
-because let-chains only became available there. The
-crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a targeted
-`#[allow]` *with a comment saying why* — do not widen the allow list in
-`Cargo.toml`.
+because let-chains only became available there, and 1.88 → 1.95 turned every
+`Duration::from_secs(3600)` into one, because `from_hours` had stabilised.
+Expect a round of mechanical fixes with any bump, and do not take the
+suggestion on faith: clippy will offer `from_days`, which is *still unstable*
+at the 1.95 floor and would break the very job the bump was fixing.
+
+This cuts the other way too, and it is worth knowing before you go hunting.
+**Clippy gating means a local run and CI can legitimately disagree**: bump
+`rust-version` locally, run clippy, and you will see lints a CI still on the
+old floor does not. That is the gate working, not CI failing. Compare the
+`rust-version` each side is using before concluding anything is broken.
+
+The crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a
+targeted `#[allow]` *with a comment saying why* — do not widen the allow list
+in `Cargo.toml`.
+
+**`assets/default_config.toml` is `include_str!`-baked into the binary.**
+Editing it does nothing until you rebuild. This has twice looked like a change
+that did not land when it simply had not been compiled.
 
 To eyeball the rendering without a terminal:
 
@@ -71,7 +88,17 @@ cargo test dump_dashboard -- --ignored --nocapture   # renders to stdout
 To drive it in a real terminal headlessly, run it under `tmux` and
 `tmux capture-pane -p`. Several layout bugs only showed up this way — the
 `TestBackend` dump will not catch a panel whose content is pushed off the
-bottom, because nothing errors.
+bottom, because nothing errors. `-e` keeps the escape sequences, which is the
+only way to prove a colour bug; a capture of black-on-black shows nothing
+either way.
+
+**A test that cannot fail is documentation with a `#[test]` on it.** The id
+reuse bug shipped with `ids_are_unique_and_survive_deletion` sitting directly
+on top of it: the test compared the new id against the *surviving* task rather
+than the *removed* one, so it passed throughout. When you fix a bug that had a
+test nearby, check that the test would have caught it — break the fix on
+purpose and watch it go red. Twice now that check was the difference between a
+real test and a reassuring one.
 
 ## Architecture
 
@@ -276,11 +303,42 @@ inline `[theme]` table from a `theme = "name"` string).
    date grid only, deliberately offline; events are a separate, larger panel.
 3. Theme system per above.
 4. "What changed since I last looked" markers.
+5. **Cross-platform release binaries, via `cargo dist`** (the tool is invoked as
+   `dist`; the crate is still `cargo-dist`). Researched, not started. It
+   generates the whole release workflow — it *overwrites* `release.yml`, which
+   is then build output, not a file to hand-edit — and gives shell and
+   PowerShell installers, Homebrew, and checksums for free.
+
+   Two findings worth having before starting. It is maintenance-mode with a
+   bus factor of one, but Astral forked it, upstreamed their work, archived the
+   fork and went back to upstream; `uv` and `ruff` both pin it in production, so
+   it will not rot quietly. And **this crate is not C-free** — `ureq` pulls
+   `rustls` → `ring`, which ships C and assembly — which breaks exactly the
+   targets one adds first: musl needs a C toolchain the generated workflow
+   handles badly, and `aarch64-pc-windows-msvc` fails building `ring` outright.
+   Run `dist plan` before tagging anything; that is where both surface.
+
+   macOS notarization is unsupported and does not matter here: Gatekeeper's
+   quarantine flag comes from browsers, not `curl`, so shell-installer users
+   never see a prompt. Not worth $99/yr for a TUI.
 
 ## Housekeeping
 
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows remains untested.
-- **The crates.io name is not yet reserved.** Publish a `0.0.0` placeholder;
-  reservation is first-come and there is no reclamation.
+- **The crates.io name is reserved.** `mirador` `0.0.0` is published — a
+  reservation, not a release, which leaves `0.1.0` for the first real one.
+  Reservation is first-come with no reclamation, which is why it went out
+  before the software was finished rather than after.
+
+  The published tarball is real source rather than an empty stub, so
+  `cargo install mirador` works and will keep installing `0.0.0` until a
+  further version is published. The README says so; if that stops being true,
+  fix it there too.
+- **The release workflow has never run.** There are no tags and no GitHub
+  releases, so a green CI says nothing about whether releasing works. It
+  builds three targets (linux-gnu x86_64, macOS arm64 and x86_64), tars them
+  with a sha256, and publishes with generated notes. Windows is absent, and
+  adding it is the open question `cargo dist` would answer — see the note in
+  the open-work list before hand-rolling more matrix YAML.

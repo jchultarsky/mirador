@@ -151,6 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Cargo.toml`, the CI toolchain, the README and CONTRIBUTING now agree.
 - A rustdoc intra-doc link pointed at a `cfg(test)` item, which rustdoc cannot
   resolve; with `-D warnings` that failed the documentation build.
+- Dependabot no longer proposes a Rust version that does not exist.
+  `dtolnay/rust-toolchain` publishes a ref per Rust release rather than semver
+  tags, and dependabot ordered them numerically: it read the MSRV job's
+  `@1.95.0` pin and offered `@1.100.0`, which fails to install with a 404 from
+  `static.rust-lang.org`. That pin tracks `rust-version` by hand and the other
+  five uses are `@stable`, so version updates to that action are now ignored
+  outright rather than closed by hand every month.
 - Deleting a task no longer hands its id to the next one added. Ids came from
   `max(id) + 1`, so removing the highest-numbered task gave that number
   straight back, and anything still holding it — the selection, an open edit
