@@ -24,9 +24,15 @@ use crate::frame::Binding;
 use crate::glyphs::{self, BigText};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
-/// The numerals stop being easier to read past this, and a timer that fills the
-/// panel edge to edge reads as an alarm rather than as an instrument.
-const MAX_SCALE: u16 = 3;
+/// The numerals are never drawn larger than this.
+///
+/// One, deliberately. `MM:SS` at scale 1 is 38 columns by 5 rows, which is
+/// already a chunky readout and is as much as this panel is worth — scale 2 is
+/// 68 columns and scale 3 is 98, and a timer occupying half a dashboard reads
+/// as an alarm rather than as an instrument. Capping the scale is also what
+/// makes `max_width` small enough to matter: without it the panel claims 102
+/// columns it cannot use, and takes them from the task list next door.
+const MAX_SCALE: u16 = 1;
 /// Left and right border plus one column of padding each side.
 const FRAME_WIDTH: u16 = 4;
 /// Top and bottom border.
@@ -365,14 +371,18 @@ impl Panel for PomodoroPanel {
     }
 
     fn max_width(&self) -> Option<u16> {
-        // Past the width the numerals need at full scale, more columns only
-        // pad the sides. The status line under them is shorter than this.
+        // 42 columns: the numerals plus the frame. Everything else the panel
+        // draws is narrower, so past this the extra only pads the sides — and
+        // a timer is a small fact. The surplus goes to the task list, which
+        // can always use another column.
         Some(glyphs::width_of("00:00", MAX_SCALE) + FRAME_WIDTH)
     }
 
     fn max_height(&self) -> Option<u16> {
-        // Label, numerals, meter, pips, and one blank line holding them apart.
-        Some(5 * MAX_SCALE + 4 + FRAME_HEIGHT)
+        // Label, numerals, meter, pip line, and the frame. Nothing here scrolls
+        // or scales, so a taller panel is pure empty space; declaring the
+        // ceiling lets a row hand it downward instead.
+        Some(1 + 5 * MAX_SCALE + 2 + FRAME_HEIGHT)
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -924,6 +934,33 @@ mod tests {
                 binding.key
             );
         }
+    }
+
+    #[test]
+    fn the_panel_claims_only_the_space_it_can_actually_use() {
+        use crate::panel::Panel as _;
+        let p = panel();
+
+        // Pinned as figures rather than as a formula, so a change to either has
+        // to be deliberate. A timer is a small fact and should not be sized like
+        // the thing you are working on: at scale 3 this declared 102 columns and
+        // 21 rows, and took them from the task list.
+        assert_eq!(p.max_width(), Some(42));
+        assert_eq!(p.max_height(), Some(10));
+
+        // And what it declares must be enough to draw what it draws.
+        let time = "88:88";
+        let scale = clock_scale(time, 42 - FRAME_WIDTH, 10 - FRAME_HEIGHT - LABEL_AND_FOOTER);
+        assert!(
+            scale.is_some(),
+            "the declared width must fit the numerals, or the panel caps itself \
+             into its own plain-text fallback"
+        );
+        assert_eq!(
+            LABEL_AND_FOOTER + clock_rows(time, scale) + FRAME_HEIGHT,
+            10,
+            "the declared height must be exactly what the rows add up to"
+        );
     }
 
     #[test]

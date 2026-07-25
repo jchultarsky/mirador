@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The pomodoro panel stops claiming space it cannot use. It declared a maximum
+  of 102 columns and 21 rows — the width of the numerals at the largest scale
+  the clock allows — and on a wide terminal it took them, from the task list.
+  The numerals are now capped at the scale where `MM:SS` is 38 columns by 5
+  rows, which is already a chunky readout; scale 2 is 68 columns and scale 3 is
+  98, and a timer occupying half a dashboard reads as an alarm rather than an
+  instrument. The panel now declares 42 by 10 and hands everything past that to
+  a neighbour, and the figures are pinned by a test so they cannot drift back.
 - The README says what happens when you upgrade. A new widget does not appear
   in a config you already have — mirador never rewrites your config, which is
   what makes it safe to hand-edit, so a config written by an earlier version

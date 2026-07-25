@@ -43,12 +43,12 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 42, panels = [
-    { widget = "todo",     width = 44 },
+    { widget = "todo",     width = 48 },
     { widget = "notes",    width = 30 },
     # The timer draws block numerals when it has the width for them and falls
     # back to plain text when it does not, so a narrow terminal loses the
     # spectacle rather than the time.
-    { widget = "pomodoro", width = 26 },
+    { widget = "pomodoro", width = 22 },
   ] },
   { height = 24, panels = [
     { widget = "stocks",  width = 40 },

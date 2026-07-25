@@ -183,9 +183,9 @@ a row in `[layout]` and give the row's other panels room for it:
 
 ```toml
   { height = 42, panels = [
-    { widget = "todo",     width = 44 },
+    { widget = "todo",     width = 48 },
     { widget = "notes",    width = 30 },
-    { widget = "pomodoro", width = 26 },   # the new one
+    { widget = "pomodoro", width = 22 },   # the new one
   ] },
 ```
 
