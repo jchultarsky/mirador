@@ -16,12 +16,12 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![The mirador dashboard: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, and a market watchlist beside live CPU and network graphs](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/screenshot.png)
+![The mirador dashboard: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, a running pomodoro timer, and a market watchlist beside live CPU and network graphs](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/screenshot.png)
 
-*A wide terminal on a first run — the tasks and the note are the examples
-mirador seeds for you. Every screen in this README is a real capture, not a
-mock-up. This one predates the pomodoro panel, which is shown
-[further down](#pomodoro).*
+*All nine panels on a wide terminal, on a first run — the tasks and the note
+are the examples mirador seeds for you. The pomodoro panel has focus, which is
+why its frame is lit and its key hints are in its bottom border; every other
+panel is dimmed. Every screen in this README is a real capture, not a mock-up.*
 
 ## Why
 
