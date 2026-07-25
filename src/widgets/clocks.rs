@@ -22,13 +22,19 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// Keys this panel responds to.
 const BINDINGS: &[Binding] = &[Binding::primary("s", "seconds")];
 
-/// Rows the numerals occupy at the largest scale the panel ever uses: glyphs
-/// are five rows tall at scale 1, and `fitting_scale` is capped at 3.
-const BIG_CLOCK_ROWS: u16 = 15;
+/// The largest scale the numerals are ever drawn at. Past this a clock stops
+/// being readable-from-across-the-room and starts being a poster.
+const MAX_CLOCK_SCALE: u16 = 3;
+
+/// Rows the numerals occupy at that scale: glyphs are five rows tall at 1.
+const BIG_CLOCK_ROWS: u16 = 5 * MAX_CLOCK_SCALE;
 
 /// Rows the frame costs: the two borders. The interior padding is horizontal,
 /// so it does not enter a height figure.
 const FRAME_HEIGHT: u16 = 2;
+
+/// Columns the frame costs: a border and a padding column on each side.
+const FRAME_WIDTH: u16 = 4;
 
 /// Columns of the secondary zone list.
 const COLUMNS: &[Column] = &[
@@ -151,6 +157,15 @@ impl Panel for ClocksPanel {
         BINDINGS
     }
 
+    fn max_width(&self) -> Option<u16> {
+        // The numerals stop growing at scale 3, so past the width that
+        // `HH:MM:SS` needs there the clock is the same size with more blank
+        // around it. Wide enough to matter, though: below this the panel falls
+        // back to plain text, which is the one thing this panel exists not to
+        // do. It is a taker of surplus far longer than most panels.
+        Some(glyphs::width_of("00:00:00", MAX_CLOCK_SCALE) + FRAME_WIDTH)
+    }
+
     fn max_height(&self) -> Option<u16> {
         // Numerals at their largest, the date beneath, then the zone table:
         // a blank separator, a header, and a row per zone. Past this the panel
@@ -225,7 +240,7 @@ impl Panel for ClocksPanel {
         let clock_budget = area.height.saturating_sub(date_rows + zone_rows).max(1);
 
         let fits = |text: &str| {
-            glyphs::fitting_scale(text, area.width, 3)
+            glyphs::fitting_scale(text, area.width, MAX_CLOCK_SCALE)
                 .filter(|scale| BigText::new(text, *scale).height <= clock_budget)
         };
 

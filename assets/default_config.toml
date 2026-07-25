@@ -123,7 +123,8 @@ location        = "Boston, Massachusetts"
 # longitude     = -71.0589
 units           = "imperial"   # "imperial" (F, mph) or "metric" (C, km/h)
                                # `u` switches at runtime; this is the start state
-forecast_hours  = 8            # hours of hourly forecast, 1-24
+forecast_hours  = 8            # a floor, not a cap: a taller panel shows more,
+                               # up to the 24 hours the fetch retrieves
 refresh_minutes = 30
 
 # ---------------------------------------------------------------------------

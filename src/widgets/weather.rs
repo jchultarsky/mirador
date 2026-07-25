@@ -52,6 +52,25 @@ const BINDINGS: &[Binding] = &[
 /// so it does not enter a height figure.
 const FRAME_HEIGHT: u16 = 2;
 
+/// Columns the frame costs: a border and a padding column on each side.
+const FRAME_WIDTH: u16 = 4;
+
+/// Most hours ever fetched or shown. A day ahead is the limit of what the
+/// panel's question — "what is the rest of my day like" — can use, and it
+/// costs nothing extra: the same single request already returns two days.
+const MAX_FORECAST_HOURS: u16 = 24;
+
+/// Interior width at which the forecast table is complete.
+///
+/// Not the sum of the columns: the optional ones carry their own
+/// `drops_below` thresholds, and `wind` — the last to appear — needs 62. Once
+/// every column is showing, more width only inflates the flexible sky column,
+/// pushing the numbers away from the labels they belong to. So this is the
+/// point past which the panel should hand its columns to a neighbour.
+///
+/// Kept in step with `COLUMNS` by `the_declared_width_is_where_the_table_completes`.
+const FORECAST_WIDTH: u16 = 62;
+
 /// One slot of the hourly forecast.
 #[derive(Debug, Clone)]
 pub struct Slot {
@@ -406,7 +425,11 @@ struct Hourly {
 /// Fetch current conditions plus an hourly forecast.
 fn fetch_weather(config: &WeatherConfig, located: &Located) -> Result<WeatherData> {
     let imperial = config.units == "imperial";
-    let wanted = usize::from(config.forecast_hours.clamp(1, 24));
+    // Always fetch the full day rather than `forecast_hours`. The panel shows
+    // as many rows as it has height for, and a taller panel must not have to
+    // wait for a refetch — or worse, be silently capped by a config number set
+    // when the window was a different size.
+    let wanted = usize::from(MAX_FORECAST_HOURS);
 
     let url = format!(
         "https://api.open-meteo.com/v1/forecast\
@@ -581,12 +604,16 @@ impl Panel for WeatherPanel {
         BINDINGS
     }
 
+    fn max_width(&self) -> Option<u16> {
+        Some(FORECAST_WIDTH + FRAME_WIDTH)
+    }
+
     fn max_height(&self) -> Option<u16> {
         // Current conditions (the sky art is the tall part), the rule, the
-        // column header, and one row per forecast hour. The forecast is a
-        // fixed number of rows, so past this the panel is a table with a
-        // growing blank field under it.
-        let hours = u16::from(self.forecast_hours.clamp(1, 24));
+        // column header, and one row per forecast hour. Extra height becomes
+        // another hour rather than a void, so the limit is the whole day the
+        // fetch retrieves — the same reasoning as the calendar stacking months.
+        let hours = MAX_FORECAST_HOURS.max(u16::from(self.forecast_hours));
         Some(
             u16::try_from(glyphs::ART_HEIGHT).unwrap_or(4)
                 + 2  // the "next hours" rule and the column header
@@ -787,6 +814,8 @@ fn render_forecast(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, d
     }
 
     let mut lines = vec![grid.header(theme)];
+    // One row per line of height, however many that is: `[weather].forecast_hours`
+    // is a floor the panel is sized for, not a ceiling on what it may show.
     let room = usize::from(area.height.saturating_sub(1));
 
     for hour in data.hours.iter().take(room) {
@@ -867,6 +896,72 @@ mod tests {
             stale_after: Duration::from_secs(3600),
             imperial,
         }
+    }
+
+    #[test]
+    fn the_declared_width_is_where_the_table_completes() {
+        // The layout hands this panel's surplus to a neighbour based on
+        // `max_width`. Declaring it below the point where every column appears
+        // would silently drop wind or feels — which is exactly how the stock
+        // sparkline was lost, so it is pinned here rather than trusted.
+        let complete = Grid::new(COLUMNS, FORECAST_WIDTH);
+        for label in ["hour", "sky", "temp", "feels", "rain", "wind"] {
+            assert!(
+                complete.has(label),
+                "`{label}` is missing at the declared width of {FORECAST_WIDTH}"
+            );
+        }
+
+        // And it is the *smallest* such width: one column narrower must lose
+        // something, or the panel is claiming more than it needs.
+        let narrower = Grid::new(COLUMNS, FORECAST_WIDTH - 1);
+        assert!(
+            !["hour", "sky", "temp", "feels", "rain", "wind"]
+                .iter()
+                .all(|label| narrower.has(label)),
+            "the table still completes at {}, so the declared width is too generous",
+            FORECAST_WIDTH - 1
+        );
+    }
+
+    #[test]
+    fn a_taller_panel_shows_more_forecast_hours() {
+        let theme = crate::theme::Theme::default();
+        let mut data = sample_data(true);
+        data.hours = (0..MAX_FORECAST_HOURS)
+            .map(|i| Slot {
+                hour: u8::try_from(i).unwrap_or(0),
+                temperature: 20.0,
+                feels_like: 20.0,
+                code: 0,
+                precipitation_chance: Some(0),
+                wind: 5.0,
+            })
+            .collect();
+
+        let rows_drawn = |height: u16| -> usize {
+            use ratatui::Terminal;
+            use ratatui::backend::TestBackend;
+            let mut terminal = Terminal::new(TestBackend::new(FORECAST_WIDTH, height)).unwrap();
+            terminal
+                .draw(|frame| render_forecast(frame, frame.area(), &theme, &data))
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            // Count rows that start with an "HH:00" hour label.
+            (0..height)
+                .filter(|y| {
+                    let line: String = (0..5).map(|x| buf[(x, *y)].symbol()).collect();
+                    line.ends_with(":00")
+                })
+                .count()
+        };
+
+        assert_eq!(rows_drawn(5), 4, "four rows of height, four hours");
+        assert_eq!(rows_drawn(9), 8, "a taller panel shows more");
+        assert!(
+            rows_drawn(20) > rows_drawn(9),
+            "height must keep buying hours, not stop at the configured count"
+        );
     }
 
     #[test]

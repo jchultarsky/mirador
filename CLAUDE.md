@@ -24,7 +24,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 328 tests, all fast, no network
+cargo test                                    # 330 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 cargo run -- --print-config > /tmp/m.toml     # scratch config to experiment on

@@ -81,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The weather panel declares a maximum width and hands the surplus to the
+  clock. Once every forecast column is showing, more width only inflates the
+  flexible sky column and pushes the numbers away from the labels they belong
+  to. On a 193-column terminal the clock goes from 57 columns to 80 — enough to
+  render block numerals where it had been falling back to plain text, which is
+  the one thing that panel exists not to do.
+- The weather forecast fills the height it is given: `[weather].forecast_hours`
+  is a floor the panel is sized for, not a ceiling on what it may show, and the
+  fetch retrieves a full day so a taller panel never waits for a refetch.
 - The calendar stacks further rows of months into spare height, up to a year on
   screen. `[calendar].months` is now how many sit *across* — and so how wide the
   panel ever gets — rather than how many exist; it is a floor on the number
