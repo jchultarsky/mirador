@@ -246,9 +246,8 @@ inline `[theme]` table from a `theme = "name"` string).
 
 ## Housekeeping
 
-- Built and tested in a Linux container; `sysinfo`'s macOS CPU and network paths
-  are the least exercised code here.
-- `_to_delete/` in the repo root holds transfer tarballs from the cloud session.
-  Safe to delete; not gitignored on purpose so it stays visible.
+- Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
+  paths went unexercised. Both have since been run on macOS against a real
+  terminal under `tmux` and report sensible figures. Windows remains untested.
 - **The crates.io name is not yet reserved.** Publish a `0.0.0` placeholder;
   reservation is first-come and there is no reclamation.
