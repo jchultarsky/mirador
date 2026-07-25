@@ -34,11 +34,27 @@ No accounts. No API keys. No telemetry. Weather comes from
 
 ## Install
 
-From crates.io:
+From crates.io, if you have Rust:
 
 ```sh
 cargo install mirador
 ```
+
+Without Rust, on macOS or Linux:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jchultarsky/mirador/releases/latest/download/mirador-installer.sh | sh
+```
+
+and on Windows:
+
+```powershell
+irm https://github.com/jchultarsky/mirador/releases/latest/download/mirador-installer.ps1 | iex
+```
+
+Both fetch the right archive for your platform, check it against its published
+checksum, and unpack the binary. If you would rather read the script before
+running it, it is an ordinary file at that URL, and the manual route is below.
 
 From source:
 
@@ -51,10 +67,6 @@ cargo install --path .
 Or download a pre-built binary from the
 [latest release](https://github.com/jchultarsky/mirador/releases/latest).
 Every archive carries a `.sha256` beside it, so verify it before running:
-
-> The Windows archive and these filenames arrive with the **next** release.
-> `v0.1.0` predates the packaging change and ships macOS and Linux only, under
-> names carrying the version (`mirador-v0.1.0-aarch64-apple-darwin.tar.gz`).
 
 ```sh
 shasum -a 256 -c mirador-aarch64-apple-darwin.tar.gz.sha256
