@@ -24,7 +24,8 @@ mouse = true
 # The dashboard is a grid of rows. `height` and `width` are relative weights,
 # not cell counts, so the proportions hold at any terminal size.
 #
-# Available widgets: clocks, weather, todo, notes, stocks, calendar, cpu, network
+# Available widgets: clocks, weather, todo, notes, stocks, calendar, pomodoro,
+# cpu, network
 # ---------------------------------------------------------------------------
 [layout]
 rows = [
@@ -36,8 +37,12 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 42, panels = [
-    { widget = "todo",  width = 58 },
-    { widget = "notes", width = 42 },
+    { widget = "todo",     width = 44 },
+    { widget = "notes",    width = 30 },
+    # The timer draws block numerals when it has the width for them and falls
+    # back to plain text when it does not, so a narrow terminal loses the
+    # spectacle rather than the time.
+    { widget = "pomodoro", width = 26 },
   ] },
   { height = 24, panels = [
     { widget = "stocks",  width = 40 },
@@ -203,6 +208,39 @@ show_sparkline = true
 [calendar]
 months      = 2          # months across; more stack when there is height
 week_starts = "sunday"   # sunday | monday
+
+# ---------------------------------------------------------------------------
+# Pomodoro
+#
+# A focus timer. `space` starts and pauses, `n` skips to the next phase, `r`
+# puts the current phase back to full, and `+`/`-` change the length of
+# whichever phase you are in by a minute.
+#
+# The values below are where the timer *starts*. Changes made with `+` and `-`
+# last for the session; mirador never rewrites this file, so edit here for a
+# lasting change.
+#
+# `chime` is off by default, because a dashboard you leave open all day has no
+# business making noise you did not ask for. With no `chime_command` it rings
+# the terminal bell, which costs nothing and lets your terminal decide whether
+# that means a sound, a flash, or silence. mirador deliberately ships no audio
+# library: playing a file means linking your platform's audio stack, which is a
+# large amount of machinery for one notification.
+#
+# To play an actual sound, give a program and its arguments. It is run
+# directly, not through a shell, so there is no quoting to get wrong:
+#
+#   chime_command = ["afplay", "/System/Library/Sounds/Glass.aiff"]   # macOS
+#   chime_command = ["paplay", "/usr/share/sounds/freedesktop/stereo/complete.oga"]  # Linux
+# ---------------------------------------------------------------------------
+[pomodoro]
+focus_minutes            = 25
+short_break_minutes      = 5
+long_break_minutes       = 15
+rounds_before_long_break = 4   # focus intervals per set, then the long break
+auto_start               = false  # begin the next phase without a keypress
+chime                    = false
+chime_command            = []
 
 # ---------------------------------------------------------------------------
 # CPU

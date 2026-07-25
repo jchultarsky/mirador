@@ -119,7 +119,8 @@ quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
 textfield.rs single-line text editor used by task entry
 textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
-widgets/     clocks, weather, todo, notes, stocks, calendar, cpu, network
+widgets/     clocks, weather, todo, notes, stocks, calendar, pomodoro, cpu,
+             network
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -257,6 +258,19 @@ server. Read a local `.ics` file or a plain events file.
 
 **Weather deliberately gets less room** than it originally had; it was not among
 the four.
+
+**No audio library, ever.** The pomodoro chime is the terminal bell, `\x07`.
+Playing a sound file means talking to the platform's audio stack — `rodio`
+reaches `cpal` reaches `alsa-sys`, a C library wanting dev headers on every
+Linux builder, which would undo the work that got musl and Windows building at
+all. The bell costs nothing and defers to settings the user has already made.
+Anyone wanting a specific sound names a player in `chime_command`, which is run
+directly rather than through a shell. If a future panel wants a notification,
+it gets the same answer.
+
+**Sound is off by default and so is anything else that interrupts.** The one
+line that decides this: a tab you leave open all day has no business making
+noise you did not ask for.
 
 ## Stock watchlist — built, in `quote.rs` and `widgets/stocks.rs`
 

@@ -238,6 +238,50 @@ A watchlist with the last price, the day's change, and an intraday sparkline.
 is a data file rather than config, which is what lets the panel own it. See
 [Market data](#market-data) before filing a bug about HTTP 429.
 
+### Pomodoro
+
+A focus timer, in the same block numerals the clock uses.
+
+| Key | Action |
+| --- | --- |
+| `space` | Start or pause |
+| `n` | Skip to the next phase |
+| `r` | Put the current phase back to full |
+| `+` / `-` | Lengthen or shorten the phase you are in, by a minute |
+
+Focus intervals are brass and breaks are moss, and the phase is spelled out
+above the numerals as well — colour alone is a bad way to tell someone whether
+they are meant to be working. A paused timer goes grey rather than blinking:
+this is a dashboard you leave open, and a flashing clock is the opposite of
+that. Pips along the bottom count the set, and the long break falls when they
+fill.
+
+`+` and `-` move the phase length *and* what is left of it together, so adding
+a minute eighteen minutes into a focus interval does not rewind you to the
+start. Changes last for the session; `[pomodoro]` decides where the timer
+starts.
+
+**A chime is available and off by default**, because a dashboard you leave open
+all day has no business making noise you did not ask for. Set
+`[pomodoro].chime = true` and each phase ends with the terminal bell — which
+your terminal is free to render as a sound, a flash, or nothing, according to
+settings you have already chosen.
+
+mirador ships no audio library on purpose. Playing a sound file means linking
+your platform's audio stack, which on Linux means a C library and its dev
+headers on every machine that builds this. If you want a particular sound, name
+a player instead and it is run directly, with no shell in the way:
+
+```toml
+[pomodoro]
+chime = true
+chime_command = ["afplay", "/System/Library/Sounds/Glass.aiff"]
+```
+
+If that program cannot be started, the panel says so where the durations
+usually sit. A notification you believe is working but is not is worse than
+none at all.
+
 ### CPU and network
 
 CPU shows average load, a moving history graph and a per-core meter row.
@@ -320,8 +364,9 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 45, panels = [
-    { widget = "todo",  width = 58 },
-    { widget = "notes", width = 42 },
+    { widget = "todo",     width = 44 },
+    { widget = "notes",    width = 30 },
+    { widget = "pomodoro", width = 26 },
   ] },
   { height = 25, panels = [
     { widget = "stocks",  width = 40 },
@@ -341,6 +386,7 @@ rows = [
 | `notes` | Free-form notes: a list of titles and dates above the note you are reading |
 | `stocks` | A watchlist: last price, the day's change, and an intraday sparkline |
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
+| `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 

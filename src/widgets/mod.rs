@@ -9,6 +9,7 @@ pub mod clocks;
 pub mod cpu;
 pub mod network;
 pub mod notes;
+pub mod pomodoro;
 pub mod stocks;
 pub mod todo;
 pub mod weather;
@@ -20,7 +21,7 @@ use crate::panel::Panel;
 
 /// Every widget id accepted in the `[layout]` table.
 pub const WIDGET_NAMES: &[&str] = &[
-    "clocks", "weather", "todo", "notes", "stocks", "calendar", "cpu", "network",
+    "clocks", "weather", "todo", "notes", "stocks", "calendar", "pomodoro", "cpu", "network",
 ];
 
 /// Whether `name` refers to a widget mirador knows how to build.
@@ -73,6 +74,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.stocks_path()?,
         )?),
         "calendar" => Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
+        "pomodoro" => Box::new(pomodoro::PomodoroPanel::new(config.pomodoro.clone())),
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         _ => return Ok(None),
