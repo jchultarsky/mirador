@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mirador-update`, installed beside the binary by the shell and PowerShell
+  installers. It asks GitHub for the newest release and installs it if that is
+  newer, so upgrading no longer means going back to the releases page. It runs
+  only when invoked: mirador itself never checks for updates and does not know
+  the program exists, which keeps the "no telemetry" line in the README exactly
+  as true as it was. Anyone who installed with `cargo install` or from source
+  upgrades the way they installed.
 - **Settings changed from the keyboard are remembered across restarts.**
   Weather units, the task sort order, whether completed tasks show, seconds on
   the clock, and the pomodoro durations. The watchlist already did this for

@@ -57,6 +57,18 @@ Both fetch the right archive for your platform, check it against its published
 checksum, and unpack the binary. If you would rather read the script before
 running it, it is an ordinary file at that URL, and the manual route is below.
 
+They also install `mirador-update` beside it, so a later upgrade is:
+
+```sh
+mirador-update
+```
+
+It asks GitHub what the newest release is and installs it if that is newer than
+what you have. It runs **only when you run it** — mirador itself never checks
+for updates, never phones home, and does not know this program exists. If you
+installed with `cargo install` or from source, upgrade the same way you
+installed; the updater is only for the two installers above.
+
 From source:
 
 ```sh
