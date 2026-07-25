@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The README's checksum command no longer prints a warning. `dist` writes its
+  `.sha256` files with a trailing blank line, so `shasum -c` verified the
+  archive and then added `WARNING: 1 line is improperly formatted` — true of
+  the blank line, not of the hash, but a warning printed beside a checksum is
+  the one place ambiguity is worst. Piping through `grep .` drops the blank
+  line; both the macOS and Linux forms are tested to print `OK` and exit 0 on a
+  good archive and `FAILED` and exit 1 on a tampered one. A Windows form is
+  documented too, now that there is a Windows archive to verify.
+
 ## [0.2.0] - 2026-07-25
 
 ### Added

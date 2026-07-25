@@ -66,10 +66,31 @@ cargo install --path .
 
 Or download a pre-built binary from the
 [latest release](https://github.com/jchultarsky/mirador/releases/latest).
-Every archive carries a `.sha256` beside it, so verify it before running:
+Every archive carries a `.sha256` beside it, so verify it before running. On
+macOS:
 
 ```sh
-shasum -a 256 -c mirador-aarch64-apple-darwin.tar.gz.sha256
+grep . mirador-aarch64-apple-darwin.tar.gz.sha256 | shasum -a 256 -c -
+```
+
+and on Linux:
+
+```sh
+grep . mirador-x86_64-unknown-linux-gnu.tar.gz.sha256 | sha256sum -c -
+```
+
+Either prints `… OK` and exits 0, or prints `FAILED` and exits 1. The `grep .`
+drops a trailing blank line that the checksum files are written with; without
+it the command still verifies correctly but adds `WARNING: 1 line is
+improperly formatted`, and a warning printed next to a checksum is exactly the
+wrong thing to make someone squint at.
+
+On Windows, print the hash and compare it with the `.sha256` file beside the
+archive:
+
+```powershell
+Get-FileHash .\mirador-x86_64-pc-windows-msvc.zip
+Get-Content .\mirador-x86_64-pc-windows-msvc.zip.sha256
 ```
 
 | Platform | Archive |
