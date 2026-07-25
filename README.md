@@ -16,28 +16,11 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-```
-╭┤1 Clock├───────────┤EDT├╮╭┤2 Weather — Boston, Massachusetts├────┤at 15:45├╮
-│ 15:52:41                ││ 75°F  clear                                     │
-│    SATURDAY 25 JULY     ││ feels 75°F                                      │
-│ ZONE          TIME      ││ NEXT HOURS ──────────────────────────────────── │
-│ UTC           19:52:41  ││ HOUR  SKY              TEMP FEELS  RAIN    WIND │
-│ London        20:52:41  ││ 16:00 🌞 clear         75°F   76°    0%  10 mph │
-│ Tokyo         04:52:41… ││ 17:00 🌞 clear         75°F   74°    0%  10 mph │
-╰─────── s seconds ───────╯╰─────────────────────────────────────────────────╯
-╭┤3 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
-│ 1 overdue   1 due today   3 open   by smart                                │
-│   DONE PRI TASK                              TAGS                      DUE │
-│   [ ]  ▮▮▮ Renew the domain                  #admin            2 days late │
-│   [ ]  ▮▮  Reply to the design review        #work                   today │
-│   [ ]  ▮   Read the ratatui layout docs      #rust              Fri 07 Aug │
-│                                                                            │
-│ Card on file expired; the registrar will not auto-renew.                   │
-╰────────────────────────────────────────────────────────────────────────────╯
- mirador   Tab focus   ? keys   q quit
-```
+![The mirador dashboard: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, and a market watchlist beside live CPU and network graphs](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/screenshot.png)
 
-*Every screen in this README is a real capture, not a mock-up.*
+*All eight panels on a wide terminal, on a first run — the tasks and the note
+are the examples mirador seeds for you. Every screen in this README is a real
+capture, not a mock-up.*
 
 ## Why
 
