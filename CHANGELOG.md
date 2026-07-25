@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The README says what happens when you upgrade. A new widget does not appear
+  in a config you already have — mirador never rewrites your config, which is
+  what makes it safe to hand-edit, so a config written by an earlier version
+  lays out the panels that existed when it was written and nothing since. The
+  status bar has always named the widgets a layout does not place; the README
+  now explains the notice, shows what it looks like, and gives the row to paste.
+  The first person to add the pomodoro panel to an existing config went looking
+  for a missing setting instead.
 - The README's checksum command no longer prints a warning. `dist` writes its
   `.sha256` files with a trailing blank line, so `shasum -c` verified the
   archive and then added `WARNING: 1 line is improperly formatted` — true of

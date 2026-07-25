@@ -18,9 +18,10 @@ A *mirador* is a lookout — the tower you climb to see everything at once.
 
 ![The mirador dashboard: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, and a market watchlist beside live CPU and network graphs](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/screenshot.png)
 
-*All eight panels on a wide terminal, on a first run — the tasks and the note
-are the examples mirador seeds for you. Every screen in this README is a real
-capture, not a mock-up.*
+*A wide terminal on a first run — the tasks and the note are the examples
+mirador seeds for you. Every screen in this README is a real capture, not a
+mock-up. This one predates the pomodoro panel, which is shown
+[further down](#pomodoro).*
 
 ## Why
 
@@ -115,8 +116,8 @@ does not build for it.
 mirador
 ```
 
-On first run it writes a commented config file, lays out all eight panels, and
-seeds the task list and notes with a few examples so nothing starts blank. The
+On first run it writes a commented config file, lays out every panel, and seeds
+the task list and notes with a few examples so nothing starts blank. The
 examples are ordinary entries — they explain the keys and then you delete them
 with `d`. They are seeded only when there is no file yet, so once you clear
 them they stay cleared.
@@ -129,6 +130,37 @@ mirador --config-path
 
 Edit `[weather].location` to your own city and you are done. Nothing else is
 required: no account, no API key, no environment variables.
+
+### Upgrading
+
+**A new widget will not appear in a config you already have.** mirador never
+rewrites your config — that is what makes it safe to hand-edit and keep in git
+— so a config written by an earlier version lays out exactly the panels that
+existed when it was written, and nothing since. Leaving a panel out is a
+legitimate choice, so this cannot be an error and cannot be fixed for you.
+
+What you get instead is a notice on the right of the status bar naming what
+your layout does not place:
+
+```
+ mirador   Tab focus   ? keys   q quit          1 unused: pomodoro   ? for help
+```
+
+It retires on your first keypress, because a dashboard you leave open all day
+must not nag; `?` keeps it in the help overlay. To take a widget up, add it to
+a row in `[layout]` and give the row's other panels room for it:
+
+```toml
+  { height = 42, panels = [
+    { widget = "todo",     width = 44 },
+    { widget = "notes",    width = 30 },
+    { widget = "pomodoro", width = 26 },   # the new one
+  ] },
+```
+
+`mirador --print-config` prints the current default in full if you would rather
+copy a whole row, and `mirador --migrate-config` rewrites keys that were
+renamed between versions, leaving a backup beside the original.
 
 ## The panels
 
