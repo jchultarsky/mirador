@@ -122,6 +122,7 @@ location        = "Boston, Massachusetts"
 # latitude      = 42.3601
 # longitude     = -71.0589
 units           = "imperial"   # "imperial" (F, mph) or "metric" (C, km/h)
+                               # `u` switches at runtime; this is the start state
 forecast_hours  = 8            # hours of hourly forecast, 1-24
 refresh_minutes = 30
 
@@ -147,13 +148,15 @@ horizon_days   = 0             # hide tasks due further out than this; 0 = show 
 # titles and bodies. In the editor, Tab moves between title and body, Enter in
 # the body is a new line, and Ctrl+S saves.
 #
-# The body sits to the right of the list when the panel is at least
-# `side_by_side_min_width` columns wide, and underneath it when it is narrower.
+# `preview` puts the note body "below" the list or "beside" it. Below by
+# default: beside splits a finite width between a list that wants room for
+# titles and a body that wants room for prose, so neither gets enough. Stacking
+# gives both the full width and spends height, which is the cheaper axis here.
 # ---------------------------------------------------------------------------
 [notes]
-# file                 = "~/notes/notes.toml"
-date_format            = "%d %b"
-side_by_side_min_width = 70
+# file      = "~/notes/notes.toml"
+date_format = "%d %b"
+preview     = "below"        # below | beside
 
 # ---------------------------------------------------------------------------
 # Stock watchlist

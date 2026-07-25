@@ -313,9 +313,13 @@ pub struct NotesConfig {
     pub file: Option<PathBuf>,
     /// Date format used in the list.
     pub date_format: String,
-    /// Show the note body beside the list rather than below it, when the panel
-    /// is at least this many columns wide. Below it, the two stack.
-    pub side_by_side_min_width: u16,
+    /// Where the note body sits: `below` the list, or `beside` it.
+    ///
+    /// Below by default. Beside splits a finite width between two things that
+    /// both want it — the list loses room for titles and the body loses room
+    /// for prose — where stacking gives each the full width and trades only
+    /// height, which is the cheaper axis for both.
+    pub preview: String,
 }
 
 impl Default for NotesConfig {
@@ -323,7 +327,7 @@ impl Default for NotesConfig {
         Self {
             file: None,
             date_format: "%d %b".to_string(),
-            side_by_side_min_width: 70,
+            preview: "below".to_string(),
         }
     }
 }

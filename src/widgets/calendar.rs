@@ -42,6 +42,10 @@ const GAP: u16 = 3;
 const MONTH_HEIGHT: u16 = 8;
 const WEEK_ROWS: usize = 6;
 
+/// Border on both sides plus the one column of interior padding on each,
+/// which a `max_*` figure has to include because it describes the whole panel.
+const FRAME_AND_PADDING: u16 = 4;
+
 /// How far the view has been scrolled, in whole months.
 type MonthOffset = i32;
 
@@ -248,6 +252,21 @@ impl Panel for CalendarPanel {
 
     fn bindings(&self) -> &'static [Binding] {
         BINDINGS
+    }
+
+    fn max_width(&self) -> Option<u16> {
+        // Every configured month side by side, plus the frame and its padding.
+        // A month grid is a fixed-width object: past this the panel is drawing
+        // the same calendar with more blank around it, so the columns are
+        // better spent on the weather table or the task list next door.
+        let months = u16::from(self.config.months.clamp(1, 12));
+        Some(months * MONTH_WIDTH + (months - 1) * GAP + FRAME_AND_PADDING)
+    }
+
+    fn max_height(&self) -> Option<u16> {
+        // One row of months. Stacking is what the panel falls back to when it
+        // is too narrow, not something to claim height for.
+        Some(MONTH_HEIGHT + FRAME_AND_PADDING)
     }
 
     fn refresh_interval(&self) -> std::time::Duration {

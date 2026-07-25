@@ -22,6 +22,14 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// Keys this panel responds to.
 const BINDINGS: &[Binding] = &[Binding::primary("s", "seconds")];
 
+/// Rows the numerals occupy at the largest scale the panel ever uses: glyphs
+/// are five rows tall at scale 1, and `fitting_scale` is capped at 3.
+const BIG_CLOCK_ROWS: u16 = 15;
+
+/// Border and interior padding on both sides, since `max_*` describes the whole
+/// panel rather than its interior.
+const FRAME_AND_PADDING: u16 = 4;
+
 /// Columns of the secondary zone list.
 const COLUMNS: &[Column] = &[
     Column::flex("zone", 1),
@@ -141,6 +149,19 @@ impl Panel for ClocksPanel {
 
     fn bindings(&self) -> &'static [Binding] {
         BINDINGS
+    }
+
+    fn max_height(&self) -> Option<u16> {
+        // Numerals at their largest, the date beneath, then the zone table:
+        // a blank separator, a header, and a row per zone. Past this the panel
+        // is centred numerals with a growing void underneath them.
+        let date = u16::from(!self.config.date_format.is_empty());
+        let zones = if self.secondary.is_empty() {
+            0
+        } else {
+            u16::try_from(self.secondary.len()).unwrap_or(0) + 2
+        };
+        Some(BIG_CLOCK_ROWS + date + zones + FRAME_AND_PADDING)
     }
 
     fn refresh_interval(&self) -> std::time::Duration {

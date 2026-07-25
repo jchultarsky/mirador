@@ -64,6 +64,16 @@ const RULES: &[Rule] = &[
         value: "8",
         why: "the forecast is hourly now, so the day count was replaced with the default of 8 hours",
     },
+    Rule::Replace {
+        section: "notes",
+        from: "side_by_side_min_width",
+        to: "preview",
+        // A width threshold does not convert to a placement: the setting now
+        // says where the body goes, not how wide the panel must be to earn a
+        // side-by-side split.
+        value: "\"below\"",
+        why: "the note body is placed by name now, not by a width threshold",
+    },
     Rule::Retire {
         section: "theme",
         key: "rx",

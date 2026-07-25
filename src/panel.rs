@@ -59,6 +59,29 @@ pub trait Panel {
         &[]
     }
 
+    /// The width past which this panel can do nothing with more space, if it
+    /// has one. Includes the frame, so it is a whole-panel figure.
+    ///
+    /// A clock cannot use a hundred columns and a calendar cannot use more than
+    /// its months need. Declaring the limit lets the shell give the surplus to
+    /// a neighbour that will fill it, instead of leaving a panel sitting in
+    /// space it cannot use while the list next door runs out.
+    ///
+    /// `None` means "whatever is going", which is right for anything that
+    /// scrolls or scales — lists, graphs, prose. Only return a figure when more
+    /// space genuinely buys the reader nothing.
+    fn max_width(&self) -> Option<u16> {
+        None
+    }
+
+    /// The height past which this panel can do nothing with more space.
+    ///
+    /// A row of the grid is only shortened when *every* panel in it is bounded,
+    /// since they share the height between them.
+    fn max_height(&self) -> Option<u16> {
+        None
+    }
+
     /// How often [`Panel::tick`] should be called.
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)

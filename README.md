@@ -151,7 +151,7 @@ rows = [
 | `clocks` | Any number of world clocks, by IANA timezone |
 | `weather` | Current conditions plus a 1–7 day forecast |
 | `todo` | The task list, with full editing |
-| `notes` | Free-form notes: a list of titles and dates beside the note you are reading |
+| `notes` | Free-form notes: a list of titles and dates above the note you are reading |
 | `stocks` | A watchlist: last price, the day's change, and an intraday sparkline |
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |

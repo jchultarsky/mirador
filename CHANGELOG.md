@@ -81,6 +81,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Panels may declare the size past which more space does nothing for them, and
+  the layout hands their surplus to a neighbour that can use it. A clock cannot
+  use a hundred columns and a calendar cannot use more than its months need;
+  proportional layout gave them the space anyway and they sat in it while the
+  task list next door ran out. The calendar and clock are bounded on both axes,
+  the weather panel on height. When every panel in a row is bounded the maxima
+  are ignored rather than leaving a gap — panels draw their own frames, so
+  unallocated cells would show as a hole.
+- `[weather].units` switches at runtime with `u`. The conversion is applied at
+  render rather than re-requested, so the change is instant instead of putting a
+  network round trip behind a keypress, and the forecast table converts with the
+  readout above it.
+- The note body sits below the list rather than beside it. Side by side splits a
+  finite width between a list that wants room for titles and a body that wants
+  room for prose, so neither got enough; stacking gives both the full width and
+  spends height, which is the cheaper axis for both. `[notes].preview` takes
+  `below` or `beside`, replacing `side_by_side_min_width`.
+- CPU and network history buffers grow to fill the panel. `history` is a floor
+  now, not a ceiling: the graphs pack two samples per cell and fill from the
+  right, so a buffer of N samples could only ever cover N/2 cells and anything
+  wider showed dead space on the left. The span readout is computed from the
+  live sample count, so it stays honest as the buffer grows.
+
 - Labels are bold uppercase rather than letterspaced: `NEXT HOURS`, not
   `N E X T  H O U R S`. Tracking was meant to read as an engraved instrument
   label and instead read as stretched text, and it more than doubled the width

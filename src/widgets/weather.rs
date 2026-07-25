@@ -43,7 +43,14 @@ const COLUMNS: &[Column] = &[
     Column::fixed("wind", 7).right().drops_below(62),
 ];
 
-const BINDINGS: &[Binding] = &[Binding::primary("r", "refresh")];
+const BINDINGS: &[Binding] = &[
+    Binding::primary("r", "refresh"),
+    Binding::primary("u", "units"),
+];
+
+/// Border and interior padding on both sides, since `max_*` describes the whole
+/// panel rather than its interior.
+const FRAME_AND_PADDING: u16 = 4;
 
 /// One slot of the hourly forecast.
 #[derive(Debug, Clone)]
@@ -88,11 +95,41 @@ pub struct WeatherPanel {
     status: Arc<Mutex<Status>>,
     /// Set to true to ask the fetch thread for an immediate refresh.
     refresh: Arc<Mutex<bool>>,
+    /// Kept for `max_height`; the rest of the config moves to the fetch thread.
+    forecast_hours: u8,
+    /// Display units, toggled with `u`.
+    ///
+    /// Held separately from the fetched data and applied at render, so the
+    /// switch is instant. Re-requesting in the other unit would put a network
+    /// round trip behind a keypress, and leave the panel showing the old unit
+    /// — or nothing — until it came back.
+    imperial: bool,
+}
+
+/// Convert a temperature between the scales.
+fn convert_temperature(value: f64, to_imperial: bool) -> f64 {
+    if to_imperial {
+        value * 9.0 / 5.0 + 32.0
+    } else {
+        (value - 32.0) * 5.0 / 9.0
+    }
+}
+
+/// Convert a wind speed between mph and km/h.
+fn convert_wind(value: f64, to_imperial: bool) -> f64 {
+    const KM_PER_MILE: f64 = 1.609_344;
+    if to_imperial {
+        value / KM_PER_MILE
+    } else {
+        value * KM_PER_MILE
+    }
 }
 
 impl WeatherPanel {
     /// Start the background fetch loop and return immediately.
     pub fn new(config: WeatherConfig) -> Self {
+        let forecast_hours = config.forecast_hours;
+        let imperial = config.units != "metric";
         let status = Arc::new(Mutex::new(Status::Loading));
         let refresh = Arc::new(Mutex::new(false));
         let shared = Arc::clone(&status);
@@ -103,7 +140,37 @@ impl WeatherPanel {
             .spawn(move || fetch_loop(&config, &shared, &shared_refresh))
             .expect("spawning the weather thread");
 
-        Self { status, refresh }
+        Self {
+            status,
+            refresh,
+            forecast_hours,
+            imperial,
+        }
+    }
+
+    /// Restate `data` in the display units, if it was not fetched in them.
+    ///
+    /// The source values arrive rounded to one decimal and everything is shown
+    /// to zero, so a conversion cannot shift a displayed figure by more than
+    /// the rounding already applied.
+    fn in_display_units(&self, mut data: WeatherData) -> WeatherData {
+        let fetched_imperial = data.temperature_unit == "°F";
+        if fetched_imperial == self.imperial {
+            return data;
+        }
+
+        let to = self.imperial;
+        data.temperature = convert_temperature(data.temperature, to);
+        data.feels_like = convert_temperature(data.feels_like, to);
+        data.wind = convert_wind(data.wind, to);
+        for hour in &mut data.hours {
+            hour.temperature = convert_temperature(hour.temperature, to);
+            hour.feels_like = convert_temperature(hour.feels_like, to);
+            hour.wind = convert_wind(hour.wind, to);
+        }
+        data.temperature_unit = if to { "°F" } else { "°C" };
+        data.wind_unit = if to { "mph" } else { "km/h" };
+        data
     }
 
     fn snapshot(&self) -> Status {
@@ -460,6 +527,20 @@ impl Panel for WeatherPanel {
         BINDINGS
     }
 
+    fn max_height(&self) -> Option<u16> {
+        // Current conditions (the sky art is the tall part), the rule, the
+        // column header, and one row per forecast hour. The forecast is a
+        // fixed number of rows, so past this the panel is a table with a
+        // growing blank field under it.
+        let hours = u16::from(self.forecast_hours.clamp(1, 24));
+        Some(
+            u16::try_from(glyphs::ART_HEIGHT).unwrap_or(4)
+                + 2  // the "next hours" rule and the column header
+                + hours
+                + FRAME_AND_PADDING,
+        )
+    }
+
     fn refresh_interval(&self) -> Duration {
         // The background thread owns the real cadence; this only controls how
         // quickly a completed fetch appears on screen.
@@ -468,13 +549,21 @@ impl Panel for WeatherPanel {
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
         use ratatui::crossterm::event::KeyCode;
-        if matches!(key.code, KeyCode::Char('r')) {
-            if let Ok(mut flag) = self.refresh.lock() {
-                *flag = true;
+        match key.code {
+            KeyCode::Char('r') => {
+                if let Ok(mut flag) = self.refresh.lock() {
+                    *flag = true;
+                }
+                crate::panel::KeyOutcome::Consumed
             }
-            return crate::panel::KeyOutcome::Consumed;
+            // Converted at render rather than re-requested, so the switch is
+            // immediate instead of putting a network round trip behind a key.
+            KeyCode::Char('u') => {
+                self.imperial = !self.imperial;
+                crate::panel::KeyOutcome::Consumed
+            }
+            _ => crate::panel::KeyOutcome::Ignored,
         }
-        crate::panel::KeyOutcome::Ignored
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {
@@ -511,7 +600,7 @@ impl Panel for WeatherPanel {
                 );
                 return;
             }
-            Status::Ready(data) => data,
+            Status::Ready(data) => Box::new(self.in_display_units(*data)),
         };
 
         // The art is the one indulgence in this panel, so it is the first thing
@@ -673,6 +762,102 @@ fn render_forecast(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, d
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_data(imperial: bool) -> WeatherData {
+        WeatherData {
+            place: "Cincinnati".into(),
+            temperature: if imperial { 82.0 } else { 27.777_78 },
+            feels_like: if imperial { 86.0 } else { 30.0 },
+            code: 0,
+            wind: if imperial { 6.0 } else { 9.656_064 },
+            humidity: Some(44),
+            hours: vec![Slot {
+                hour: 13,
+                temperature: if imperial { 212.0 } else { 100.0 },
+                feels_like: if imperial { 32.0 } else { 0.0 },
+                code: 0,
+                precipitation_chance: Some(0),
+                wind: if imperial { 10.0 } else { 16.093_44 },
+            }],
+            temperature_unit: if imperial { "\u{b0}F" } else { "\u{b0}C" },
+            wind_unit: if imperial { "mph" } else { "km/h" },
+            observed: "13:00".into(),
+        }
+    }
+
+    fn panel_showing(imperial: bool) -> WeatherPanel {
+        WeatherPanel {
+            status: Arc::new(Mutex::new(Status::Loading)),
+            refresh: Arc::new(Mutex::new(false)),
+            forecast_hours: 8,
+            imperial,
+        }
+    }
+
+    #[test]
+    fn data_already_in_the_display_units_is_left_alone() {
+        let panel = panel_showing(true);
+        let before = sample_data(true);
+        let after = panel.in_display_units(before.clone());
+        assert_eq!(after.temperature.to_bits(), before.temperature.to_bits());
+        assert_eq!(after.temperature_unit, "\u{b0}F");
+    }
+
+    #[test]
+    fn fahrenheit_data_is_restated_in_celsius_including_the_forecast() {
+        let panel = panel_showing(false);
+        let converted = panel.in_display_units(sample_data(true));
+
+        assert!((converted.temperature - 27.777_78).abs() < 0.001);
+        assert!((converted.feels_like - 30.0).abs() < 0.001);
+        assert_eq!(converted.temperature_unit, "\u{b0}C");
+        assert_eq!(converted.wind_unit, "km/h");
+
+        // The forecast rows have to convert too, or the table disagrees with
+        // the readout above it.
+        assert!(
+            (converted.hours[0].temperature - 100.0).abs() < 0.001,
+            "212F is 100C, got {}",
+            converted.hours[0].temperature
+        );
+        assert!((converted.hours[0].feels_like - 0.0).abs() < 0.001);
+        assert!((converted.hours[0].wind - 16.093_44).abs() < 0.001);
+    }
+
+    #[test]
+    fn celsius_data_is_restated_in_fahrenheit() {
+        let panel = panel_showing(true);
+        let converted = panel.in_display_units(sample_data(false));
+        assert!((converted.temperature - 82.0).abs() < 0.01);
+        assert!((converted.hours[0].temperature - 212.0).abs() < 0.01);
+        assert!((converted.wind - 6.0).abs() < 0.01);
+        assert_eq!(converted.temperature_unit, "\u{b0}F");
+    }
+
+    #[test]
+    fn converting_there_and_back_returns_the_original_reading() {
+        let out = panel_showing(false).in_display_units(sample_data(true));
+        let back = panel_showing(true).in_display_units(out);
+        let original = sample_data(true);
+        assert!((back.temperature - original.temperature).abs() < 0.001);
+        assert!((back.wind - original.wind).abs() < 0.001);
+    }
+
+    #[test]
+    fn u_switches_units_and_is_documented() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = panel_showing(true);
+        assert!(
+            BINDINGS.iter().any(|b| b.key == "u"),
+            "a key nobody is told about might as well not exist"
+        );
+
+        let outcome = panel.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert_eq!(outcome, crate::panel::KeyOutcome::Consumed);
+        assert!(!panel.imperial, "the first press switches to metric");
+        panel.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        assert!(panel.imperial, "and the second switches back");
+    }
 
     fn sample() -> ForecastResponse {
         serde_json::from_str(

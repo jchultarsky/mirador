@@ -36,6 +36,102 @@ const GLOBAL: &[Binding] = &[
 /// Smallest weight a panel or row may be squeezed to.
 const MIN_WEIGHT: u16 = 1;
 
+/// Split `total` cells across `weights`, giving no slot more than its maximum
+/// and handing what it declines to the slots that can still use it.
+///
+/// A clock cannot use a hundred columns; a calendar cannot use more than its
+/// months need. Pure proportional layout gives them the space anyway and they
+/// sit in it, while the task list next door runs out of room. So a panel may
+/// declare the point past which more space does nothing for it, and the surplus
+/// moves sideways to a neighbour that will actually fill it.
+///
+/// When *every* slot is bounded there is nobody to hand the surplus to, and the
+/// maxima are ignored rather than leaving a gap: panels draw their own frames,
+/// so unallocated cells would show as a hole in the middle of the dashboard.
+/// Better a slightly over-wide panel than a visible seam.
+fn distribute(total: u16, weights: &[u16], maxima: &[Option<u16>]) -> Vec<u16> {
+    let count = weights.len();
+    if count == 0 || total == 0 {
+        return vec![0; count];
+    }
+
+    let mut sizes = proportional(total, weights);
+
+    // Each pass caps whoever is over and re-splits what they gave up. Bounded
+    // by the slot count: every pass either caps at least one more slot or ends.
+    for _ in 0..count {
+        let capped = |i: usize, sizes: &[u16]| maxima[i].is_some_and(|m| sizes[i] >= m);
+
+        let surplus: u16 = (0..count)
+            .filter_map(|i| maxima[i].and_then(|m| sizes[i].checked_sub(m)))
+            .sum();
+        if surplus == 0 {
+            break;
+        }
+
+        let takers: Vec<usize> = (0..count).filter(|&i| !capped(i, &sizes)).collect();
+        if takers.is_empty() {
+            // Nobody can absorb it. Leave the proportional split alone so the
+            // row still covers its full width.
+            break;
+        }
+
+        for i in 0..count {
+            if let Some(max) = maxima[i] {
+                sizes[i] = sizes[i].min(max);
+            }
+        }
+
+        let taker_weights: Vec<u16> = takers.iter().map(|&i| weights[i].max(1)).collect();
+        for (slot, extra) in takers.iter().zip(proportional(surplus, &taker_weights)) {
+            sizes[*slot] = sizes[*slot].saturating_add(extra);
+        }
+    }
+
+    sizes
+}
+
+/// Split `total` in proportion to `weights`, losing no cells to rounding.
+///
+/// Largest-remainder rather than plain division: dividing and truncating leaves
+/// up to one cell per slot unallocated, which shows up as a ragged right edge.
+fn proportional(total: u16, weights: &[u16]) -> Vec<u16> {
+    let count = weights.len();
+    if count == 0 {
+        return Vec::new();
+    }
+    let sum: u32 = weights.iter().map(|w| u32::from((*w).max(1))).sum();
+    if sum == 0 {
+        return vec![0; count];
+    }
+
+    let mut sizes = Vec::with_capacity(count);
+    let mut remainders: Vec<(u32, usize)> = Vec::with_capacity(count);
+    let mut used: u32 = 0;
+
+    for (index, weight) in weights.iter().enumerate() {
+        let exact = u32::from(total) * u32::from((*weight).max(1));
+        let whole = exact / sum;
+        remainders.push((exact % sum, index));
+        used += whole;
+        sizes.push(u16::try_from(whole).unwrap_or(u16::MAX));
+    }
+
+    // Hand the leftover cells to the largest remainders, ties by position so
+    // the result is stable frame to frame.
+    remainders.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut leftover = u32::from(total).saturating_sub(used);
+    for (_, index) in remainders {
+        if leftover == 0 {
+            break;
+        }
+        sizes[index] = sizes[index].saturating_add(1);
+        leftover -= 1;
+    }
+
+    sizes
+}
+
 /// The index to trade space with: the next one along, or the previous one when
 /// `index` is last. `None` when there is nobody to trade with.
 fn neighbour_of(index: usize, len: usize) -> Option<usize> {
@@ -450,28 +546,60 @@ impl App {
         };
     }
 
+    /// The slot index of the panel at `(row, column)` of the layout.
+    fn slot_at(&self, row: usize, column: usize) -> Option<usize> {
+        self.positions.iter().position(|p| *p == (row, column))
+    }
+
     /// Compute one rectangle per panel, in the same row-major order as
     /// `self.slots`.
+    ///
+    /// Two passes of [`distribute`]: heights down the rows, then widths across
+    /// each row. Both honour the panels' declared maxima, so a panel that
+    /// cannot use more space passes it to one that can.
     fn geometry(&self, area: Rect) -> Vec<Rect> {
-        let row_constraints: Vec<Constraint> = self
-            .config
-            .layout
-            .rows
+        let rows = &self.config.layout.rows;
+
+        let row_weights: Vec<u16> = rows.iter().map(|row| row.height.max(1)).collect();
+        // A row is only bounded when every panel in it is: they share the
+        // height, so one unbounded panel keeps the whole row unbounded.
+        let row_maxima: Vec<Option<u16>> = rows
             .iter()
-            .map(|row| Constraint::Fill(row.height.max(1)))
+            .enumerate()
+            .map(|(row_index, row)| {
+                let mut tallest = 0u16;
+                for column in 0..row.panels.len() {
+                    let max = self
+                        .slot_at(row_index, column)
+                        .and_then(|slot| self.slots[slot].panel.max_height())?;
+                    tallest = tallest.max(max);
+                }
+                (tallest > 0).then_some(tallest)
+            })
             .collect();
 
-        let row_areas = Layout::vertical(row_constraints).split(area);
+        let heights = distribute(area.height, &row_weights, &row_maxima);
 
         let mut rects = Vec::with_capacity(self.slots.len());
-        for (row, row_area) in self.config.layout.rows.iter().zip(row_areas.iter()) {
-            let column_constraints: Vec<Constraint> = row
-                .panels
-                .iter()
-                .map(|panel| Constraint::Fill(panel.width.max(1)))
+        let mut y = area.y;
+        for (row_index, row) in rows.iter().enumerate() {
+            let height = heights.get(row_index).copied().unwrap_or(0);
+
+            let widths: Vec<u16> = row.panels.iter().map(|p| p.width.max(1)).collect();
+            let maxima: Vec<Option<u16>> = (0..row.panels.len())
+                .map(|column| {
+                    self.slot_at(row_index, column)
+                        .and_then(|slot| self.slots[slot].panel.max_width())
+                })
                 .collect();
-            let column_areas = Layout::horizontal(column_constraints).split(*row_area);
-            rects.extend(column_areas.iter().copied());
+            let columns = distribute(area.width, &widths, &maxima);
+
+            let mut x = area.x;
+            for width in columns {
+                rects.push(Rect::new(x, y, width, height));
+                x = x.saturating_add(width);
+            }
+            y = y.saturating_add(height);
         }
         rects
     }
@@ -976,6 +1104,164 @@ mod tests {
             narrow.contains("quit"),
             "the global keys survive: `{narrow}`"
         );
+    }
+
+    #[test]
+    fn space_is_split_by_weight_when_nobody_declares_a_limit() {
+        assert_eq!(distribute(100, &[50, 50], &[None, None]), vec![50, 50]);
+        assert_eq!(distribute(100, &[25, 75], &[None, None]), vec![25, 75]);
+    }
+
+    #[test]
+    fn every_cell_is_allocated_however_the_weights_divide() {
+        // Truncating division would leave a ragged edge where the frames stop
+        // short of the terminal.
+        for total in [1u16, 7, 23, 80, 81, 199, 200] {
+            for weights in [vec![1, 1, 1], vec![34, 33, 33], vec![1, 2, 7]] {
+                let maxima = vec![None; weights.len()];
+                let sizes = distribute(total, &weights, &maxima);
+                assert_eq!(
+                    sizes.iter().sum::<u16>(),
+                    total,
+                    "{total} across {weights:?} gave {sizes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_panel_that_cannot_use_more_space_hands_it_to_one_that_can() {
+        // The calendar case: bounded neighbour, unbounded list.
+        let sizes = distribute(100, &[50, 50], &[Some(30), None]);
+        assert_eq!(sizes, vec![30, 70], "the surplus must move sideways");
+        assert_eq!(sizes.iter().sum::<u16>(), 100);
+    }
+
+    #[test]
+    fn surplus_from_several_bounded_panels_lands_on_the_one_that_can_grow() {
+        let sizes = distribute(120, &[40, 40, 40], &[Some(20), Some(20), None]);
+        assert_eq!(sizes, vec![20, 20, 80]);
+    }
+
+    #[test]
+    fn surplus_is_shared_between_takers_in_proportion_to_their_weights() {
+        // Two unbounded panels, one twice the weight of the other.
+        let sizes = distribute(120, &[60, 20, 40], &[Some(30), None, None]);
+        assert_eq!(sizes.iter().sum::<u16>(), 120);
+        assert_eq!(sizes[0], 30, "the bounded one is capped");
+        assert!(
+            sizes[2] > sizes[1],
+            "the heavier taker gets more of it: {sizes:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_of_entirely_bounded_panels_still_covers_its_full_width() {
+        // Nobody to hand the surplus to. Panels draw their own frames, so
+        // leaving cells unallocated would show as a hole in the dashboard —
+        // an over-wide panel is the lesser evil.
+        let sizes = distribute(200, &[50, 50], &[Some(30), Some(30)]);
+        assert_eq!(
+            sizes.iter().sum::<u16>(),
+            200,
+            "no gap may be left: {sizes:?}"
+        );
+    }
+
+    #[test]
+    fn a_limit_larger_than_the_space_available_changes_nothing() {
+        let sizes = distribute(40, &[50, 50], &[Some(500), None]);
+        assert_eq!(sizes, vec![20, 20], "a limit nobody reaches is inert");
+    }
+
+    #[test]
+    fn degenerate_distributions_do_not_panic() {
+        assert_eq!(distribute(0, &[1, 1], &[None, None]), vec![0, 0]);
+        assert!(distribute(10, &[], &[]).is_empty());
+        assert_eq!(
+            distribute(10, &[0, 0], &[None, None]).iter().sum::<u16>(),
+            10
+        );
+        assert_eq!(distribute(1, &[1, 1, 1], &[None; 3]).iter().sum::<u16>(), 1);
+    }
+
+    #[test]
+    fn a_bounded_row_gives_its_leftover_height_to_the_row_below() {
+        // The clock/calendar row is bounded on every panel; the task row is
+        // not. The whole point of the mechanism: reclaim the void under the
+        // calendar and give it to the list that ran out of room.
+        let config = Config {
+            layout: LayoutConfig {
+                rows: vec![
+                    LayoutRow {
+                        height: 50,
+                        panels: vec![LayoutPanel {
+                            widget: "calendar".into(),
+                            width: 100,
+                        }],
+                    },
+                    LayoutRow {
+                        height: 50,
+                        panels: vec![LayoutPanel {
+                            widget: "cpu".into(),
+                            width: 100,
+                        }],
+                    },
+                ],
+            },
+            ..Config::default()
+        };
+
+        let app = App::new(config).unwrap();
+        let rects = app.geometry(Rect::new(0, 0, 120, 60));
+        assert_eq!(rects.len(), 2);
+        assert!(
+            rects[0].height < 30,
+            "the calendar must not keep half the screen: {:?}",
+            rects[0]
+        );
+        assert_eq!(
+            rects[0].height + rects[1].height,
+            60,
+            "and the height it gave up must be used, not lost"
+        );
+        assert_eq!(rects[1].y, rects[0].height, "the rows stay flush");
+    }
+
+    #[test]
+    fn a_bounded_panel_gives_its_leftover_width_to_its_neighbour() {
+        let config = Config {
+            layout: LayoutConfig {
+                rows: vec![LayoutRow {
+                    height: 100,
+                    panels: vec![
+                        LayoutPanel {
+                            widget: "calendar".into(),
+                            width: 50,
+                        },
+                        LayoutPanel {
+                            widget: "cpu".into(),
+                            width: 50,
+                        },
+                    ],
+                }],
+            },
+            ..Config::default()
+        };
+
+        let app = App::new(config).unwrap();
+        let rects = app.geometry(Rect::new(0, 0, 200, 40));
+        assert!(
+            rects[0].width < 100,
+            "the calendar is bounded: {:?}",
+            rects[0]
+        );
+        assert_eq!(
+            rects[0].width + rects[1].width,
+            200,
+            "and the columns still cover the terminal"
+        );
+        assert_eq!(rects[1].x, rects[0].width, "the panels stay flush");
     }
 
     #[test]

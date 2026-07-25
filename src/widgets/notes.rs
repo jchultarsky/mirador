@@ -744,10 +744,12 @@ impl Panel for NotesPanel {
 
         frame.render_widget(Paragraph::new(self.summary_line(theme)), rows[0]);
 
-        // Master-detail split, side by side only when both halves get a usable
-        // share; below that the columns fight and neither is readable.
+        // Master-detail split. Stacked by default: side by side divides a
+        // finite width between a list that wants room for titles and a body
+        // that wants room for prose, and neither gets enough. Stacking gives
+        // both the full width and spends height instead.
         let body = rows[1];
-        let side_by_side = body.width >= self.config.side_by_side_min_width;
+        let side_by_side = self.config.preview.eq_ignore_ascii_case("beside");
         let (list_area, detail_area) = if side_by_side {
             let parts =
                 Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
@@ -1060,50 +1062,43 @@ mod tests {
     }
 
     #[test]
-    fn the_split_follows_the_panel_width() {
+    fn the_preview_sits_below_the_list_by_default_and_beside_it_on_request() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (mut p, _g) = panel("split");
-        add_note(&mut p, "Note", "body text");
         let config = crate::config::Config::default();
         let gradients = config.theme.gradients();
 
-        // Wide: the body sits to the right of the list, so both share the top.
-        let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
-        terminal
-            .draw(|frame| {
-                p.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                    },
-                );
-            })
-            .unwrap();
-        let (list, detail) = (p.list_area.unwrap(), p.detail_area.unwrap());
-        assert!(detail.x > list.x, "side by side: {list:?} {detail:?}");
+        let draw = |p: &mut NotesPanel| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 14)).unwrap();
+            terminal
+                .draw(|frame| {
+                    p.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused: true,
+                        },
+                    );
+                })
+                .unwrap();
+            (p.list_area.unwrap(), p.detail_area.unwrap())
+        };
 
-        // Narrow: the body goes underneath instead of being squeezed.
-        let mut terminal = Terminal::new(TestBackend::new(40, 14)).unwrap();
-        terminal
-            .draw(|frame| {
-                p.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                    },
-                );
-            })
-            .unwrap();
-        let (list, detail) = (p.list_area.unwrap(), p.detail_area.unwrap());
+        // Default: stacked, even at a width that would fit both side by side.
+        // Splitting the width starves the titles and the prose at once.
+        let (mut p, _g) = panel("split-below");
+        add_note(&mut p, "Note", "body text");
+        let (list, detail) = draw(&mut p);
         assert_eq!(detail.x, list.x, "stacked: {list:?} {detail:?}");
         assert!(detail.y > list.y, "and the body is below");
+        assert_eq!(detail.width, list.width, "both get the full width");
+
+        // Opt in to beside.
+        p.config.preview = "beside".to_string();
+        let (list, detail) = draw(&mut p);
+        assert!(detail.x > list.x, "beside: {list:?} {detail:?}");
     }
 }

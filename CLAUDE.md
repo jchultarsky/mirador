@@ -24,7 +24,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 300 tests, all fast, no network
+cargo test                                    # 315 tests, all fast, no network
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 cargo run -- --print-config > /tmp/m.toml     # scratch config to experiment on
@@ -113,6 +113,15 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
 11. **Never render an empty cell in a table.** A blank reads as "this column is
     broken"; `0%` reads as "it is not going to rain", which is the fact the
     reader wanted. Use `–` for genuinely unknown.
+12. **A config number that describes content is a floor, not a ceiling.**
+    `[cpu].history = 120` capped the graph at 60 cells, so a wider panel drew
+    dead space; the buffer now grows to the width. Before adding a count to a
+    config, ask what happens when the panel is bigger than the count implies.
+13. **A panel that cannot use more space must say so**, via `Panel::max_width`
+    / `max_height`. Otherwise proportional layout hands it space it cannot use
+    while a list next door runs out. Return `None` for anything that scrolls or
+    scales; return a figure only when more space genuinely buys the reader
+    nothing. Both are whole-panel measurements, frame and padding included.
 
 ## Visual system
 

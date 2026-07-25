@@ -34,6 +34,8 @@ pub struct NetworkPanel {
     last_sample: Instant,
     /// False until the second sample, since the first has no delta to compare.
     primed: bool,
+    /// Cells each graph was last drawn into, so the buffers can grow to fill.
+    graph_cells: usize,
 }
 
 impl std::fmt::Debug for NetworkPanel {
@@ -57,6 +59,7 @@ impl NetworkPanel {
             networks,
             rx_rate: 0,
             tx_rate: 0,
+            graph_cells: 0,
             rx_total: 0,
             tx_total: 0,
             last_sample: Instant::now(),
@@ -115,9 +118,19 @@ impl NetworkPanel {
             return;
         }
 
-        let capacity = self.config.history.max(1);
+        let capacity = self.capacity();
         push_bounded(&mut self.rx_history, self.rx_rate, capacity);
         push_bounded(&mut self.tx_history, self.tx_rate, capacity);
+    }
+
+    /// How many samples to retain.
+    ///
+    /// `[network].history` is a floor, not a ceiling. The graph packs two
+    /// samples per cell and fills from the right, so N samples cover only N/2
+    /// cells; on a wider panel the graph stopped short of its own left edge and
+    /// left dead space behind it.
+    fn capacity(&self) -> usize {
+        self.config.history.max(1).max(self.graph_cells * 2)
     }
 
     /// A shared ceiling for both charts so rx and tx stay visually comparable.
@@ -133,8 +146,12 @@ impl NetworkPanel {
 }
 
 /// Append to a bounded ring buffer.
+///
+/// Trims in a loop rather than dropping one sample: the capacity shrinks when
+/// the panel is narrowed, and one pop per tick would leave the buffer oversized
+/// for as many ticks as the window lost cells.
 fn push_bounded(buffer: &mut VecDeque<u64>, value: u64, capacity: usize) {
-    if buffer.len() >= capacity {
+    while buffer.len() >= capacity {
         buffer.pop_front();
     }
     buffer.push_back(value);
@@ -233,6 +250,9 @@ impl Panel for NetworkPanel {
         // upload spike should not look like a tall download spike at 1% the
         // rate.
         let scale = self.scale();
+
+        // Recorded so the next tick sizes the buffers to the panel.
+        self.graph_cells = rows[1].width as usize;
 
         let rx: Vec<u64> = self.rx_history.iter().copied().collect();
         let tx: Vec<u64> = self.tx_history.iter().copied().collect();
