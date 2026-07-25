@@ -365,6 +365,16 @@ inline `[theme]` table from a `theme = "name"` string).
 
 ## Housekeeping
 
+- **The README's images float; its prose does not.** `docs/screenshot.png` is
+  referenced by absolute `raw.githubusercontent.com/.../main/...` URL, because
+  `Cargo.toml` excludes `/docs` and `*.png` and a relative path would render on
+  GitHub and 404 on crates.io. The consequence is easy to miss: replacing the
+  capture updates it on *every* published version at once, while the caption
+  and alt text around it stay frozen at whatever each release baked in. 0.3.0
+  spent an hour showing the pomodoro panel above a caption explaining that the
+  shot predated it. A caption that describes the picture has to ship in the
+  same release as the picture.
+
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows remains untested.
