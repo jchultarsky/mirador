@@ -1027,13 +1027,11 @@ impl Panel for TodoPanel {
                 .and_then(|id| self.store.get(id))
                 .and_then(|t| t.notes.clone())
         {
-            {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(notes, Style::default().fg(theme.muted)))
-                        .wrap(Wrap { trim: true }),
-                    rows[3],
-                );
-            }
+            frame.render_widget(
+                Paragraph::new(Span::styled(notes, Style::default().fg(theme.muted)))
+                    .wrap(Wrap { trim: true }),
+                rows[3],
+            );
         }
 
         // Bottom line: filter input takes priority, then status, then hints.

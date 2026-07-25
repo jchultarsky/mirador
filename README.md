@@ -1,12 +1,17 @@
 # mirador
 
 [![CI](https://github.com/jchultarsky/mirador/actions/workflows/ci.yml/badge.svg)](https://github.com/jchultarsky/mirador/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/mirador.svg)](https://crates.io/crates/mirador)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-dea584.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#install)
 
-A personal information dashboard for your terminal: world clocks, a calendar,
-weather, a real task list, and live CPU and network charts, laid out how you
-want them.
+An opinionated personal dashboard for your terminal: world clocks, a calendar,
+weather, a real task list, notes, a market watchlist, and live CPU and network
+charts, laid out how you want them.
+
+It is built for one job — to sit in a terminal tab you leave open all day and
+glance at. That single constraint drives every decision below: nothing blinks,
+nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
@@ -43,13 +48,7 @@ No accounts. No API keys. No telemetry. Weather comes from
 
 ## Install
 
-From crates.io:
-
-```sh
-cargo install mirador
-```
-
-From source:
+From source, which is the only way today:
 
 ```sh
 git clone https://github.com/jchultarsky/mirador
@@ -57,7 +56,11 @@ cd mirador
 cargo install --path .
 ```
 
-Requires Rust 1.95 or newer. Tested on macOS and Linux.
+Requires Rust 1.95 or newer. Tested on macOS and Linux; Windows is untested
+rather than unsupported.
+
+> **Not yet on crates.io.** `cargo install mirador` will not work until the
+> crate is published. Pre-built binaries are not published yet either.
 
 ## Quick start
 
