@@ -196,7 +196,7 @@ impl App {
         // Start each panel far enough in the past that its first tick fires
         // immediately rather than one interval from now.
         let epoch = Instant::now()
-            .checked_sub(Duration::from_secs(86_400))
+            .checked_sub(Duration::from_hours(24))
             .unwrap();
 
         let mut positions = Vec::new();

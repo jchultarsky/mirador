@@ -58,9 +58,7 @@ impl CpuPanel {
             current: 0.0,
             graph_cells: 0,
             // Back-date so the first tick samples immediately.
-            last_sample: Instant::now()
-                .checked_sub(Duration::from_secs(3600))
-                .unwrap(),
+            last_sample: Instant::now().checked_sub(Duration::from_hours(1)).unwrap(),
             core_count,
         }
     }

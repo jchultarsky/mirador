@@ -664,7 +664,7 @@ impl Panel for NotesPanel {
     fn refresh_interval(&self) -> std::time::Duration {
         // Nothing here changes on its own; the tick only rolls the date over
         // so a note written after midnight is stamped correctly.
-        std::time::Duration::from_secs(60)
+        std::time::Duration::from_mins(1)
     }
 
     fn tick(&mut self) {

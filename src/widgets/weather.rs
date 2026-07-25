@@ -921,7 +921,7 @@ mod tests {
             state: Arc::new(Mutex::new(State::default())),
             refresh: Arc::new(Mutex::new(false)),
             forecast_hours: 8,
-            stale_after: Duration::from_secs(3600),
+            stale_after: Duration::from_hours(1),
             imperial,
         }
     }
@@ -1083,7 +1083,7 @@ mod tests {
         // Old enough on its own, with nothing having failed — a fetch thread
         // that quietly stopped, or a laptop resumed from sleep.
         let old = State {
-            fetched: Instant::now().checked_sub(Duration::from_secs(7200)),
+            fetched: Instant::now().checked_sub(Duration::from_hours(2)),
             ..fresh.clone()
         };
         assert!(panel.is_stale(&old), "age alone is enough");
@@ -1120,11 +1120,11 @@ mod tests {
     #[test]
     fn an_age_reads_the_way_a_person_would_say_it() {
         assert_eq!(describe_age(Duration::from_secs(0)), "0m old");
-        assert_eq!(describe_age(Duration::from_secs(59 * 60)), "59m old");
-        assert_eq!(describe_age(Duration::from_secs(60 * 60)), "1h old");
-        assert_eq!(describe_age(Duration::from_secs(23 * 3600)), "23h old");
-        assert_eq!(describe_age(Duration::from_secs(24 * 3600)), "1d old");
-        assert_eq!(describe_age(Duration::from_secs(5 * 24 * 3600)), "5d old");
+        assert_eq!(describe_age(Duration::from_mins(59)), "59m old");
+        assert_eq!(describe_age(Duration::from_hours(1)), "1h old");
+        assert_eq!(describe_age(Duration::from_hours(23)), "23h old");
+        assert_eq!(describe_age(Duration::from_hours(24)), "1d old");
+        assert_eq!(describe_age(Duration::from_hours(120)), "5d old");
     }
 
     #[test]

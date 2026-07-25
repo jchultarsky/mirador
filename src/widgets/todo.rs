@@ -861,7 +861,7 @@ impl Panel for TodoPanel {
 
     fn refresh_interval(&self) -> std::time::Duration {
         // Only needed so that due-date colouring rolls over at midnight.
-        std::time::Duration::from_secs(60)
+        std::time::Duration::from_mins(1)
     }
 
     fn tick(&mut self) {
