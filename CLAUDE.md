@@ -410,6 +410,12 @@ inline `[theme]` table from a `theme = "name"` string).
   least-travelled of the three rather than as unknown: macOS and Linux are used
   daily and Windows has been checked once.
 
+  That run also came through the **PowerShell installer** (`irm … | iex`) in
+  the default Windows terminal, which is the first real-world exercise of that
+  path — everything else about the installers had only been checked from macOS.
+  `mirador-update` is installed alongside by the same installer but has not been
+  run on Windows; the macOS one has.
+
   `aarch64-pc-windows-msvc` is deliberately absent because `ring`, reached
   through `ureq`'s TLS, does not build for it. musl is absent for the same
   C-toolchain reason. `ring` is also why the Windows target cannot be
