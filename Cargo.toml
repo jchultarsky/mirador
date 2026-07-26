@@ -67,6 +67,16 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Checksums to generate for each App
 checksum = "sha256"
+# Have GitHub sign a provenance attestation for every artifact, so anyone can
+# prove a download was built by this repository's workflow from this commit:
+#
+#   gh attestation verify --repo jchultarsky/mirador mirador-<triple>.tar.gz
+#
+# This is the only integrity check that covers *all* the artifacts. The shell
+# installer verifies sha256 for the archive but not for the updater binary, and
+# the PowerShell installer verifies nothing at all — both are dist's behaviour,
+# not ours. See SECURITY.md for what is and is not checked.
+github-attestations = true
 # Ship the standalone updater alongside the shell and PowerShell installers, so
 # someone who installed without a package manager can run `mirador-update`
 # rather than going back to the releases page. It only ever runs when invoked.
