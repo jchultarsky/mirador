@@ -217,6 +217,9 @@ pub struct App {
     /// The last state written, so a keypress that changed nothing writes
     /// nothing.
     saved_state: UiState,
+    /// What the config file itself says. Preferences are recorded as the
+    /// difference from this, which is what lets one be un-set.
+    baseline: UiState,
 }
 
 impl std::fmt::Debug for App {
@@ -251,6 +254,7 @@ impl App {
             layout_error: None,
             state_path: None,
             saved_state: UiState::default(),
+            baseline: UiState::default(),
         })
     }
 
@@ -366,26 +370,28 @@ impl App {
     /// cannot write to a real user's state file by forgetting to opt out. An
     /// app with no path set simply never persists.
     ///
-    /// `loaded` is what was read from that file, and becomes the base every
-    /// later write merges into — so starting up does not rewrite a file it has
-    /// just read, and a preference from an earlier session is not dropped by a
-    /// panel that has nothing new to say about it.
-    pub fn remember_preferences_at(&mut self, path: PathBuf, loaded: UiState) {
+    /// `loaded` is what was read from that file, so startup does not rewrite a
+    /// file it has just read. `baseline` is what the *config* says, taken before
+    /// the loaded values were folded in — every write is the difference between
+    /// the panels and that.
+    pub fn remember_preferences_at(&mut self, path: PathBuf, loaded: UiState, baseline: UiState) {
         self.saved_state = loaded;
+        self.baseline = baseline;
         self.state_path = Some(path);
     }
 
-    /// What every panel currently wants remembered.
+    /// The preferences that differ from the config, which is all that is worth
+    /// recording.
     ///
-    /// Starts from what is already on disk rather than from nothing, so a
-    /// preference set last session and left alone this one survives instead of
-    /// being dropped by the panel that is no longer calling it a change.
+    /// Panels report their current values unconditionally; the comparison is
+    /// here, once, so a value set back to what the config says drops out of the
+    /// file instead of leaving the earlier change asserted for ever.
     fn collect_preferences(&self) -> UiState {
-        let mut state = self.saved_state.clone();
+        let mut current = UiState::default();
         for slot in &self.slots {
-            slot.panel.remember(&mut state);
+            slot.panel.remember(&mut current);
         }
-        state
+        current.only_changes_from(&self.baseline)
     }
 
     /// Write preferences if any of them moved.

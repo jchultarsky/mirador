@@ -164,13 +164,17 @@ fn run() -> Result<()> {
         .as_deref()
         .map(crate::state::UiState::load)
         .unwrap_or_default();
+    // Taken before `apply_state`, so it is what the *file* says rather than what
+    // the file plus last session's changes say. Everything written later is the
+    // difference from this, which is what makes a preference retractable.
+    let baseline = crate::state::UiState::from_config(&config);
     config.apply_state(&saved);
 
     let mouse = config.general.mouse;
     let mut app = App::new(config)?;
     app.write_layout_to(config_path);
     if let Some(path) = state_path {
-        app.remember_preferences_at(path, saved);
+        app.remember_preferences_at(path, saved, baseline);
     }
 
     // `ratatui::init` installs a panic hook that restores the terminal, so a
