@@ -24,7 +24,9 @@ pub struct CpuPanel {
     /// Per-core utilisation from the most recent sample.
     per_core: Vec<f32>,
     current: f32,
-    last_sample: Instant,
+    /// `None` until the first sample, so it fires immediately. See the note on
+    /// `Slot::last_tick` for why this is not "now minus an hour".
+    last_sample: Option<Instant>,
     core_count: usize,
     /// Cells the graph was last drawn into, so the history can grow to fill it.
     graph_cells: usize,
@@ -58,7 +60,7 @@ impl CpuPanel {
             current: 0.0,
             graph_cells: 0,
             // Back-date so the first tick samples immediately.
-            last_sample: Instant::now().checked_sub(Duration::from_hours(1)).unwrap(),
+            last_sample: None,
             core_count,
         }
     }
@@ -70,7 +72,7 @@ impl CpuPanel {
             // be meaningful; sampling faster than this yields zeros.
             .max(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
 
-        if self.last_sample.elapsed() < interval {
+        if self.last_sample.is_some_and(|at| at.elapsed() < interval) {
             return;
         }
 
@@ -83,7 +85,7 @@ impl CpuPanel {
             .map(sysinfo::Cpu::cpu_usage)
             .collect();
         self.core_count = self.per_core.len();
-        self.last_sample = Instant::now();
+        self.last_sample = Some(Instant::now());
 
         let capacity = self.capacity();
         // A loop rather than a single pop: the capacity shrinks when the panel

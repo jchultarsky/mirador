@@ -14,6 +14,7 @@
 //! that lives in a data file rather than in the config, which is what lets the
 //! panel edit it — mirador deliberately never rewrites its config.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -116,6 +117,14 @@ pub struct StocksPanel {
     status: Option<(String, bool)>,
     source_name: &'static str,
     list_area: Option<Rect>,
+    /// Set to ask the fetch thread to finish.
+    ///
+    /// Without it the thread outlives the panel: the picker rebuilds every
+    /// panel when a widget is toggled, so each toggle used to leave another
+    /// poller running against the same unauthenticated endpoint. The `>= 60s`
+    /// interval is enforced per thread, so N leaked threads meant N times the
+    /// documented request rate.
+    stop: Arc<AtomicBool>,
 }
 
 impl StocksPanel {
@@ -142,8 +151,10 @@ impl StocksPanel {
             refresh: false,
         }));
 
+        let stop = Arc::new(AtomicBool::new(false));
         let shared_board = Arc::clone(&board);
         let shared_request = Arc::clone(&request);
+        let shared_stop = Arc::clone(&stop);
         // Never faster than a minute: the sources are free and unauthenticated,
         // and hammering them is how an IP gets blocked for everyone behind it.
         let interval = Duration::from_secs(config.refresh_secs.max(60));
@@ -151,7 +162,16 @@ impl StocksPanel {
 
         std::thread::Builder::new()
             .name("mirador-stocks".into())
-            .spawn(move || fetch_loop(&*source, &shared_board, &shared_request, interval, stagger))
+            .spawn(move || {
+                fetch_loop(
+                    &*source,
+                    &shared_board,
+                    &shared_request,
+                    &shared_stop,
+                    interval,
+                    stagger,
+                );
+            })
             .expect("spawning the stocks thread");
 
         let mut panel = Self {
@@ -164,6 +184,7 @@ impl StocksPanel {
             status: None,
             source_name,
             list_area: None,
+            stop,
         };
         panel.reselect();
         // Persist the seed on first run so there is a file to hand-edit.
@@ -448,10 +469,11 @@ fn fetch_loop(
     source: &dyn QuoteSource,
     board: &Arc<Mutex<Board>>,
     request: &Arc<Mutex<Request>>,
+    stop: &Arc<AtomicBool>,
     interval: Duration,
     stagger: Duration,
 ) {
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         let symbols = {
             let guard = match request.lock() {
                 Ok(g) => g,
@@ -466,6 +488,9 @@ fn fetch_loop(
                 Err(e) => Cell::Failed(format!("{e:#}")),
             };
             update(board, symbol, cell);
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             // Spread the requests out rather than firing them together.
             std::thread::sleep(stagger);
         }
@@ -474,6 +499,9 @@ fn fetch_loop(
         // without needing a channel or a condvar.
         let mut waited = Duration::ZERO;
         while waited < interval {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             std::thread::sleep(Duration::from_millis(250));
             waited += Duration::from_millis(250);
             let asked = {
@@ -646,7 +674,18 @@ impl Panel for StocksPanel {
     }
 
     fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
         self.watchlist.save_reporting();
+    }
+}
+
+impl Drop for StocksPanel {
+    /// Belt and braces. `shutdown` is the documented hook, but a panel can also
+    /// be dropped without it — the picker rebuilding the dashboard is exactly
+    /// that — and a poller nobody can reach is worse than one that is merely
+    /// unused: it keeps making requests.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 

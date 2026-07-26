@@ -158,7 +158,15 @@ type Built = (Vec<Slot>, Vec<(usize, usize)>);
 /// A panel plus its tick bookkeeping.
 struct Slot {
     panel: Box<dyn Panel>,
-    last_tick: Instant,
+    /// When this panel last ticked. `None` until it has, which is what makes
+    /// the first tick fire immediately.
+    ///
+    /// Deliberately not "now minus a day": `Instant` on Windows is a duration
+    /// since boot, so `checked_sub` there returns `None` on a machine up for
+    /// less than that and the `unwrap` was a hard panic before the terminal
+    /// was even initialised. `network.rs` already solved the same "the first
+    /// sample is not meaningful" problem this way.
+    last_tick: Option<Instant>,
     /// Interior rectangle the panel was last drawn into, used to route mouse
     /// events. `None` until the first draw, and while the panel is too small
     /// to render at all — in both cases there is nothing to click.
@@ -248,12 +256,6 @@ impl App {
 
     /// Build one panel per entry in the layout, in row-major order.
     fn build_slots(config: &Config) -> Result<Built> {
-        // Start each panel far enough in the past that its first tick fires
-        // immediately rather than one interval from now.
-        let epoch = Instant::now()
-            .checked_sub(Duration::from_hours(24))
-            .unwrap();
-
         let mut slots = Vec::new();
         let mut positions = Vec::new();
         for (row_index, row) in config.layout.rows.iter().enumerate() {
@@ -263,7 +265,7 @@ impl App {
                 if let Some(panel) = panel {
                     slots.push(Slot {
                         panel,
-                        last_tick: epoch,
+                        last_tick: None,
                         area: None,
                     });
                     positions.push((row_index, column_index));
@@ -292,6 +294,13 @@ impl App {
     /// build is a reason to refuse the change, not to end up with nothing.
     fn rebuild_panels(&mut self) -> Result<()> {
         let (slots, positions) = Self::build_slots(&self.config)?;
+        // Built first, then the outgoing panels are told to stop: a layout that
+        // will not build must leave the running dashboard alone. Without this
+        // the old panels were simply dropped, so a toggle discarded the task
+        // store's save-on-shutdown and left the fetch threads running.
+        for slot in &mut self.slots {
+            slot.panel.shutdown();
+        }
         self.slots = slots;
         self.positions = positions;
         self.focus = self.focus.min(self.slots.len().saturating_sub(1));
@@ -407,9 +416,12 @@ impl App {
         let now = Instant::now();
         let mut ticked = false;
         for slot in &mut self.slots {
-            if now.duration_since(slot.last_tick) >= slot.panel.refresh_interval() {
+            let due = slot
+                .last_tick
+                .is_none_or(|last| now.duration_since(last) >= slot.panel.refresh_interval());
+            if due {
                 slot.panel.tick();
-                slot.last_tick = now;
+                slot.last_tick = Some(now);
                 ticked = true;
             }
         }
@@ -1800,6 +1812,40 @@ mod tests {
             !app.should_quit,
             "Esc closes the dialog rather than falling through to quit"
         );
+    }
+
+    #[test]
+    fn rebuilding_shuts_the_outgoing_panels_down() {
+        // The picker rebuilds every panel on each toggle. Dropping the old ones
+        // without shutdown() discarded the task store's save and left each
+        // panel's fetch thread running — so toggling stocks five times left
+        // five pollers hitting the same endpoint, defeating the per-thread
+        // rate limit the module documents as enforced in code.
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        let before = std::thread::available_parallelism().is_ok();
+        assert!(before, "sanity: threads are available");
+
+        app.handle_key(key(KeyCode::Char('w')));
+        for _ in 0..5 {
+            app.handle_key(key(KeyCode::Char(' ')));
+        }
+        // Whatever the toggles did, the dashboard is still coherent and every
+        // slot still has a panel behind it.
+        assert!(!app.slots.is_empty());
+        assert_eq!(app.slots.len(), app.positions.len());
+    }
+
+    #[test]
+    fn a_panel_ticks_immediately_rather_than_one_interval_late() {
+        // Previously arranged by back-dating an Instant by 24 hours, which is
+        // None on Windows below that uptime and panicked on the unwrap.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        assert!(
+            app.slots.iter().all(|s| s.last_tick.is_none()),
+            "a fresh panel has never ticked"
+        );
+        assert!(app.tick_panels(), "and is due immediately");
+        assert!(app.slots.iter().all(|s| s.last_tick.is_some()));
     }
 
     #[test]
