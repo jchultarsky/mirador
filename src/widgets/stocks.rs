@@ -317,20 +317,26 @@ impl StocksPanel {
             return KeyOutcome::Ignored;
         };
         let symbol = symbol.clone();
-        match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                self.watchlist.remove(&symbol);
-                self.mode = Mode::List;
-                self.reselect();
-                self.reseed_board();
-                self.publish_request(false);
-                self.watchlist.save_reporting();
+        // `y` alone; see the note on the same arm in `todo.rs`.
+        if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            self.watchlist.remove(&symbol);
+            self.mode = Mode::List;
+            self.reselect();
+            self.reseed_board();
+            self.publish_request(false);
+            self.watchlist.save_reporting();
+            // Report the failure rather than announcing a removal that did not
+            // reach the disk — the add path thirty lines up already does this,
+            // and the symbol would otherwise be back on the next start with
+            // nothing having said so.
+            if let Some(err) = self.watchlist.last_error.clone() {
+                self.status = Some((format!("save failed: {err}"), true));
+            } else {
                 self.set_status(format!("removed {symbol}"));
             }
-            _ => {
-                self.mode = Mode::List;
-                self.set_status("kept");
-            }
+        } else {
+            self.mode = Mode::List;
+            self.set_status("kept");
         }
         KeyOutcome::Consumed
     }
@@ -502,6 +508,10 @@ impl Panel for StocksPanel {
     }
 
     fn counter(&self) -> Option<String> {
+        // See the note on `TodoPanel::counter`.
+        if self.watchlist.last_error.is_some() {
+            return Some("unsaved!".into());
+        }
         let n = self.watchlist.symbols().len();
         (n > 0).then(|| n.to_string())
     }
