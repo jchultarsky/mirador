@@ -586,7 +586,13 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+            // `q` and Ctrl+C only. Esc used to quit here, undocumented — while
+            // the task panel prints "Nothing matches this filter. Esc to
+            // clear." A panel consumes Esc only while its filter is non-empty,
+            // so the same key in the same panel one keystroke apart either
+            // cleared the filter or killed the dashboard, and nothing on screen
+            // said which. Esc means "back out of something" everywhere else.
+            KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Char('?') => self.show_help = true,
@@ -1718,6 +1724,17 @@ mod tests {
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
+
+        // Esc must not. The task panel tells you to press it to clear a filter,
+        // and a panel only consumes it while the filter is non-empty — so when
+        // Esc also quit, the same key in the same panel one keystroke apart
+        // either cleared the filter or killed the dashboard.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            !app.should_quit,
+            "Esc means back out of something, not quit"
+        );
     }
 
     #[test]

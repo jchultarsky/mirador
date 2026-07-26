@@ -118,6 +118,9 @@ pub struct NotesPanel {
     /// whichever one the pointer is over.
     list_area: Option<Rect>,
     detail_area: Option<Rect>,
+    /// The body's rectangle as last drawn, so scrolling can clamp against the
+    /// wrapped height rather than the number of newlines.
+    body_area: Option<Rect>,
 }
 
 impl NotesPanel {
@@ -136,6 +139,7 @@ impl NotesPanel {
             today,
             list_area: None,
             detail_area: None,
+            body_area: None,
         };
         panel.refresh_view();
         Ok(panel)
@@ -194,13 +198,20 @@ impl NotesPanel {
     }
 
     fn scroll_body(&mut self, delta: i16) {
-        // Clamped against the note's own length so the body cannot be scrolled
-        // off into blank space.
-        let lines = self
-            .selected()
-            .map_or(0, |n| u16::try_from(n.body.lines().count()).unwrap_or(0));
+        // Clamped so the body cannot be scrolled off into blank space, against
+        // the height it actually occupies once wrapped rather than its count of
+        // newlines. Before the first draw there is no width to wrap against, so
+        // fall back to logical lines.
+        let area = self.body_area;
+        let height = self.selected().map_or(0, |note| match area {
+            Some(area) if area.width > 0 => wrapped_height(&note.body, area.width),
+            _ => u16::try_from(note.body.lines().count()).unwrap_or(u16::MAX),
+        });
+        // Stop when the last line reaches the top of the viewport, so a long
+        // note does not scroll into emptiness.
+        let visible = area.map_or(1, |a| a.height).max(1);
+        let max = i32::from(height.saturating_sub(visible));
         let next = i32::from(self.body_scroll) + i32::from(delta);
-        let max = i32::from(lines.saturating_sub(1));
         self.body_scroll = u16::try_from(next.clamp(0, max.max(0))).unwrap_or(0);
     }
 
@@ -332,32 +343,29 @@ impl NotesPanel {
             _ => {}
         }
 
+        // Ctrl+S saves from either field. The footer advertises it while the
+        // form is open, and it used to work only in the body — pressing it in
+        // the title did nothing at all, so anyone who trusted the footer and
+        // then pressed Esc lost the note. Enter also saves, but only from the
+        // title, where it cannot be mistaken for a newline.
+        let save = (key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('s')))
+            || (form.field == Field::Title && key.code == KeyCode::Enter);
+
+        if save {
+            if let Err(message) = self.commit_form()
+                && let Mode::Edit(form) = &mut self.mode
+            {
+                form.error = Some(message);
+            }
+            return KeyOutcome::Consumed;
+        }
+
         match form.field {
             Field::Title => {
-                // Enter on the title saves, the way it does in a one-line form.
-                if key.code == KeyCode::Enter {
-                    if let Err(message) = self.commit_form()
-                        && let Mode::Edit(form) = &mut self.mode
-                    {
-                        form.error = Some(message);
-                    }
-                    return KeyOutcome::Consumed;
-                }
                 form.title.handle_key(key);
             }
             Field::Body => {
-                // Ctrl+S saves from inside the body, where Enter is a newline
-                // and so cannot also mean "done".
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('s'))
-                {
-                    if let Err(message) = self.commit_form()
-                        && let Mode::Edit(form) = &mut self.mode
-                    {
-                        form.error = Some(message);
-                    }
-                    return KeyOutcome::Consumed;
-                }
                 form.body.handle_key(key);
             }
         }
@@ -392,18 +400,16 @@ impl NotesPanel {
             return KeyOutcome::Ignored;
         };
         let id = *id;
-        match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-                self.store.remove(id);
-                self.mode = Mode::List;
-                self.refresh_view();
-                self.set_status("deleted");
-                self.persist();
-            }
-            _ => {
-                self.mode = Mode::List;
-                self.set_status("kept");
-            }
+        // `y` alone; see the note on the same arm in `todo.rs`.
+        if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            self.store.remove(id);
+            self.mode = Mode::List;
+            self.refresh_view();
+            self.set_status("deleted");
+            self.persist();
+        } else {
+            self.mode = Mode::List;
+            self.set_status("kept");
         }
         KeyOutcome::Consumed
     }
@@ -429,7 +435,7 @@ impl NotesPanel {
     }
 
     /// The detail pane: the selected note's title, date and body.
-    fn render_detail(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    fn render_detail(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -487,6 +493,11 @@ impl NotesPanel {
         };
         // The reader wraps even though the editor does not: prose written at
         // one width has to be readable at another.
+        // Remembered so scrolling can clamp against the *wrapped* height. The
+        // reader wraps and the clamp used to count `body.lines()`, so a note
+        // written as one paragraph — the normal way — reported a single line
+        // and would not scroll at all however long it was.
+        self.body_area = Some(rows[2]);
         frame.render_widget(
             body.wrap(Wrap { trim: false })
                 .scroll((self.body_scroll, 0)),
@@ -645,6 +656,11 @@ impl Panel for NotesPanel {
     }
 
     fn counter(&self) -> Option<String> {
+        // See the note on `TodoPanel::counter`: a failed save is a standing
+        // condition and outranks the count.
+        if self.store.last_error.is_some() {
+            return Some("unsaved!".into());
+        }
         let total = self.store.notes().len();
         if total == 0 {
             return None;
@@ -832,6 +848,46 @@ impl Panel for NotesPanel {
     }
 }
 
+/// Rows `body` occupies once wrapped to `width`.
+///
+/// Word wrapping, matching how the reader renders it, and measured in display
+/// cells rather than characters — a note full of CJK or emoji wraps at half the
+/// character count. An empty line still occupies a row.
+fn wrapped_height(body: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    let width = usize::from(width);
+    let mut rows: usize = 0;
+
+    for line in body.lines() {
+        let mut used = 0usize;
+        let mut rows_here = 1usize;
+        for word in line.split_inclusive(' ') {
+            let w = display_width(word);
+            if used > 0 && used + w > width {
+                rows_here += 1;
+                used = w;
+            } else {
+                used += w;
+            }
+            // A single word longer than the line wraps within itself.
+            while used > width {
+                rows_here += 1;
+                used -= width;
+            }
+        }
+        rows += rows_here;
+    }
+
+    u16::try_from(rows.max(1)).unwrap_or(u16::MAX)
+}
+
+/// Width in display cells.
+fn display_width(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,6 +955,54 @@ mod tests {
         let note = &reloaded.store.notes()[0];
         assert_eq!(note.title, "Shopping");
         assert_eq!(note.body, "milk\neggs");
+    }
+
+    #[test]
+    fn ctrl_s_saves_from_the_title_field_and_not_only_the_body() {
+        // The footer advertises Ctrl+S the whole time the form is open. It used
+        // to be handled only under Field::Body, so pressing it in the title did
+        // nothing at all — and anyone who trusted the footer then pressed Esc
+        // and lost the note.
+        let (mut p, _g) = panel("ctrl-s-title");
+        press(&mut p, KeyCode::Char('a'));
+        type_str(&mut p, "Saved from the title");
+
+        p.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        assert!(
+            matches!(p.mode, Mode::List),
+            "Ctrl+S in the title must close the form, not be swallowed"
+        );
+        assert_eq!(p.store.notes().len(), 1);
+        assert_eq!(p.store.notes()[0].title, "Saved from the title");
+    }
+
+    #[test]
+    fn a_single_paragraph_body_can_still_be_scrolled() {
+        // The clamp counted `body.lines()` while the reader wraps, so a note
+        // written as one long paragraph — the normal way — reported one line
+        // and would not scroll however long it was.
+        let (mut p, _g) = panel("scroll-wrapped");
+        let long = "word ".repeat(400);
+        add_note(&mut p, "Wrapped", &long);
+
+        p.body_area = Some(Rect::new(0, 0, 40, 5));
+        p.scroll_body(3);
+        assert_eq!(p.body_scroll, 3, "a wrapped body must scroll");
+
+        // And it must still stop rather than running off into blank space.
+        p.scroll_body(i16::MAX);
+        let height = wrapped_height(&long, 40);
+        assert_eq!(p.body_scroll, height.saturating_sub(5));
+    }
+
+    #[test]
+    fn wrapped_height_measures_cells_not_characters() {
+        assert_eq!(wrapped_height("", 10), 1, "an empty body still has a row");
+        assert_eq!(wrapped_height("a\nb\nc", 10), 3);
+        // Ten two-cell glyphs need two rows at width 10, not one.
+        assert_eq!(wrapped_height(&"日".repeat(10), 10), 2);
+        assert_eq!(wrapped_height("x", 0), 0);
     }
 
     #[test]

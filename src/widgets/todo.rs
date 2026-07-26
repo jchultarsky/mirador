@@ -560,7 +560,10 @@ impl TodoPanel {
             return KeyOutcome::Ignored;
         };
         match key.code {
-            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+            // `y` alone. Enter used to delete here while the prompt said "any
+            // other key cancel" — the most reflexive key at a confirmation,
+            // promised safe, wired to the one action with no undo.
+            KeyCode::Char('y' | 'Y') => {
                 self.store.remove(id);
                 self.mode = Mode::List;
                 self.set_status("task deleted");
@@ -861,6 +864,14 @@ impl Panel for TodoPanel {
     }
 
     fn counter(&self) -> Option<String> {
+        // A failed save outranks the count. The status line is transient — it
+        // clears on the next keypress — which is the right lifetime for "added
+        // a task" and the wrong one for "nothing you do is reaching the disk".
+        // Left to the status line alone, the panel went on reporting a tally it
+        // could not persist, and said nothing at all on the way out.
+        if self.store.last_error.is_some() {
+            return Some("unsaved!".into());
+        }
         let open = self.store.tasks().iter().filter(|t| !t.done).count();
         Some(format!("{open} open"))
     }
@@ -1498,6 +1509,16 @@ mod tests {
         // Anything other than y backs out.
         press(&mut p, KeyCode::Char('n'));
         assert_eq!(p.store.tasks().len(), 1, "n must not delete");
+
+        // Enter above all: it is the most reflexive key at a confirmation, the
+        // prompt promises "any other key cancel", and deleting has no undo.
+        press(&mut p, KeyCode::Char('d'));
+        press(&mut p, KeyCode::Enter);
+        assert_eq!(
+            p.store.tasks().len(),
+            1,
+            "Enter must cancel, exactly as the prompt says it does"
+        );
 
         press(&mut p, KeyCode::Char('d'));
         press(&mut p, KeyCode::Char('y'));
