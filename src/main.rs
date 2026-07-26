@@ -9,6 +9,7 @@ mod dateinput;
 mod frame;
 mod glyphs;
 mod grid;
+mod layout_edit;
 mod migrate;
 mod note;
 mod panel;
@@ -152,7 +153,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let (mut config, _path) = Config::load(args.config)?;
+    let (mut config, config_path) = Config::load(args.config)?;
 
     // Preferences changed from the keyboard on a previous run are applied over
     // the config *before* any panel exists, so every panel is constructed with
@@ -167,6 +168,7 @@ fn run() -> Result<()> {
 
     let mouse = config.general.mouse;
     let mut app = App::new(config)?;
+    app.write_layout_to(config_path);
     if let Some(path) = state_path {
         app.remember_preferences_at(path, saved);
     }

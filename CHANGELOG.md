@@ -7,8 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A panel picker.** `w` opens a dialog listing every widget with whether it is
+  on; `space` toggles, and the panel appears or disappears immediately.
+  Switching a widget on used to mean finding your config file and editing
+  `[layout]` by hand — which is what the first person to meet the pomodoro
+  panel actually had to do, after pressing `?` and not finding the answer there
+  either. The status bar notice and the help overlay both name the key now.
+
+  Panel sizes are remembered too: `Ctrl+arrow` no longer lasts only for the
+  session.
+
 ### Changed
 
+- **Layout changes are written back into your config**, reversing an earlier
+  decision to keep them out of it. The rule was never really "do not write to
+  the config" — it was "do not *reserialise* it", because a round trip through
+  `toml` discards every comment in the file, including the ~145 mirador wrote to
+  explain its own options. `--migrate-config` had already established the
+  alternative: edit the lines that need editing and leave the rest alone.
+
+  So `[layout]` is edited surgically. Adding a panel is a one-line diff; a width
+  change rewrites one number and keeps its column alignment; comments inside the
+  layout block survive.
+
+  The safety property is a check rather than care: the edited text is parsed and
+  compared against the layout that was asked for, and a mismatch throws the edit
+  away. An unusually formatted config fails as "that did not stick", said in the
+  picker, rather than as a broken file.
+
+  Preferences that are not layout stay in the state file. The split is by what
+  the setting *is*: `[layout]` is the part of the config people read and curate,
+  so a change made in the UI has to show up there, while nobody keeps their
+  preferred sort order under version control.
 - Windows is described as working rather than as untried. The binary shipped in
   0.2.0 was built and packaged but had never been started on the platform, and
   the docs said so; it has now been run and works, installed with the PowerShell
