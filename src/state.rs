@@ -1,8 +1,9 @@
 //! Preferences changed from the UI, remembered across restarts.
 //!
-//! mirador never rewrites its config. That is what makes the config safe to
-//! hand-edit and keep in git, and it is the reason a setting you change with a
-//! keystroke has nowhere obvious to go. The watchlist answered this first by
+//! mirador never *reserialises* its config — a round trip through `toml` would
+//! discard every comment in it — so a setting changed with a keystroke has
+//! nowhere obvious to go unless it is worth the surgery [`crate::layout_edit`]
+//! does for `[layout]`. The watchlist answered this first by
 //! keeping symbols in a data file of their own; this is the same answer
 //! generalised, and the config's role is unchanged — it *seeds*, and this file
 //! records where you have moved since.
@@ -13,11 +14,12 @@
 //! says. That last property is the point: there must be an obvious way to undo
 //! a preference you cannot remember setting.
 //!
-//! Deliberately *not* here: panel sizes. `Ctrl+arrow` resizing is geometry
-//! rather than preference — it belongs to the same vocabulary as `[layout]`,
-//! and remembering it would mean a saved width silently overruling a layout you
-//! had since edited by hand. Sizes stay session-only until that conflict has an
-//! answer.
+//! Deliberately *not* here: anything that belongs to `[layout]` — which panels
+//! exist and how wide they are. Those are written back to the config itself by
+//! [`crate::layout_edit`], because `[layout]` is the part of the config people
+//! actually read and curate, and a state file shadowing it would leave the
+//! config describing a dashboard nobody is looking at. Preferences have no such
+//! problem: nobody keeps their preferred sort order under version control.
 
 use std::path::{Path, PathBuf};
 

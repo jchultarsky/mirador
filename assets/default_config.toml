@@ -3,11 +3,15 @@
 # This file was created automatically on first run. Every value below is a
 # default, so you can delete anything you do not want to override.
 #
-# mirador never rewrites this file, so it is safe to hand-edit and to keep in
-# version control. Settings you change with a keystroke — weather units, the
-# task sort, seconds on the clock, pomodoro durations — are remembered in a
-# separate state file beside your tasks, which records only what you actually
-# changed. Delete that file and everything falls back to what is written here.
+# mirador edits this file surgically and never reserialises it: switching a
+# panel on with `w`, or resizing one with Ctrl+arrow, rewrites the one line it
+# has to and leaves your comments, spacing and ordering exactly as they were.
+# So it stays safe to hand-edit and to keep in version control.
+#
+# Preferences that are not layout — weather units, the task sort, seconds on
+# the clock, pomodoro durations — live in a separate state file beside your
+# tasks, which records only what you actually changed. Delete it and they fall
+# back to what is written here.
 #
 # Docs: https://github.com/jchultarsky/mirador#configuration
 

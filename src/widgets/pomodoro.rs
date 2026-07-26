@@ -7,7 +7,7 @@
 //!
 //! Durations are adjustable from the panel and outlive the session: `[pomodoro]`
 //! seeds them and [`crate::state`] records where you moved since, so mirador
-//! still never rewrites the config. Only a phase you actually adjusted is
+//! never reserialises the config. Only a phase you actually adjusted is
 //! remembered — see [`Panel::remember`].
 
 use std::time::{Duration, Instant};

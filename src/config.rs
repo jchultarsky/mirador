@@ -104,6 +104,89 @@ impl Default for Layout {
     }
 }
 
+impl Layout {
+    /// Every widget this layout places, in row-major order.
+    pub fn widgets(&self) -> Vec<&str> {
+        self.rows
+            .iter()
+            .flat_map(|row| row.panels.iter())
+            .map(|panel| panel.widget.as_str())
+            .collect()
+    }
+
+    /// Whether `widget` appears anywhere.
+    pub fn places(&self, widget: &str) -> bool {
+        self.widgets().contains(&widget)
+    }
+
+    /// Place `widget`, appending it to the row carrying the fewest panels.
+    ///
+    /// A dashboard has no obvious "end" to add to, so the rule is the one that
+    /// keeps the grid even: the emptiest row, and the last of those on a tie so
+    /// repeated additions walk downward rather than piling into row one. The
+    /// new panel takes the average weight of that row's existing panels, which
+    /// leaves the others in proportion to each other instead of squeezing one.
+    ///
+    /// Deliberately crude, because it has to be undoable by hand: this only
+    /// ever *adds*, and `Ctrl+arrow` or the config can put it where you want.
+    /// Guessing more cleverly would be harder to predict, not easier.
+    pub fn add_widget(&mut self, widget: &str) {
+        if self.places(widget) {
+            return;
+        }
+
+        let target = self
+            .rows
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, row)| (row.panels.len(), usize::MAX - index))
+            .map(|(index, _)| index);
+
+        let Some(index) = target else {
+            // No rows at all: give the widget one of its own rather than
+            // dropping it silently.
+            self.rows.push(LayoutRow {
+                height: 100,
+                panels: vec![LayoutPanel {
+                    widget: widget.to_string(),
+                    width: 100,
+                }],
+            });
+            return;
+        };
+
+        let row = &mut self.rows[index];
+        let width = if row.panels.is_empty() {
+            100
+        } else {
+            let total: u32 = row.panels.iter().map(|p| u32::from(p.width)).sum();
+            u16::try_from(total / row.panels.len() as u32)
+                .unwrap_or(25)
+                .max(1)
+        };
+        row.panels.push(LayoutPanel {
+            widget: widget.to_string(),
+            width,
+        });
+    }
+
+    /// Remove every placement of `widget`, and any row left empty by it.
+    ///
+    /// Refuses to remove the last panel on the dashboard and says so, because
+    /// an empty layout is rejected at startup — turning off the final panel
+    /// would produce a config that cannot be loaded next time.
+    pub fn remove_widget(&mut self, widget: &str) -> bool {
+        if self.widgets().iter().all(|placed| *placed == widget) {
+            return false;
+        }
+        for row in &mut self.rows {
+            row.panels.retain(|panel| panel.widget != widget);
+        }
+        self.rows.retain(|row| !row.panels.is_empty());
+        true
+    }
+}
+
 /// One horizontal band of the dashboard.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -342,7 +425,7 @@ impl Default for CalendarConfig {
 /// Pomodoro timer settings.
 ///
 /// These are the *starting* values. `+` and `-` change the timer in the panel,
-/// and those changes last for the session — mirador never rewrites this file.
+/// and those changes are remembered in the state file beside your tasks.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PomodoroConfig {

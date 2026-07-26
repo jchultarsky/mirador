@@ -113,6 +113,7 @@ glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
 config.rs    TOML config, validation, default file
 migrate.rs   textual in-place upgrade of configs written by older versions
+layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 state.rs     UI-changed preferences, remembered across restarts
 task.rs      task model + atomic TOML store
 note.rs      note model + atomic TOML store
@@ -186,7 +187,23 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     while a list next door runs out. Return `None` for anything that scrolls or
     scales; return a figure only when more space genuinely buys the reader
     nothing. Both are whole-panel measurements, frame and padding included.
-16. **A panel remembers only what the user changed.** `Panel::remember` writes
+16. **The config is edited, never reserialised.** This is the real form of the
+    "never rewrites the config" rule, which was always about comments: a round
+    trip through `toml` discards all ~145 of them, including the ones mirador
+    wrote to explain its own options. `migrate.rs` established the alternative
+    and `layout_edit.rs` follows it — find the line, change that line, leave
+    everything else alone. Adding a panel is a one-line diff.
+
+    What makes it safe to do at all is the check at the end of
+    `layout_edit::apply`: the edited text is parsed and compared against the
+    layout that was requested, and a mismatch throws the edit away. So an
+    unusually formatted config fails as "your change did not stick", reported
+    in the picker, rather than as a mangled file.
+
+    The split is by *what*, not by convenience: `[layout]` goes to the config
+    because people read and curate it, and everything else goes to `state.rs`
+    because nobody keeps their preferred sort order under version control.
+17. **A panel remembers only what the user changed.** `Panel::remember` writes
     a preference only when it differs from the value the panel was *built*
     with, which is why every such panel keeps a `seeded_*` copy. Reporting the
     current value unconditionally looks identical in a unit test and is wrong
@@ -198,7 +215,7 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     The app merges into what it loaded rather than starting from nothing, so a
     preference set last session and untouched this one is not dropped by a
     panel that has nothing new to say about it.
-17. **First run must not be blank, and the defaults must agree.** The task and
+18. **First run must not be blank, and the defaults must agree.** The task and
     notes stores seed examples via `load_or_seed`, keyed on the file being
     *absent* — never on it being empty, or deleting the examples would not
     stick. The seeded titles are instructions, so they have to fit the task

@@ -155,55 +155,75 @@ Some settings you change with a keystroke are remembered across restarts:
 | Seconds on the clock | `s` | Clock |
 | Pomodoro durations | `+` / `-` | Pomodoro |
 | Watchlist symbols | `a` / `d` | Markets |
+| Which panels are shown | `w` | — |
+| Panel sizes | `Ctrl+arrow` | — |
 
-**mirador never rewrites your config.** That is what makes it safe to
-hand-edit and keep in git, so these live in a small state file beside your
-tasks instead. The config *seeds* a setting; the state file records where you
-moved it since.
+They go to two different places, and the split is deliberate.
 
-Only what you actually changed is written. Pressing `u` records the units and
-nothing else, so editing any other value in your config still takes effect —
-if mirador wrote everything, the first keystroke would silently freeze the
-rest of your config in place. Delete the state file and every remembered
-setting falls back to what the config says; it is listed at the top of the
-file itself, because a preference you cannot remember setting needs an obvious
-way back.
+**Anything to do with `[layout]` is written back into your config** — which
+panels exist, and how wide they are. That is the part of the file you actually
+read and curate, so a change you make with `w` has to show up there or your
+config would end up describing a dashboard nobody is looking at.
 
-Panel sizes are the deliberate exception. `Ctrl+arrow` resizing lasts for the
-session only: it is geometry rather than preference, in the same vocabulary as
-`[layout]`, and remembering it would mean a saved width quietly overruling a
-layout you had since edited by hand.
+The edit is surgical, never a reserialise: mirador rewrites the one line it has
+to and leaves your comments, spacing and ordering exactly as they were. Adding
+a panel is a one-line diff. If your `[layout]` is formatted in a way it cannot
+edit confidently, it says so in the picker and changes nothing rather than
+guessing — the failure mode is "that did not stick", not a mangled config.
+
+**Everything else goes to a small state file** beside your tasks, and only what
+you actually changed is written. Pressing `u` records the units and nothing
+else, so editing any other value in your config still takes effect. Delete that
+file and every remembered setting falls back to what the config says; it says
+so at the top of itself, because a preference you cannot remember setting needs
+an obvious way back.
 
 ### Upgrading
 
-**A new widget will not appear in a config you already have.** mirador never
-rewrites your config — that is what makes it safe to hand-edit and keep in git
-— so a config written by an earlier version lays out exactly the panels that
-existed when it was written, and nothing since. Leaving a panel out is a
-legitimate choice, so this cannot be an error and cannot be fixed for you.
+**A new widget will not appear in a config you already have.** A config written
+by an earlier version lays out exactly the panels that existed when it was
+written, and nothing since. Leaving a panel out is a legitimate choice, so this
+cannot be an error and cannot be decided for you.
 
-What you get instead is a notice on the right of the status bar naming what
-your layout does not place:
+You get a notice on the right of the status bar naming what your layout does
+not place, and telling you which key fixes it:
 
 ```
- mirador   Tab focus   ? keys   q quit          1 unused: pomodoro   ? for help
+ mirador   Tab focus   ? keys   q quit   w panels        1 unused: pomodoro   press w
 ```
 
 It retires on your first keypress, because a dashboard you leave open all day
-must not nag; `?` keeps it in the help overlay. To take a widget up, add it to
-a row in `[layout]` and give the row's other panels room for it:
+must not nag; `?` keeps it in the help overlay. Press `w` and you get the
+picker:
 
-```toml
-  { height = 42, panels = [
-    { widget = "todo",     width = 48 },
-    { widget = "notes",    width = 30 },
-    { widget = "pomodoro", width = 22 },   # the new one
-  ] },
+```
+╭PANELS────────────────────────────────╮
+│    ■ clocks                          │
+│    ■ weather                         │
+│    ■ todo                            │
+│    ■ notes                           │
+│    ■ stocks                          │
+│    ■ calendar                        │
+│  ▸ □ pomodoro                        │
+│    ■ cpu                             │
+│    ■ network                         │
+│                                      │
+│   written to your config on close    │
+│   space toggle   esc close           │
+╰──────────────────────────────────────╯
 ```
 
-`mirador --print-config` prints the current default in full if you would rather
-copy a whole row, and `mirador --migrate-config` rewrites keys that were
-renamed between versions, leaving a backup beside the original.
+`space` toggles, `↑`/`↓` or `j`/`k` move, `esc` closes. A panel appears or
+disappears the moment you toggle it, and the change is written to your config
+when you close the dialog — as a one-line edit, with your comments untouched.
+A new panel joins the row carrying the fewest panels; `Ctrl+arrow` moves the
+space around afterwards, and that is written too.
+
+The last panel cannot be switched off, because a layout with nothing in it is
+rejected at startup and would leave you with a config that will not open.
+
+`mirador --migrate-config` is still there for keys renamed between versions,
+and leaves a backup beside the original.
 
 ## The panels
 

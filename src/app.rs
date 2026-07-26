@@ -28,6 +28,11 @@ const GLOBAL: &[Binding] = &[
     Binding::primary("Tab", "focus"),
     Binding::primary("?", "keys"),
     Binding::primary("q", "quit"),
+    // After `quit` deliberately. The status bar shows as many primary bindings
+    // as fit, in order, and on a narrow terminal knowing how to get out beats
+    // knowing how to add a panel. The unused-widget notice names this key
+    // anyway, which is where someone actually needs to be told about it.
+    Binding::primary("w", "panels"),
     Binding::extra("Shift+Tab", "focus back"),
     Binding::extra("1-9", "jump to panel"),
     Binding::extra("Ctrl+←/→", "resize width"),
@@ -147,6 +152,9 @@ fn neighbour_of(index: usize, len: usize) -> Option<usize> {
     }
 }
 
+/// The panels of a layout, with the `(row, column)` each came from.
+type Built = (Vec<Slot>, Vec<(usize, usize)>);
+
 /// A panel plus its tick bookkeeping.
 struct Slot {
     panel: Box<dyn Panel>,
@@ -158,6 +166,11 @@ struct Slot {
 }
 
 /// The running dashboard.
+///
+/// The flags are genuinely independent — an overlay being open says nothing
+/// about whether the layout needs writing — so grouping them into a struct to
+/// satisfy the lint would add a name without adding a meaning.
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     config: Config,
     gradients: Gradients,
@@ -180,6 +193,16 @@ pub struct App {
     /// of any kind: a dashboard you leave open all day must not nag, and a
     /// notice that will not go away is a nag.
     show_widget_hint: bool,
+    /// Open panel picker, and which row it is on.
+    picker: Option<usize>,
+    /// The config file, so layout changes can be written back to it. `None` in
+    /// tests, which is what keeps them off a real user's config.
+    config_path: Option<PathBuf>,
+    /// Whether the layout has been changed since it was last written.
+    layout_dirty: bool,
+    /// Why the last layout write failed, if it did. Shown in the picker: a
+    /// change you made that silently did not persist is the worst outcome here.
+    layout_error: Option<String>,
     /// Where to write remembered preferences, once someone asks for that.
     /// `None` in tests, which is what keeps them off a real user's file.
     state_path: Option<PathBuf>,
@@ -200,17 +223,42 @@ impl std::fmt::Debug for App {
 impl App {
     /// Build every panel named in the layout, in row-major order.
     pub fn new(config: Config) -> Result<Self> {
-        let mut slots = Vec::new();
+        let (slots, positions) = Self::build_slots(&config)?;
+
+        let gradients = config.theme.gradients();
+        let unused_widgets = crate::widgets::unused_widgets(&config);
+        Ok(Self {
+            config,
+            gradients,
+            slots,
+            positions,
+            focus: 0,
+            show_help: false,
+            should_quit: false,
+            show_widget_hint: !unused_widgets.is_empty(),
+            unused_widgets,
+            picker: None,
+            config_path: None,
+            layout_dirty: false,
+            layout_error: None,
+            state_path: None,
+            saved_state: UiState::default(),
+        })
+    }
+
+    /// Build one panel per entry in the layout, in row-major order.
+    fn build_slots(config: &Config) -> Result<Built> {
         // Start each panel far enough in the past that its first tick fires
         // immediately rather than one interval from now.
         let epoch = Instant::now()
             .checked_sub(Duration::from_hours(24))
             .unwrap();
 
+        let mut slots = Vec::new();
         let mut positions = Vec::new();
         for (row_index, row) in config.layout.rows.iter().enumerate() {
             for (column_index, entry) in row.panels.iter().enumerate() {
-                let panel = crate::widgets::build(&entry.widget, &config)
+                let panel = crate::widgets::build(&entry.widget, config)
                     .with_context(|| format!("building the `{}` panel", entry.widget))?;
                 if let Some(panel) = panel {
                     slots.push(Slot {
@@ -227,22 +275,28 @@ impl App {
             !slots.is_empty(),
             "no panels were built; check the `[layout]` table in your config"
         );
+        Ok((slots, positions))
+    }
 
-        let gradients = config.theme.gradients();
-        let unused_widgets = crate::widgets::unused_widgets(&config);
-        Ok(Self {
-            config,
-            gradients,
-            slots,
-            positions,
-            focus: 0,
-            show_help: false,
-            should_quit: false,
-            show_widget_hint: !unused_widgets.is_empty(),
-            unused_widgets,
-            state_path: None,
-            saved_state: UiState::default(),
-        })
+    /// Rebuild every panel after the layout changed.
+    ///
+    /// Panels are thrown away and remade rather than moved, which costs a fresh
+    /// weather fetch and an empty CPU history for the panels that survived. The
+    /// alternative is matching old panels to new positions by widget name and
+    /// carrying them across, which is a good deal more machinery for something
+    /// that happens when a person deliberately opens a dialog and toggles
+    /// something — a moment where a beat of re-fetching reads as the dashboard
+    /// responding rather than as a stall.
+    ///
+    /// A failure leaves the previous panels in place: a layout that will not
+    /// build is a reason to refuse the change, not to end up with nothing.
+    fn rebuild_panels(&mut self) -> Result<()> {
+        let (slots, positions) = Self::build_slots(&self.config)?;
+        self.slots = slots;
+        self.positions = positions;
+        self.focus = self.focus.min(self.slots.len().saturating_sub(1));
+        self.unused_widgets = crate::widgets::unused_widgets(&self.config);
+        Ok(())
     }
 
     /// Run until the user quits.
@@ -291,6 +345,9 @@ impl App {
         // Once more on the way out, in case the last thing changed was not a
         // key — and because Ctrl+C reaches here too.
         self.persist_preferences();
+        // Resizes batch to here rather than writing per keystroke: Ctrl+arrow
+        // repeats, and a config rewritten on every repeat would be absurd.
+        self.write_layout();
         Ok(())
     }
 
@@ -387,6 +444,13 @@ impl App {
             return;
         }
 
+        // The picker is a real dialog rather than a notice, so it reads keys
+        // instead of dismissing on any of them.
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
+
         // Resizing is a shell-level concern, the way it is in tmux, so it is
         // claimed before panels get a look. It has to be: the calendar binds
         // the bare arrow keys and does not inspect modifiers, so offering the
@@ -402,13 +466,108 @@ impl App {
                 KeyCode::Up => self.resize_height(false),
                 _ => return self.dispatch_key(key),
             };
+            // Only a resize that actually moved something needs writing. Held
+            // against a minimum, the key repeats without changing anything, and
+            // marking those dirty would write the config on shutdown after a
+            // session that changed nothing.
+            self.layout_dirty |= resized;
             // Swallowed either way: a resize that hit the minimum is still a
             // resize key, and must not fall through to a panel binding.
-            let _ = resized;
             return;
         }
 
         self.dispatch_key(key);
+    }
+
+    /// Drive the panel picker.
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        let names = crate::widgets::WIDGET_NAMES;
+        let Some(selected) = self.picker else { return };
+        let last = names.len().saturating_sub(1);
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'w') | KeyCode::Enter => {
+                self.picker = None;
+                // Written on close rather than on every toggle: someone trying
+                // three arrangements should cost one write, not three, and the
+                // dialog is a natural commit point.
+                self.write_layout();
+            }
+            KeyCode::Down | KeyCode::Char('j') => self.picker = Some((selected + 1).min(last)),
+            KeyCode::Up | KeyCode::Char('k') => self.picker = Some(selected.saturating_sub(1)),
+            KeyCode::Home | KeyCode::Char('g') => self.picker = Some(0),
+            KeyCode::End | KeyCode::Char('G') => self.picker = Some(last),
+            KeyCode::Char(' ') => {
+                if let Some(name) = names.get(selected) {
+                    self.toggle_widget(name);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Turn a widget on or off, rebuilding the dashboard around it.
+    fn toggle_widget(&mut self, widget: &str) {
+        let before = self.config.layout.clone();
+
+        if self.config.layout.places(widget) {
+            if !self.config.layout.remove_widget(widget) {
+                // The last panel. An empty layout is rejected at startup, so
+                // allowing this would write a config that cannot be opened.
+                self.layout_error = Some("at least one panel has to stay".into());
+                return;
+            }
+        } else {
+            self.config.layout.add_widget(widget);
+        }
+
+        if let Err(e) = self.rebuild_panels() {
+            // Put it back. A layout that will not build is a reason to refuse
+            // the toggle, not to leave the dashboard in pieces.
+            self.config.layout = before;
+            let _ = self.rebuild_panels();
+            self.layout_error = Some(format!("{e:#}"));
+            return;
+        }
+
+        self.layout_error = None;
+        self.layout_dirty = true;
+    }
+
+    /// Write the layout back into the config file, if it changed.
+    ///
+    /// Textual, so comments and formatting survive; see [`crate::layout_edit`].
+    /// A failure is kept and shown rather than swallowed — a panel you switched
+    /// on that quietly fails to persist is worse than one that never appeared,
+    /// because you will not find out until the next start.
+    fn write_layout(&mut self) {
+        if !self.layout_dirty {
+            return;
+        }
+        let Some(path) = self.config_path.clone() else {
+            return;
+        };
+
+        let result = std::fs::read_to_string(&path)
+            .map_err(anyhow::Error::from)
+            .and_then(|source| crate::layout_edit::apply(&source, &self.config.layout))
+            .and_then(|updated| std::fs::write(&path, updated).map_err(anyhow::Error::from));
+
+        match result {
+            Ok(()) => {
+                self.layout_dirty = false;
+                self.layout_error = None;
+            }
+            Err(e) => self.layout_error = Some(format!("{e:#}")),
+        }
+    }
+
+    /// Write layout changes to `path` from now on.
+    ///
+    /// Separate from [`App::new`] for the same reason the state path is: tests
+    /// build apps constantly and must not be able to touch a real config.
+    pub fn write_layout_to(&mut self, path: PathBuf) {
+        self.config_path = Some(path);
     }
 
     /// Offer a key to the focused panel, then to the global bindings.
@@ -431,6 +590,7 @@ impl App {
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
             KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('w') => self.picker = Some(0),
             KeyCode::Char(c @ '1'..='9') => {
                 let index = c as usize - '1' as usize;
                 if index < self.slots.len() {
@@ -733,6 +893,9 @@ impl App {
         if self.show_help {
             self.render_help(frame, area);
         }
+        if let Some(selected) = self.picker {
+            self.render_picker(frame, area, selected);
+        }
     }
 
     /// The status bar carries *global* bindings only.
@@ -786,11 +949,101 @@ impl App {
         if !self.show_widget_hint || self.unused_widgets.is_empty() {
             return None;
         }
+        // Names the key rather than only the widgets. Saying what is missing
+        // without saying what to do about it is how someone ends up reading the
+        // help, not finding the answer there either, and going to look for a
+        // config file.
         Some(format!(
-            "{} unused: {}   ? for help ",
+            "{} unused: {}   press w ",
             self.unused_widgets.len(),
             self.unused_widgets.join(", ")
         ))
+    }
+
+    /// The panel picker: every widget mirador has, and whether it is on.
+    fn render_picker(&self, frame: &mut ratatui::Frame, area: Rect, selected: usize) {
+        let theme = &self.config.theme;
+        let names = crate::widgets::WIDGET_NAMES;
+
+        let mut lines: Vec<Line> = Vec::new();
+        for (index, name) in names.iter().enumerate() {
+            let on = self.config.layout.places(name);
+            let here = index == selected;
+            // A filled mark and an empty one in the track colour, the same
+            // vocabulary the meters use, so "on" is legible without relying on
+            // the word beside it.
+            let mark = if on { "■" } else { "□" };
+            let mark_style = Style::default().fg(if on { theme.accent } else { theme.track });
+            let name_style = if here {
+                Style::default()
+                    .fg(theme.text)
+                    .add_modifier(Modifier::REVERSED)
+            } else if on {
+                Style::default().fg(theme.text)
+            } else {
+                Style::default().fg(theme.muted)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    if here { " ▸ " } else { "   " },
+                    Style::default().fg(theme.accent),
+                ),
+                Span::styled(format!("{mark} "), mark_style),
+                Span::styled(format!("{name:<10}"), name_style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        if let Some(error) = &self.layout_error {
+            lines.push(Line::from(Span::styled(
+                format!("  {error}"),
+                Style::default().fg(theme.error),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  written to your config on close",
+                Style::default().fg(theme.muted),
+            )));
+        }
+        lines.push(Line::from(vec![
+            Span::styled(
+                "  space",
+                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" toggle   ", Style::default().fg(theme.muted)),
+            Span::styled(
+                "esc",
+                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" close", Style::default().fg(theme.muted)),
+        ]));
+
+        let width = 40.min(area.width);
+        let height = (u16::try_from(lines.len()).unwrap_or(u16::MAX) + 2).min(area.height);
+        let popup = Rect {
+            x: area.x + area.width.saturating_sub(width) / 2,
+            y: area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        };
+
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme.border_focused))
+                    .title(Span::styled(
+                        crate::glyphs::utility(" panels "),
+                        Style::default()
+                            .fg(theme.title)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .padding(Padding::horizontal(1)),
+            ),
+            popup,
+        );
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -838,10 +1091,11 @@ impl App {
             // still leaves you able to act, losing the instruction does not.
             // The names go on one wrapped line for the same reason — one line
             // per widget cost eight rows on a stale config.
-            lines.push(Line::from(Span::styled(
-                "  add to [layout]; --print-config shows how",
-                muted,
-            )));
+            lines.push(Line::from(vec![
+                Span::styled("  press ", muted),
+                Span::styled("w", key_style),
+                Span::styled(" to switch them on", muted),
+            ]));
             lines.push(Line::from(Span::styled(
                 format!("  {}", self.unused_widgets.join(", ")),
                 Style::default().fg(theme.text),
@@ -1483,6 +1737,110 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         assert!(!app.show_help);
         assert!(!app.should_quit, "closing help must not also quit");
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn the_picker_opens_and_toggles_a_panel_on_and_off() {
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        let before = app.slots.len();
+
+        app.handle_key(key(KeyCode::Char('w')));
+        assert_eq!(app.picker, Some(0), "opens on the first widget");
+
+        // WIDGET_NAMES starts with clocks, which this layout already places.
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(!app.config.layout.places("clocks"), "space turned it off");
+        assert_eq!(app.slots.len(), before - 1, "and the panel actually went");
+        assert!(app.layout_dirty);
+
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(
+            app.config.layout.places("clocks"),
+            "space turned it back on"
+        );
+        assert_eq!(app.slots.len(), before);
+    }
+
+    #[test]
+    fn the_picker_moves_and_closes_without_quitting() {
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        app.handle_key(key(KeyCode::Char('w')));
+
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.picker, Some(1));
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.picker, Some(0));
+        app.handle_key(key(KeyCode::Up));
+        assert_eq!(app.picker, Some(0), "clamps at the top");
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.picker, None);
+        assert!(
+            !app.should_quit,
+            "Esc closes the dialog rather than falling through to quit"
+        );
+    }
+
+    #[test]
+    fn the_last_panel_cannot_be_switched_off() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char(' ')));
+
+        assert!(
+            app.config.layout.places("clocks"),
+            "an empty layout is rejected at startup, so this would write a \
+             config that cannot be opened again"
+        );
+        assert_eq!(app.slots.len(), 1);
+        assert!(app.layout_error.is_some(), "and it says why");
+    }
+
+    #[test]
+    fn a_toggle_updates_the_unused_list_the_hint_reads_from() {
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        assert!(app.unused_widgets.contains(&"pomodoro"));
+
+        app.handle_key(key(KeyCode::Char('w')));
+        let index = crate::widgets::WIDGET_NAMES
+            .iter()
+            .position(|n| *n == "pomodoro")
+            .unwrap();
+        app.picker = Some(index);
+        app.handle_key(key(KeyCode::Char(' ')));
+
+        assert!(
+            !app.unused_widgets.contains(&"pomodoro"),
+            "switching a widget on must stop it being advertised as missing"
+        );
+    }
+
+    #[test]
+    fn nothing_is_written_when_no_config_path_was_given() {
+        // The guard that keeps the whole test suite off a real user's config.
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char(' ')));
+        assert!(app.layout_dirty);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(
+            app.layout_dirty,
+            "still pending, because there was nowhere to write it"
+        );
+        assert_eq!(app.layout_error, None, "and that is not an error");
+    }
+
+    #[test]
+    fn a_resize_that_changed_nothing_does_not_mark_the_layout_dirty() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        // One panel in its row: there is no neighbour to trade with, so the
+        // key does nothing and must not queue a config write.
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert!(!app.layout_dirty);
     }
 
     #[test]
