@@ -10,6 +10,7 @@
 //! Each row is labelled with the hour it applies to, which the previous daily
 //! layout left the reader to infer.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -187,6 +188,16 @@ pub struct WeatherPanel {
     /// What `imperial` was when the panel was built, so `remember` can tell a
     /// user pressing `u` from a config that simply says `imperial`.
     seeded_imperial: bool,
+    /// Set to ask the fetch thread to finish; see `StocksPanel::stop`.
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for WeatherPanel {
+    /// See `Drop for StocksPanel`: a panel can be dropped without `shutdown`,
+    /// and the picker rebuilding the dashboard does exactly that.
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Convert a temperature between the scales.
@@ -216,12 +227,14 @@ impl WeatherPanel {
         let stale_after = Duration::from_secs(config.refresh_minutes.max(1) * 60 * 2);
         let state = Arc::new(Mutex::new(State::default()));
         let refresh = Arc::new(Mutex::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&state);
         let shared_refresh = Arc::clone(&refresh);
+        let shared_stop = Arc::clone(&stop);
 
         std::thread::Builder::new()
             .name("mirador-weather".into())
-            .spawn(move || fetch_loop(&config, &shared, &shared_refresh))
+            .spawn(move || fetch_loop(&config, &shared, &shared_refresh, &shared_stop))
             .expect("spawning the weather thread");
 
         Self {
@@ -231,6 +244,7 @@ impl WeatherPanel {
             stale_after,
             imperial,
             seeded_imperial: imperial,
+            stop,
         }
     }
 
@@ -276,7 +290,12 @@ impl WeatherPanel {
 }
 
 /// Fetch now, then every `refresh_minutes`, until the process exits.
-fn fetch_loop(config: &WeatherConfig, state: &Arc<Mutex<State>>, refresh: &Arc<Mutex<bool>>) {
+fn fetch_loop(
+    config: &WeatherConfig,
+    state: &Arc<Mutex<State>>,
+    refresh: &Arc<Mutex<bool>>,
+    stop: &Arc<AtomicBool>,
+) {
     // Resolve coordinates once; a geocoding failure is fatal for this panel and
     // there is no point retrying it every cycle.
     let located = match resolve_location(config) {
@@ -288,7 +307,7 @@ fn fetch_loop(config: &WeatherConfig, state: &Arc<Mutex<State>>, refresh: &Arc<M
     };
 
     let interval = Duration::from_secs(config.refresh_minutes.max(1) * 60);
-    loop {
+    while !stop.load(Ordering::Relaxed) {
         match fetch_weather(config, &located) {
             Ok(data) => update(state, |s| {
                 s.data = Some(Box::new(data));
@@ -304,6 +323,9 @@ fn fetch_loop(config: &WeatherConfig, state: &Arc<Mutex<State>>, refresh: &Arc<M
         // interval, without needing a channel or a condvar.
         let mut waited = Duration::ZERO;
         while waited < interval {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
             std::thread::sleep(Duration::from_millis(500));
             waited += Duration::from_millis(500);
             let asked = match refresh.lock() {
@@ -685,6 +707,10 @@ impl Panel for WeatherPanel {
         }
     }
 
+    fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {
         let theme = ctx.theme;
         if area.width == 0 || area.height == 0 {
@@ -934,6 +960,7 @@ mod tests {
             stale_after: Duration::from_hours(1),
             imperial,
             seeded_imperial: imperial,
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1093,11 +1120,14 @@ mod tests {
 
         // Old enough on its own, with nothing having failed — a fetch thread
         // that quietly stopped, or a laptop resumed from sleep.
-        let old = State {
-            fetched: Instant::now().checked_sub(Duration::from_hours(2)),
-            ..fresh.clone()
-        };
-        assert!(panel.is_stale(&old), "age alone is enough");
+        //
+        // Expressed by shrinking the threshold rather than by back-dating the
+        // reading. `Instant` on Windows is a duration since boot, so
+        // `Instant::now().checked_sub(two hours)` is `None` on a fresh CI
+        // runner and the case under test would quietly become a different one.
+        let mut impatient = panel_showing(true);
+        impatient.stale_after = Duration::ZERO;
+        assert!(impatient.is_stale(&fresh), "age alone is enough");
     }
 
     #[test]
