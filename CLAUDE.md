@@ -357,11 +357,6 @@ inline `[theme]` table from a `theme = "name"` string).
    date grid only, deliberately offline; events are a separate, larger panel.
 3. Theme system per above.
 4. "What changed since I last looked" markers.
-5. **Run mirador on Windows.** It is built for `x86_64-pc-windows-msvc` now,
-   but nobody has started it there. Nothing in this crate is Unix-specific and
-   the dependencies are cross-platform, so the risk is behavioural rather than
-   structural: terminal resize, the alternate screen, and whether the mouse
-   capture trade-off reads the same in Windows Terminal.
 
 ## Housekeeping
 
@@ -377,7 +372,8 @@ inline `[theme]` table from a `theme = "name"` string).
 
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
-  terminal under `tmux` and report sensible figures. Windows remains untested.
+  terminal under `tmux` and report sensible figures. Windows has since been run
+  too — see the platform note below.
 - **`0.1.0` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64 and Linux x86-64. `0.0.0` is still on
   crates.io below it — the name reservation that went out first, since
@@ -409,12 +405,17 @@ inline `[theme]` table from a `theme = "name"` string).
   255) and its own prerelease detection from the semver hyphen, which is why
   the hand-written versions of both were dropped when it took the file over.
 
-- **Windows is built but unexercised**; `aarch64-pc-windows-msvc` is
-  deliberately absent because `ring`, reached through `ureq`'s TLS, does not
-  build for it. musl is absent for the same C-toolchain reason. `ring` is also
-  why the Windows target cannot be cross-checked from macOS — `cargo check
-  --target x86_64-pc-windows-msvc` fails locally on `cc`, and that is the host
-  missing MSVC rather than anything wrong with the code.
+- **Windows runs**, confirmed by the owner on 25 July 2026 — so all three
+  shipped targets have now been started, not merely built. Treat it as the
+  least-travelled of the three rather than as unknown: macOS and Linux are used
+  daily and Windows has been checked once.
+
+  `aarch64-pc-windows-msvc` is deliberately absent because `ring`, reached
+  through `ureq`'s TLS, does not build for it. musl is absent for the same
+  C-toolchain reason. `ring` is also why the Windows target cannot be
+  cross-checked from macOS — `cargo check --target x86_64-pc-windows-msvc`
+  fails locally on `cc`, and that is the host missing MSVC rather than anything
+  wrong with the code.
 
 - macOS notarization is unsupported by `dist` and does not matter here:
   Gatekeeper's quarantine flag comes from browsers, not `curl`, so
