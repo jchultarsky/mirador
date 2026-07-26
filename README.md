@@ -53,9 +53,20 @@ and on Windows:
 irm https://github.com/jchultarsky/mirador/releases/latest/download/mirador-installer.ps1 | iex
 ```
 
-Both fetch the right archive for your platform, check it against its published
-checksum, and unpack the binary. If you would rather read the script before
-running it, it is an ordinary file at that URL, and the manual route is below.
+Both fetch the right archive for your platform and unpack the binary. If you
+would rather read the script before running it, it is an ordinary file at that
+URL, and the manual route is below.
+
+The shell installer checks the archive against its published sha256; the
+PowerShell one does no verification, and neither verifies the updater binary.
+That is [dist](https://opensource.axo.dev/cargo-dist/)'s behaviour rather than
+ours, and [SECURITY.md](SECURITY.md#verifying-a-download) says what it does and
+does not buy you. Every artifact carries a GitHub provenance attestation, which
+is the stronger check and the one to run if you care:
+
+```sh
+gh attestation verify --repo jchultarsky/mirador mirador-aarch64-apple-darwin.tar.gz
+```
 
 They also install `mirador-update` beside it, so a later upgrade is:
 

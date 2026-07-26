@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Findings from an adversarial review of the whole project, fixed in order of how
+much they could cost someone.
+
+### Fixed
+
+- **`Esc` no longer quits the dashboard.** It was in the global quit arm, so the
+  reflex that closes a dialog closed the program — and any unsaved note went
+  with it.
+- **A long note can be scrolled to its end.** The body scrolled against its
+  unwrapped line count, so wrapping hid the tail.
+- **`Ctrl+S` and `Enter` save from either field of a form**, not just the one
+  the cursor happened to be in.
+- **Removing a symbol from the watchlist reports a failed save** instead of
+  dropping the error.
+- **The weather and stocks pollers stop when their panel goes away.** Neither
+  loop had an exit, and the panel picker rebuilds every panel on every toggle,
+  so a few passes over it left several threads polling the same endpoints —
+  multiplying a request rate that `CLAUDE.md` claimed was enforced in code.
+  Measured: 3 threads at rest, 3 after ten toggles.
+- **mirador no longer panics at startup on Windows** on a machine up for less
+  than a day. `Instant` there counts from boot, so back-dating one by 24 hours
+  returned `None` and the `unwrap` fired before the terminal existed.
+- **A preference can be un-set again.** Switching temperature units to metric
+  and back left the state file insisting on metric, permanently. The comparison
+  that decides what to record now happens once, against the config as it was
+  read, rather than in each panel against the value it was built with.
+
+### Security
+
+- **Every release artifact now carries a GitHub build provenance attestation**,
+  so a download can be proved to have come from this repository's workflow:
+  `gh attestation verify --repo jchultarsky/mirador <file>`.
+- **Documented what the one-line installers actually verify**, which is less
+  than the README claimed: the shell installer checks the archive's sha256, the
+  PowerShell installer checks nothing, and neither checks the updater binary.
+  See [SECURITY.md](SECURITY.md#verifying-a-download).
+- Private vulnerability reporting is enabled, which the security policy already
+  pointed people at. `main` now requires the full CI suite to pass and refuses
+  force-pushes and deletion.
+
 ## [0.4.0] - 2026-07-26
 
 ### Added
