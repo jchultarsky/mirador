@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Windows is described as working rather than as untried. The binary shipped in
+  0.2.0 was built and packaged but had never been started on the platform, and
+  the docs said so; it has now been run and works. All three shipped targets
+  have been started rather than merely compiled. It is still the
+  least-travelled of the three, which the README says instead of claiming a
+  parity nobody has earned.
+
 ## [0.3.1] - 2026-07-25
 
 ### Fixed

@@ -115,10 +115,9 @@ Get-Content .\mirador-x86_64-pc-windows-msvc.zip.sha256
 
 Requires Rust 1.95 or newer to build from source.
 
-**On Windows**, the binary is built but not yet exercised — everything under
-it is cross-platform (`crossterm` for the terminal, `sysinfo` for the
-metrics), and nothing in mirador is Unix-specific, but "compiles" and "behaves"
-are different claims and only the first has been checked. Reports welcome.
+**Windows** has been run and works. It is still the least-travelled of the
+three — macOS and Linux are used daily and Windows has been checked rather
+than lived in — so a report of something off there is genuinely useful.
 Windows on ARM is deliberately absent: `ring`, reached through `ureq`'s TLS,
 does not build for it.
 
