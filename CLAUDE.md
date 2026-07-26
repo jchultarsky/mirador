@@ -203,18 +203,28 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     The split is by *what*, not by convenience: `[layout]` goes to the config
     because people read and curate it, and everything else goes to `state.rs`
     because nobody keeps their preferred sort order under version control.
-17. **A panel remembers only what the user changed.** `Panel::remember` writes
-    a preference only when it differs from the value the panel was *built*
-    with, which is why every such panel keeps a `seeded_*` copy. Reporting the
-    current value unconditionally looks identical in a unit test and is wrong
-    in practice: the first keystroke on any panel pins every other panel's
-    config values into the state file, and editing the config silently stops
-    working from then on. This was written the wrong way first and caught by
-    running it, not by the tests.
+17. **A remembered preference is the difference between the panels and the
+    config.** `Panel::remember` reports current values unconditionally;
+    `UiState::only_changes_from` drops whatever matches
+    `UiState::from_config(config_as_loaded)`. The baseline has to be taken
+    *before* `apply_state`, or it already contains last session's changes and
+    nothing can be seen to differ from it.
 
-    The app merges into what it loaded rather than starting from nothing, so a
-    preference set last session and untouched this one is not dropped by a
-    panel that has nothing new to say about it.
+    Two wrong versions were shipped before this one, and both looked right:
+
+    - Reporting current values with no comparison pinned every panel's config
+      values into the state file on the first keystroke anywhere, after which
+      editing the config silently stopped working.
+    - Having each panel compare against the value it was *built* with fixed
+      that, and made a preference impossible to *un*-set: after `apply_state`
+      the panel is built from the remembered value, so a setting toggled back
+      to what the config says looked unchanged, wrote nothing, and left the
+      earlier entry standing for ever.
+
+    Both passed their unit tests. The first was caught by running it; the second
+    by an adversarial review reading the data flow. Keep the comparison in one
+    place, against the config, and it is symmetric by construction.
+
 18. **First run must not be blank, and the defaults must agree.** The task and
     notes stores seed examples via `load_or_seed`, keyed on the file being
     *absent* — never on it being empty, or deleting the examples would not

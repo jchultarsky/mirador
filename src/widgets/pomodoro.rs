@@ -107,10 +107,6 @@ impl Phase {
 /// A pomodoro timer panel.
 pub struct PomodoroPanel {
     config: PomodoroConfig,
-    /// The durations the panel was built with. `remember` compares against
-    /// these per phase, so lengthening a focus interval does not also pin the
-    /// break lengths you never touched into the state file.
-    seeded: PomodoroConfig,
     phase: Phase,
     /// When the current phase ends. `None` whenever the timer is not running.
     ends_at: Option<Instant>,
@@ -134,7 +130,6 @@ impl PomodoroPanel {
     pub fn new(config: PomodoroConfig) -> Self {
         let first = Duration::from_secs(config.focus_minutes * 60);
         Self {
-            seeded: config.clone(),
             config,
             phase: Phase::Focus,
             ends_at: None,
@@ -515,15 +510,9 @@ impl Panel for PomodoroPanel {
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {
-        if self.config.focus_minutes != self.seeded.focus_minutes {
-            state.pomodoro_focus_minutes = Some(self.config.focus_minutes);
-        }
-        if self.config.short_break_minutes != self.seeded.short_break_minutes {
-            state.pomodoro_short_break_minutes = Some(self.config.short_break_minutes);
-        }
-        if self.config.long_break_minutes != self.seeded.long_break_minutes {
-            state.pomodoro_long_break_minutes = Some(self.config.long_break_minutes);
-        }
+        state.pomodoro_focus_minutes = Some(self.config.focus_minutes);
+        state.pomodoro_short_break_minutes = Some(self.config.short_break_minutes);
+        state.pomodoro_long_break_minutes = Some(self.config.long_break_minutes);
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
@@ -964,28 +953,28 @@ mod tests {
     }
 
     #[test]
-    fn only_a_duration_you_changed_is_remembered() {
+    fn the_panel_reports_its_current_durations() {
         use crate::panel::Panel as _;
 
+        // Reported unconditionally, on purpose. Deciding what counts as a
+        // *change* is `UiState::only_changes_from`'s job, because a panel built
+        // from an already-remembered value cannot tell the difference — which is
+        // how a preference used to become impossible to retract. See
+        // `a_preference_toggled_back_is_forgotten` in `state.rs`.
         let mut p = panel();
         let mut state = crate::state::UiState::default();
         p.remember(&mut state);
-        assert_eq!(
-            state,
-            crate::state::UiState::default(),
-            "an untouched timer must write nothing, or the config's own values \
-             get pinned into the state file and editing the config stops working"
-        );
+        assert_eq!(state.pomodoro_focus_minutes, Some(25));
 
-        p.adjust(1); // focus only
+        p.adjust(1);
         let mut state = crate::state::UiState::default();
         p.remember(&mut state);
         assert_eq!(state.pomodoro_focus_minutes, Some(26));
         assert_eq!(
-            state.pomodoro_short_break_minutes, None,
-            "a break you never touched must not be pinned by adjusting focus"
+            state.pomodoro_short_break_minutes,
+            Some(5),
+            "the untouched break is still reported; the diff drops it"
         );
-        assert_eq!(state.pomodoro_long_break_minutes, None);
     }
 
     #[test]

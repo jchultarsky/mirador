@@ -185,9 +185,6 @@ pub struct WeatherPanel {
     /// round trip behind a keypress, and leave the panel showing the old unit
     /// — or nothing — until it came back.
     imperial: bool,
-    /// What `imperial` was when the panel was built, so `remember` can tell a
-    /// user pressing `u` from a config that simply says `imperial`.
-    seeded_imperial: bool,
     /// Set to ask the fetch thread to finish; see `StocksPanel::stop`.
     stop: Arc<AtomicBool>,
 }
@@ -243,7 +240,6 @@ impl WeatherPanel {
             forecast_hours,
             stale_after,
             imperial,
-            seeded_imperial: imperial,
             stop,
         }
     }
@@ -702,9 +698,7 @@ impl Panel for WeatherPanel {
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {
-        if self.imperial != self.seeded_imperial {
-            state.weather_units = Some(if self.imperial { "imperial" } else { "metric" }.into());
-        }
+        state.weather_units = Some(if self.imperial { "imperial" } else { "metric" }.into());
     }
 
     fn shutdown(&mut self) {
@@ -959,7 +953,6 @@ mod tests {
             forecast_hours: 8,
             stale_after: Duration::from_hours(1),
             imperial,
-            seeded_imperial: imperial,
             stop: Arc::new(AtomicBool::new(false)),
         }
     }

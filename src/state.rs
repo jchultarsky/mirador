@@ -52,6 +52,71 @@ pub struct UiState {
 }
 
 impl UiState {
+    /// The preferences a config expresses, used as the baseline to compare
+    /// against.
+    ///
+    /// Must be taken from the config **as loaded from disk**, before
+    /// [`crate::config::Config::apply_state`] has folded any remembered values
+    /// into it —
+    /// otherwise the baseline already contains last session's changes and
+    /// nothing can ever be seen to differ from it.
+    ///
+    /// Values are normalised the way the panels normalise them, so a config
+    /// holding a sort mode in some other spelling does not read as a change the
+    /// user made.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        let sort = config
+            .todo
+            .sort
+            .parse::<crate::task::SortMode>()
+            .unwrap_or_default();
+        Self {
+            weather_units: Some(if config.weather.units == "metric" {
+                "metric".into()
+            } else {
+                "imperial".into()
+            }),
+            todo_sort: Some(sort.label().to_string()),
+            todo_show_completed: Some(config.todo.show_completed),
+            clocks_show_seconds: Some(config.clocks.show_seconds),
+            pomodoro_focus_minutes: Some(config.pomodoro.focus_minutes),
+            pomodoro_short_break_minutes: Some(config.pomodoro.short_break_minutes),
+            pomodoro_long_break_minutes: Some(config.pomodoro.long_break_minutes),
+        }
+    }
+
+    /// Drop every field that matches `baseline`, keeping only real changes.
+    ///
+    /// This is what makes a preference retractable. Panels report their current
+    /// values unconditionally and the comparison happens here, in one place, so
+    /// setting a value back to what the config says *removes* it from the file
+    /// rather than leaving the old change asserted forever.
+    ///
+    /// Panels used to do the comparison themselves against the value they were
+    /// constructed with. That is subtly different and wrong: after
+    /// `apply_state`, a panel is built from the *remembered* value, so once a
+    /// preference had been changed the panel could never again see it as equal
+    /// to the config's — and writing nothing left the previous entry standing.
+    #[must_use]
+    pub fn only_changes_from(mut self, baseline: &Self) -> Self {
+        macro_rules! keep_if_changed {
+            ($($field:ident),+ $(,)?) => {
+                $(if self.$field == baseline.$field {
+                    self.$field = None;
+                })+
+            };
+        }
+        keep_if_changed!(
+            weather_units,
+            todo_sort,
+            todo_show_completed,
+            clocks_show_seconds,
+            pomodoro_focus_minutes,
+            pomodoro_short_break_minutes,
+            pomodoro_long_break_minutes,
+        );
+        self
+    }
     /// Read the state file, treating a missing one as no preferences.
     ///
     /// A *corrupt* one is also treated as no preferences rather than as a
@@ -201,6 +266,82 @@ mod tests {
         .save(&path)
         .unwrap();
         assert!(!path.with_extension("toml.tmp").exists());
+    }
+
+    /// A config with known preference values to diff against.
+    fn baseline_config() -> crate::config::Config {
+        let mut config = crate::config::Config::default();
+        config.weather.units = "imperial".into();
+        config.todo.sort = "smart".into();
+        config.todo.show_completed = false;
+        config.clocks.show_seconds = true;
+        config.pomodoro.focus_minutes = 25;
+        config
+    }
+
+    #[test]
+    fn a_preference_toggled_back_is_forgotten() {
+        // The bug this whole mechanism was rebuilt around. Panels used to
+        // compare against the value they were *built* with — but after
+        // `apply_state` that is the remembered value, so once a preference had
+        // been changed the panel could never see it as equal to the config's
+        // again. Writing nothing then left the old entry standing, and the
+        // state file went on asserting a change the user had undone.
+        let baseline = UiState::from_config(&baseline_config());
+
+        // Changed: recorded.
+        let changed = UiState {
+            weather_units: Some("metric".into()),
+            ..baseline.clone()
+        }
+        .only_changes_from(&baseline);
+        assert_eq!(changed.weather_units.as_deref(), Some("metric"));
+
+        // Changed back: not recorded, which is what lets the file shrink again.
+        let reverted = baseline.clone().only_changes_from(&baseline);
+        assert_eq!(reverted, UiState::default());
+        assert_eq!(
+            reverted.weather_units, None,
+            "pressing `u` twice must leave nothing behind"
+        );
+    }
+
+    #[test]
+    fn the_baseline_ignores_how_the_config_spelled_a_sort_mode() {
+        // A config holding an unparsable sort falls back to the default, and the
+        // panel reports the default's label — so the baseline has to normalise
+        // the same way or an untouched panel reads as a change on every start.
+        let mut config = baseline_config();
+        config.todo.sort = "nonsense".into();
+        let baseline = UiState::from_config(&config);
+
+        let reported = UiState {
+            todo_sort: Some(crate::task::SortMode::default().label().to_string()),
+            ..baseline.clone()
+        };
+        assert_eq!(
+            reported.only_changes_from(&baseline).todo_sort,
+            None,
+            "the default sort must not look like a user choice"
+        );
+    }
+
+    #[test]
+    fn only_the_field_that_moved_is_kept() {
+        let baseline = UiState::from_config(&baseline_config());
+        let current = UiState {
+            pomodoro_focus_minutes: Some(40),
+            ..baseline.clone()
+        };
+        let kept = current.only_changes_from(&baseline);
+
+        assert_eq!(kept.pomodoro_focus_minutes, Some(40));
+        assert_eq!(
+            kept.pomodoro_short_break_minutes, None,
+            "an untouched field must not be pinned by a neighbour changing"
+        );
+        assert_eq!(kept.weather_units, None);
+        assert_eq!(kept.todo_sort, None);
     }
 
     #[test]
