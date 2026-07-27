@@ -548,35 +548,23 @@ change the user had watched happen.
 deliberate: each picker change is one keystroke to undo, an arrangement is not.
 The mode's legend names both keys, so there is nothing to guess.
 
-## Open work, in priority order
+## Open work
 
-Only things that are actually open. A "decided and built" entry in a list called
-open work is how the list stops being read.
+Nothing. All three gaps named in the original product analysis are built — the
+`.ics` agenda, the watch log, and the on-fire signal — along with named themes,
+arrange mode, and in-panel editing for everything the UI can change.
 
-1. **A single "is anything on fire" signal.** No design yet. It is the same
-   notion as the watch log seen from the other end — the log is notable things
-   in the past, this is a notable condition in the present — so whatever
-   defines "notable" for one should serve the other. `watch::Event` has no
-   severity today; that is where it would go.
+That is a fact about the *list*, not a claim the program is finished. Two things
+shipped recently have never run in the conditions they were built for, and both
+are recorded where they live rather than here: terminal focus reporting for the
+watch log's rule line could not be verified at all (a headless tmux has no
+attached client to have focus), and the day-rollover entry has only ever been
+exercised by a test that winds the date back. The first real midnight is the
+first real test of it.
 
-   It is also structurally an attention-grabbing mechanism, which is the thing
-   the unread-email-count rejection was about, and it has to earn its way past
-   that rule rather than around it. See how the watch log did: the commitment
-   that made it acceptable was presentational — no count, no unread state, no
-   effect on any other panel.
-
-The "what changed since I last looked" markers that sat at the top of this list
-are built, as the watch log; see below.
-
-Named themes sat at the top of this list and is built; see the section above.
-
-Editing `[weather].location` from the panel sat at the top of this list and is
-built — `prompt.rs`, reached with `L`. The same prompt does the agenda file
-(`f`) and adding a world clock (`a`), which is why it is one module and not
-three bespoke dialogs.
-
-The `.ics` agenda that sat at the top of this list is built — `ical.rs` and
-`widgets/agenda.rs`.
+When something goes back on this list, put the *reason* beside it. Every entry
+that was ever useful here said why it mattered; the one that got quietly dropped
+and had to be added back was the one that did not.
 
 ## Housekeeping
 
