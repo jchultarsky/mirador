@@ -564,11 +564,30 @@ mod tests {
     use crate::config::ClockZone;
     use jiff::tz::Offset;
 
-    /// A panel seeded from `config`, with its zone file pointed somewhere it
-    /// can never be written — tests must not touch a real user's clocks.
-    fn panel_from(config: ClocksConfig) -> ClocksPanel {
-        ClocksPanel::new(config, std::path::PathBuf::from("/nonexistent/zones.toml"))
-            .expect("builds from a seed")
+    struct TempDir(std::path::PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A panel seeded from `config`, with a zone file of its very own.
+    ///
+    /// It has to be its own: `write_atomic` creates the parent directory it is
+    /// given, so a shared path is a shared *file*, and these tests all edit the
+    /// zone list. A single `/nonexistent/zones.toml` looked fine on macOS and
+    /// Linux — nothing can create `/nonexistent` without root, so every save
+    /// failed harmlessly and every panel got the seed — and on Windows the
+    /// runner happily made `C:\nonexistent`, after which each test loaded
+    /// whatever the last one had written and three of them failed with a
+    /// timezone none of them had asked for.
+    fn panel_from_named(name: &str, config: ClocksConfig) -> (ClocksPanel, TempDir) {
+        let dir = std::env::temp_dir().join(format!("mirador-zones-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test directory");
+        let panel = ClocksPanel::new(config, dir.join("zones.toml")).expect("builds from a seed");
+        (panel, TempDir(dir))
     }
 
     fn zone(label: &str, tz: &str) -> ClockZone {
@@ -590,14 +609,17 @@ mod tests {
     /// the end, where `d` did nothing at all and the panel looked wedged.
     #[test]
     fn the_cursor_stays_on_a_real_clock_after_a_removal() {
-        let mut panel = panel_from(ClocksConfig {
-            zones: vec![
-                zone("Home", "local"),
-                zone("UTC", "UTC"),
-                zone("Tokyo", "Asia/Tokyo"),
-            ],
-            ..ClocksConfig::default()
-        });
+        let (mut panel, _guard) = panel_from_named(
+            "the_cursor_stays_on_a_real_c",
+            ClocksConfig {
+                zones: vec![
+                    zone("Home", "local"),
+                    zone("UTC", "UTC"),
+                    zone("Tokyo", "Asia/Tokyo"),
+                ],
+                ..ClocksConfig::default()
+            },
+        );
 
         // Move to the last secondary clock and remove it.
         press(&mut panel, KeyCode::Down);
@@ -615,10 +637,13 @@ mod tests {
     /// empty list has to say why nothing happened rather than look broken.
     #[test]
     fn the_big_clock_survives_and_says_so() {
-        let mut panel = panel_from(ClocksConfig {
-            zones: vec![zone("Home", "local")],
-            ..ClocksConfig::default()
-        });
+        let (mut panel, _guard) = panel_from_named(
+            "the_big_clock_survives_and_s",
+            ClocksConfig {
+                zones: vec![zone("Home", "local")],
+                ..ClocksConfig::default()
+            },
+        );
         press(&mut panel, KeyCode::Char('d'));
         assert_eq!(panel.primary.label, "Home", "still there");
         assert!(panel.status.is_some(), "and the panel says why");
@@ -626,7 +651,8 @@ mod tests {
 
     #[test]
     fn a_zone_that_does_not_resolve_is_refused_with_the_prompt_left_open() {
-        let mut panel = panel_from(ClocksConfig::default());
+        let (mut panel, _guard) =
+            panel_from_named("a_zone_that_does_not_resolve", ClocksConfig::default());
         press(&mut panel, KeyCode::Char('a'));
         for c in "Mars/Olympus".chars() {
             panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
@@ -641,10 +667,13 @@ mod tests {
     /// `Label = Zone` names the clock; a bare zone takes the city out of it.
     #[test]
     fn a_clock_can_be_added_with_or_without_a_label() {
-        let mut panel = panel_from(ClocksConfig {
-            zones: vec![zone("Home", "local")],
-            ..ClocksConfig::default()
-        });
+        let (mut panel, _guard) = panel_from_named(
+            "a_clock_can_be_added_with_or",
+            ClocksConfig {
+                zones: vec![zone("Home", "local")],
+                ..ClocksConfig::default()
+            },
+        );
 
         press(&mut panel, KeyCode::Char('a'));
         for c in "Asia/Kolkata".chars() {
@@ -714,10 +743,13 @@ mod tests {
 
     #[test]
     fn the_first_zone_becomes_the_large_clock() {
-        let panel = panel_from(ClocksConfig {
-            zones: vec![zone("Home", "UTC"), zone("Tokyo", "Asia/Tokyo")],
-            ..Default::default()
-        });
+        let (panel, _guard) = panel_from_named(
+            "the_first_zone_becomes_the_l",
+            ClocksConfig {
+                zones: vec![zone("Home", "UTC"), zone("Tokyo", "Asia/Tokyo")],
+                ..Default::default()
+            },
+        );
         assert_eq!(panel.primary.label, "Home");
         assert_eq!(panel.secondary.len(), 1);
         assert_eq!(panel.secondary[0].label, "Tokyo");
@@ -725,27 +757,34 @@ mod tests {
 
     #[test]
     fn an_empty_zone_list_still_shows_local_time() {
-        let panel = panel_from(ClocksConfig {
-            zones: Vec::new(),
-            ..Default::default()
-        });
+        let (panel, _guard) = panel_from_named(
+            "an_empty_zone_list_still_sho",
+            ClocksConfig {
+                zones: Vec::new(),
+                ..Default::default()
+            },
+        );
         assert!(panel.primary.zone.is_ok());
         assert!(panel.secondary.is_empty());
     }
 
     #[test]
     fn a_label_falls_back_to_the_zone_name() {
-        let panel = panel_from(ClocksConfig {
-            zones: vec![zone("", "UTC"), zone("", "Asia/Tokyo")],
-            ..Default::default()
-        });
+        let (panel, _guard) = panel_from_named(
+            "a_label_falls_back_to_the_zo",
+            ClocksConfig {
+                zones: vec![zone("", "UTC"), zone("", "Asia/Tokyo")],
+                ..Default::default()
+            },
+        );
         assert_eq!(panel.primary.label, "UTC");
         assert_eq!(panel.secondary[0].label, "Asia/Tokyo");
     }
 
     #[test]
     fn s_toggles_seconds_and_is_consumed() {
-        let mut panel = panel_from(ClocksConfig::default());
+        let (mut panel, _guard) =
+            panel_from_named("s_toggles_seconds_and_is_con", ClocksConfig::default());
         let before = panel.show_seconds;
         let outcome = panel.handle_key(KeyEvent::new(
             KeyCode::Char('s'),
@@ -757,7 +796,8 @@ mod tests {
 
     #[test]
     fn other_keys_fall_through_to_the_application() {
-        let mut panel = panel_from(ClocksConfig::default());
+        let (mut panel, _guard) =
+            panel_from_named("other_keys_fall_through_to_t", ClocksConfig::default());
         let outcome = panel.handle_key(KeyEvent::new(
             KeyCode::Tab,
             ratatui::crossterm::event::KeyModifiers::NONE,
