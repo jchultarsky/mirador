@@ -5,6 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **An agenda panel**, reading a local `.ics` file. The gap it fills was named
+  early and left open for a long time: tasks are self-paced and a meeting is
+  not, so a dashboard that could answer four questions and none of them was
+  "you are in a call in ten minutes" was missing the one with a deadline.
+
+  It is deliberately offline. mirador does not sign in to a calendar server —
+  that means an account, a token to refresh, and a background process holding
+  your credentials. Point `[agenda].file` at a calendar you already have and
+  keep it current however you like; it is re-read on a timer and on `r`.
+
+  Recurring events are expanded for the rules people actually have — daily,
+  weekly with `BYDAY`, monthly, yearly, with `INTERVAL`, `COUNT`, `UNTIL` and
+  `EXDATE`. Anything more elaborate shows only its first occurrence rather than
+  guessing: a calendar that invents a meeting costs a wasted trip, where one
+  that misses a repeat costs a glance at the real thing.
+
+  Parsed in-tree with `jiff`, which mirador already has. `icalendar` and `rrule`
+  would have added 30 crates and **2.3 MB** to a 3.4 MB binary — measured — most
+  of it `chrono-tz` carrying a second timezone database.
+
+  **The default layout now places ten panels**, so the last of them has no
+  number to jump to; `1`–`9` covers the rest and `Tab` reaches everything.
+
 ## [0.6.0] - 2026-07-27
 
 ### Changed
@@ -610,6 +637,7 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/jchultarsky/mirador/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/jchultarsky/mirador/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jchultarsky/mirador/compare/v0.5.0...v0.5.1

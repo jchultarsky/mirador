@@ -4,6 +4,7 @@
 //! to [`WIDGET_NAMES`] and adding one arm to [`build`]. Nothing else in the
 //! codebase needs to know it exists.
 
+pub mod agenda;
 pub mod calendar;
 pub mod clocks;
 pub mod cpu;
@@ -21,7 +22,8 @@ use crate::panel::Panel;
 
 /// Every widget id accepted in the `[layout]` table.
 pub const WIDGET_NAMES: &[&str] = &[
-    "clocks", "weather", "todo", "notes", "stocks", "calendar", "pomodoro", "cpu", "network",
+    "clocks", "weather", "todo", "notes", "stocks", "calendar", "agenda", "pomodoro", "cpu",
+    "network",
 ];
 
 /// Whether `name` refers to a widget mirador knows how to build.
@@ -74,6 +76,10 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.stocks_path()?,
         )?),
         "calendar" => Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
+        "agenda" => Box::new(agenda::AgendaPanel::new(
+            &config.agenda,
+            config.agenda_path()?,
+        )),
         "pomodoro" => Box::new(pomodoro::PomodoroPanel::new(config.pomodoro.clone())),
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
