@@ -76,6 +76,7 @@ const COLUMNS: &[Column] = &[
 const BINDINGS: &[Binding] = &[
     Binding::primary("r", "refresh"),
     Binding::primary("u", "units"),
+    Binding::primary("L", "location"),
 ];
 
 /// Most hours ever fetched or shown. A day ahead is the limit of what the
@@ -152,6 +153,12 @@ pub struct WeatherPanel {
     state: Arc<Mutex<State>>,
     /// Set to true to ask the fetch thread for an immediate refresh.
     refresh: Arc<Mutex<bool>>,
+    /// Shared with the fetch thread so `L` can change the location without
+    /// stopping it. The thread re-reads this each cycle and re-geocodes when
+    /// the name changes.
+    config: Arc<Mutex<WeatherConfig>>,
+    /// The `L` dialog, while it is open.
+    asking: Option<crate::prompt::Prompt>,
     /// Kept for `max_height`; the rest of the config moves to the fetch thread.
     forecast_hours: u8,
     /// Twice the refresh interval. Past this a reading is called stale even
@@ -215,6 +222,11 @@ impl WeatherPanel {
         let refresh = Arc::new(Mutex::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
+        // Shared with the fetch thread, which re-reads it each cycle, so
+        // changing the location from the panel is a swap here rather than
+        // stopping a thread and starting another.
+        let config = Arc::new(Mutex::new(config));
+        let shared_config = Arc::clone(&config);
         let shared = Arc::clone(&state);
         let shared_refresh = Arc::clone(&refresh);
         let shared_stop = Arc::clone(&stop);
@@ -224,7 +236,7 @@ impl WeatherPanel {
             .name("mirador-weather".into())
             .spawn(move || {
                 fetch_loop(
-                    &config,
+                    &shared_config,
                     &shared,
                     &shared_refresh,
                     &shared_stop,
@@ -236,12 +248,50 @@ impl WeatherPanel {
         Self {
             state,
             refresh,
+            config,
+            asking: None,
             forecast_hours,
             stale_after,
             imperial,
             stop,
             generation,
             seen: 0,
+        }
+    }
+
+    /// Deal with a keypress while the location prompt is open.
+    ///
+    /// Unlike the agenda's file, a place name cannot be checked here — finding
+    /// out whether it geocodes means a network request, and putting one behind
+    /// Enter would freeze the dashboard. So the answer is taken as given and
+    /// the fetch thread reports what it makes of it, in the panel, the same way
+    /// it already reports a location from the config that does not resolve.
+    fn handle_prompt_key(&mut self, key: ratatui::crossterm::event::KeyEvent) {
+        let Some(prompt) = self.asking.as_mut() else {
+            return;
+        };
+        match prompt.handle_key(key) {
+            crate::prompt::Outcome::Editing => {}
+            crate::prompt::Outcome::Cancelled => self.asking = None,
+            crate::prompt::Outcome::Submitted(answer) => {
+                if answer.is_empty() {
+                    prompt.reject("a location is needed to fetch any weather");
+                    return;
+                }
+                self.set_location(answer);
+                self.asking = None;
+            }
+        }
+    }
+
+    /// Point the panel at a different place and fetch it now.
+    pub fn set_location(&mut self, to: String) {
+        match self.config.lock() {
+            Ok(mut guard) => guard.location = to,
+            Err(poisoned) => poisoned.into_inner().location = to,
+        }
+        if let Ok(mut flag) = self.refresh.lock() {
+            *flag = true;
         }
     }
 
@@ -323,15 +373,23 @@ impl WeatherPanel {
     }
 }
 
+/// The weather settings as they stand, which the panel may have changed.
+fn settings(config: &Arc<Mutex<WeatherConfig>>) -> WeatherConfig {
+    match config.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
 /// Fetch now, then every `refresh_minutes`, until `stop` is set.
 fn fetch_loop(
-    config: &WeatherConfig,
+    config: &Arc<Mutex<WeatherConfig>>,
     state: &Arc<Mutex<State>>,
     refresh: &Arc<Mutex<bool>>,
     stop: &Arc<AtomicBool>,
     generation: &Arc<AtomicU64>,
 ) {
-    let interval = Duration::from_secs(config.refresh_minutes.max(1) * 60);
+    let interval = Duration::from_secs(settings(config).refresh_minutes.max(1) * 60);
     poll(
         config,
         state,
@@ -356,7 +414,7 @@ type Fetcher<'a> = &'a dyn Fn(&WeatherConfig, &Located) -> Result<WeatherData>;
 
 #[allow(clippy::too_many_arguments)]
 fn poll(
-    config: &WeatherConfig,
+    config: &Arc<Mutex<WeatherConfig>>,
     state: &Arc<Mutex<State>>,
     refresh: &Arc<Mutex<bool>>,
     stop: &Arc<AtomicBool>,
@@ -375,8 +433,18 @@ fn poll(
     // "r to retry" and the key was dead, because nothing was left to read the
     // flag it set. So the thread stays alive and retries until it succeeds.
     let mut located: Option<Located> = None;
+    // The place the resolution above belongs to. When the panel changes the
+    // location, this stops matching and the geocode is done again — without
+    // it, typing a new city would keep showing the old one's weather for ever.
+    let mut resolved_for = String::new();
 
     while !stop.load(Ordering::Relaxed) {
+        let config = &settings(config);
+        if config.location != resolved_for {
+            located = None;
+            resolved_for.clone_from(&config.location);
+        }
+
         if located.is_none() {
             match resolve_location(config) {
                 Ok(place) => located = Some(place),
@@ -752,8 +820,18 @@ impl Panel for WeatherPanel {
         moved
     }
 
+    fn captures_input(&self) -> bool {
+        self.asking.is_some()
+    }
+
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
         use ratatui::crossterm::event::KeyCode;
+
+        if self.asking.is_some() {
+            self.handle_prompt_key(key);
+            return crate::panel::KeyOutcome::Consumed;
+        }
+
         match key.code {
             KeyCode::Char('r') => {
                 if let Ok(mut flag) = self.refresh.lock() {
@@ -767,11 +845,23 @@ impl Panel for WeatherPanel {
                 self.imperial = !self.imperial;
                 crate::panel::KeyOutcome::Consumed
             }
+            // Capital, because `l` is a movement key nearly everywhere else in
+            // mirador and this panel does not scroll.
+            KeyCode::Char('L') => {
+                self.asking = Some(crate::prompt::Prompt::new(
+                    "WEATHER LOCATION",
+                    "A place name, e.g. Lisbon, Portugal · Enter saves · Esc cancels",
+                    &settings(&self.config).location,
+                    crate::prompt::Completion::None,
+                ));
+                crate::panel::KeyOutcome::Consumed
+            }
             _ => crate::panel::KeyOutcome::Ignored,
         }
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {
+        state.weather_location = Some(settings(&self.config).location);
         state.weather_units = Some(if self.imperial { "imperial" } else { "metric" }.into());
     }
 
@@ -850,6 +940,12 @@ impl Panel for WeatherPanel {
 
         if rows[2].height > 0 {
             render_forecast(frame, rows[2], theme, &data);
+        }
+
+        // Over everything, and last: a dialog drawn earlier would be painted
+        // over by the forecast beneath it.
+        if let Some(prompt) = &self.asking {
+            prompt.render(frame, area, theme);
         }
     }
 }
@@ -1028,6 +1124,8 @@ mod tests {
         WeatherPanel {
             state: Arc::new(Mutex::new(State::default())),
             refresh: Arc::new(Mutex::new(false)),
+            config: Arc::new(Mutex::new(WeatherConfig::default())),
+            asking: None,
             forecast_hours: 8,
             stale_after: Duration::from_hours(1),
             imperial,
@@ -1579,10 +1677,13 @@ mod tests {
             }
             resolve(c)
         };
+        // `poll` reads the config from behind a mutex now, because the panel
+        // can change the location while the thread is running.
+        let shared = Arc::new(Mutex::new(config.clone()));
         // `poll` checks `stop` at the top of each pass, so the pass that trips
         // the flag still completes.
         poll(
-            config,
+            &shared,
             state,
             refresh,
             stop,

@@ -61,7 +61,10 @@ pub fn unused_widgets(config: &Config) -> Vec<&'static str> {
 /// earlier with a better message, so this is only a defensive fallback.
 pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
     let panel: Box<dyn Panel> = match name {
-        "clocks" => Box::new(clocks::ClocksPanel::new(config.clocks.clone())),
+        "clocks" => Box::new(clocks::ClocksPanel::new(
+            config.clocks.clone(),
+            crate::config::Config::zones_path()?,
+        )?),
         "weather" => Box::new(weather::WeatherPanel::new(config.weather.clone())),
         "todo" => Box::new(todo::TodoPanel::new(
             config.todo.clone(),

@@ -17,6 +17,7 @@ mod note;
 mod panel;
 mod picker;
 mod poll;
+mod prompt;
 mod quote;
 mod samples;
 mod selection;
@@ -28,6 +29,7 @@ mod textfield;
 mod theme;
 mod update;
 mod widgets;
+mod zones;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

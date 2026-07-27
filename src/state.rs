@@ -42,6 +42,12 @@ pub struct UiState {
     /// `s` in the clock panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clocks_show_seconds: Option<bool>,
+    /// `f` in the agenda panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agenda_file: Option<String>,
+    /// `L` in the weather panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather_location: Option<String>,
     /// `+` and `-` in the pomodoro panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pomodoro_focus_minutes: Option<u64>,
@@ -79,6 +85,12 @@ impl UiState {
             todo_sort: Some(sort.label().to_string()),
             todo_show_completed: Some(config.todo.show_completed),
             clocks_show_seconds: Some(config.clocks.show_seconds),
+            agenda_file: config
+                .agenda
+                .file
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            weather_location: Some(config.weather.location.clone()),
             pomodoro_focus_minutes: Some(config.pomodoro.focus_minutes),
             pomodoro_short_break_minutes: Some(config.pomodoro.short_break_minutes),
             pomodoro_long_break_minutes: Some(config.pomodoro.long_break_minutes),
@@ -108,6 +120,8 @@ impl UiState {
         }
         keep_if_changed!(
             weather_units,
+            weather_location,
+            agenda_file,
             todo_sort,
             todo_show_completed,
             clocks_show_seconds,
@@ -180,6 +194,8 @@ mod tests {
         let (path, _g) = dir("roundtrip");
         let state = UiState {
             weather_units: Some("metric".into()),
+            weather_location: Some("Lisbon, Portugal".into()),
+            agenda_file: Some("/tmp/work.ics".into()),
             todo_sort: Some("due".into()),
             todo_show_completed: Some(true),
             clocks_show_seconds: Some(false),

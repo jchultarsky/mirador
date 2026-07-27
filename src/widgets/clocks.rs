@@ -20,7 +20,13 @@ use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 /// Keys this panel responds to.
-const BINDINGS: &[Binding] = &[Binding::primary("s", "seconds")];
+const BINDINGS: &[Binding] = &[
+    Binding::primary("s", "seconds"),
+    Binding::primary("a", "add zone"),
+    Binding::primary("d", "remove"),
+    Binding::extra("↑ / ↓", "select a clock"),
+    Binding::extra("j / k", "select a clock"),
+];
 
 /// The largest scale the numerals are ever drawn at. Past this a clock stops
 /// being readable-from-across-the-room and starts being a poster.
@@ -52,6 +58,14 @@ pub struct ClocksPanel {
     /// Everything else, rendered as a labelled list.
     secondary: Vec<Clock>,
     show_seconds: bool,
+    /// The live list, which the panel edits. `[clocks].zones` seeds it once.
+    zones: crate::zones::Zones,
+    /// Which secondary clock is selected, for `d`. The primary is index 0 and
+    /// cannot be selected, because it cannot be removed.
+    selected: usize,
+    /// The `a` dialog, while it is open.
+    asking: Option<crate::prompt::Prompt>,
+    status: Option<String>,
     /// The instant the last frame showed, in whichever unit is on screen.
     ///
     /// This panel is why the whole dashboard used to repaint four times a
@@ -62,10 +76,11 @@ pub struct ClocksPanel {
 }
 
 impl ClocksPanel {
-    /// Resolve every configured zone once, at construction.
-    pub fn new(config: ClocksConfig) -> Self {
-        let mut clocks: Vec<Clock> = config
-            .zones
+    /// Resolve every zone once, at construction.
+    pub fn new(config: ClocksConfig, path: std::path::PathBuf) -> anyhow::Result<Self> {
+        let zones = crate::zones::Zones::load(path, &config.zones)?;
+        let mut clocks: Vec<Clock> = zones
+            .zones()
             .iter()
             .map(|zone| Clock {
                 label: if zone.label.is_empty() {
@@ -89,12 +104,76 @@ impl ClocksPanel {
         };
 
         let show_seconds = config.show_seconds;
-        Self {
+        Ok(Self {
             config,
             primary,
             secondary: clocks,
             show_seconds,
+            zones,
+            selected: 1,
+            asking: None,
+            status: None,
             last_shown: None,
+        })
+    }
+
+    /// Rebuild the clocks from the zone list after it changes.
+    fn reload(&mut self) {
+        let mut clocks: Vec<Clock> = self
+            .zones
+            .zones()
+            .iter()
+            .map(|zone| Clock {
+                label: if zone.label.is_empty() {
+                    zone.timezone.clone()
+                } else {
+                    zone.label.clone()
+                },
+                zone: resolve_zone(&zone.timezone),
+            })
+            .collect();
+        if !clocks.is_empty() {
+            self.primary = clocks.remove(0);
+        }
+        self.secondary = clocks;
+        // The cursor indexes the zone list, whose first entry is the big clock
+        // and is not selectable — so the range is `1..=secondary.len()`, and
+        // clamping against the *zone* count instead leaves it one past the end
+        // after a removal, where `d` silently does nothing.
+        self.selected = self.selected.clamp(1, self.secondary.len().max(1));
+        // The zone list is what is on screen now, so a failure to write it has
+        // to be visible: the clock would silently be gone next launch.
+        self.zones.save_reporting();
+        // Forces a redraw even when the minute has not changed.
+        self.last_shown = None;
+    }
+
+    /// Deal with a keypress while the add-zone prompt is open.
+    fn handle_prompt_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = self.asking.as_mut() else {
+            return;
+        };
+        match prompt.handle_key(key) {
+            crate::prompt::Outcome::Editing => {}
+            crate::prompt::Outcome::Cancelled => self.asking = None,
+            crate::prompt::Outcome::Submitted(answer) => {
+                // `Label = Zone` if you want to name it, otherwise just the
+                // zone and the city out of it becomes the label.
+                let (label, timezone) = match answer.split_once('=') {
+                    Some((label, zone)) => (label.trim(), zone.trim()),
+                    None => ("", answer.trim()),
+                };
+                if resolve_zone(timezone).is_err() {
+                    prompt.reject(format!("unknown timezone `{timezone}`"));
+                    return;
+                }
+                if !self.zones.add(label, timezone) {
+                    prompt.reject("that clock is already on the panel");
+                    return;
+                }
+                self.asking = None;
+                self.reload();
+            }
         }
     }
 }
@@ -205,12 +284,46 @@ impl Panel for ClocksPanel {
         moved
     }
 
+    fn captures_input(&self) -> bool {
+        self.asking.is_some()
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        if matches!(key.code, KeyCode::Char('s')) {
-            self.show_seconds = !self.show_seconds;
+        if self.asking.is_some() {
+            self.handle_prompt_key(key);
             return KeyOutcome::Consumed;
         }
-        KeyOutcome::Ignored
+
+        self.status = None;
+        // The primary clock is index 0 and is not selectable, so the cursor
+        // lives in 1..=secondary.len().
+        let last = self.secondary.len();
+        match key.code {
+            KeyCode::Char('s') => self.show_seconds = !self.show_seconds,
+            KeyCode::Char('a') => {
+                self.asking = Some(crate::prompt::Prompt::new(
+                    "ADD A CLOCK",
+                    "Zone, or Label = Zone · Tab completes · Enter adds",
+                    "",
+                    crate::prompt::Completion::Names(crate::zones::COMMON),
+                ));
+            }
+            KeyCode::Char('d') => {
+                if self.zones.remove(self.selected) {
+                    self.reload();
+                } else {
+                    self.status = Some("the big clock stays".into());
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.selected = self.selected.saturating_add(1).min(last.max(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.selected = self.selected.saturating_sub(1).max(1);
+            }
+            _ => return KeyOutcome::Ignored,
+        }
+        KeyOutcome::Consumed
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {
@@ -225,6 +338,9 @@ impl Panel for ClocksPanel {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        // Kept before the area is carved up, so the prompt can be drawn across
+        // the whole panel at the end.
+        let whole = area;
 
         let now = jiff::Timestamp::now();
         let primary_zone = match &self.primary.zone {
@@ -368,7 +484,19 @@ impl Panel for ClocksPanel {
         let grid = Grid::new(COLUMNS, area.width);
         let mut lines = vec![grid.header(theme)];
 
-        for clock in &self.secondary {
+        for (index, clock) in self.secondary.iter().enumerate() {
+            // The cursor is over the zone list, whose first entry is zone 1.
+            let here = ctx.focused && index + 1 == self.selected;
+            // Marked by reversing the label rather than by a gutter arrow: the
+            // table has three columns and no room to spare, and reversing is
+            // what the picker already uses for the same idea.
+            let label = if here {
+                Style::default()
+                    .fg(theme.text)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(theme.text)
+            };
             match &clock.zone {
                 Ok(zone) => {
                     let zoned = now.to_zoned(zone.clone());
@@ -386,7 +514,7 @@ impl Panel for ClocksPanel {
                     };
 
                     lines.push(grid.row(&[
-                        Span::styled(clock.label.clone(), Style::default().fg(theme.text)),
+                        Span::styled(clock.label.clone(), label),
                         Span::styled(
                             format!("{}{day_marker}", zoned.strftime(&self.config.time_format)),
                             Style::default().fg(if day_marker.is_empty() {
@@ -399,7 +527,7 @@ impl Panel for ClocksPanel {
                     ]));
                 }
                 Err(message) => lines.push(grid.row(&[
-                    Span::styled(clock.label.clone(), Style::default().fg(theme.muted)),
+                    Span::styled(clock.label.clone(), label),
                     Span::styled(message.clone(), Style::default().fg(theme.error)),
                 ])),
             }
@@ -409,6 +537,24 @@ impl Panel for ClocksPanel {
             Paragraph::new(lines),
             Rect::new(area.x, cursor, area.width, remaining),
         );
+
+        // A failed write to the zone file has to be seen: the clock is on
+        // screen now and would silently be gone at the next launch.
+        if let Some(message) = self.status.as_ref().or(self.zones.last_error.as_ref())
+            && area.height > 0
+        {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    crate::grid::truncate(message, usize::from(area.width)),
+                    Style::default().fg(theme.error),
+                )),
+                Rect::new(area.x, area.y + area.height - 1, area.width, 1),
+            );
+        }
+
+        if let Some(prompt) = &self.asking {
+            prompt.render(frame, whole, theme);
+        }
     }
 }
 
@@ -418,11 +564,101 @@ mod tests {
     use crate::config::ClockZone;
     use jiff::tz::Offset;
 
+    /// A panel seeded from `config`, with its zone file pointed somewhere it
+    /// can never be written — tests must not touch a real user's clocks.
+    fn panel_from(config: ClocksConfig) -> ClocksPanel {
+        ClocksPanel::new(config, std::path::PathBuf::from("/nonexistent/zones.toml"))
+            .expect("builds from a seed")
+    }
+
     fn zone(label: &str, tz: &str) -> ClockZone {
         ClockZone {
             label: label.into(),
             timezone: tz.into(),
         }
+    }
+
+    fn press(panel: &mut ClocksPanel, code: KeyCode) {
+        panel.handle_key(KeyEvent::from(code));
+    }
+
+    fn labels(panel: &ClocksPanel) -> Vec<String> {
+        panel.secondary.iter().map(|c| c.label.clone()).collect()
+    }
+
+    /// Removing the last clock in the list used to leave the cursor one past
+    /// the end, where `d` did nothing at all and the panel looked wedged.
+    #[test]
+    fn the_cursor_stays_on_a_real_clock_after_a_removal() {
+        let mut panel = panel_from(ClocksConfig {
+            zones: vec![
+                zone("Home", "local"),
+                zone("UTC", "UTC"),
+                zone("Tokyo", "Asia/Tokyo"),
+            ],
+            ..ClocksConfig::default()
+        });
+
+        // Move to the last secondary clock and remove it.
+        press(&mut panel, KeyCode::Down);
+        assert_eq!(panel.selected, 2);
+        press(&mut panel, KeyCode::Char('d'));
+        assert_eq!(labels(&panel), ["UTC"], "Tokyo is gone");
+
+        // The cursor must now be on UTC, not past it, so `d` works again.
+        assert_eq!(panel.selected, 1);
+        press(&mut panel, KeyCode::Char('d'));
+        assert!(labels(&panel).is_empty(), "and UTC goes too");
+    }
+
+    /// The primary is index 0 and never selectable, so the last `d` on an
+    /// empty list has to say why nothing happened rather than look broken.
+    #[test]
+    fn the_big_clock_survives_and_says_so() {
+        let mut panel = panel_from(ClocksConfig {
+            zones: vec![zone("Home", "local")],
+            ..ClocksConfig::default()
+        });
+        press(&mut panel, KeyCode::Char('d'));
+        assert_eq!(panel.primary.label, "Home", "still there");
+        assert!(panel.status.is_some(), "and the panel says why");
+    }
+
+    #[test]
+    fn a_zone_that_does_not_resolve_is_refused_with_the_prompt_left_open() {
+        let mut panel = panel_from(ClocksConfig::default());
+        press(&mut panel, KeyCode::Char('a'));
+        for c in "Mars/Olympus".chars() {
+            panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        let before = labels(&panel);
+        press(&mut panel, KeyCode::Enter);
+
+        assert!(panel.asking.is_some(), "the prompt stays open to be fixed");
+        assert_eq!(labels(&panel), before, "and nothing was added");
+    }
+
+    /// `Label = Zone` names the clock; a bare zone takes the city out of it.
+    #[test]
+    fn a_clock_can_be_added_with_or_without_a_label() {
+        let mut panel = panel_from(ClocksConfig {
+            zones: vec![zone("Home", "local")],
+            ..ClocksConfig::default()
+        });
+
+        press(&mut panel, KeyCode::Char('a'));
+        for c in "Asia/Kolkata".chars() {
+            panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        press(&mut panel, KeyCode::Enter);
+        assert_eq!(labels(&panel), ["Kolkata"], "named after its city");
+
+        press(&mut panel, KeyCode::Char('a'));
+        for c in "HQ = Europe/Berlin".chars() {
+            panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        press(&mut panel, KeyCode::Enter);
+        assert_eq!(labels(&panel), ["Kolkata", "HQ"], "or named by you");
     }
 
     #[test]
@@ -478,7 +714,7 @@ mod tests {
 
     #[test]
     fn the_first_zone_becomes_the_large_clock() {
-        let panel = ClocksPanel::new(ClocksConfig {
+        let panel = panel_from(ClocksConfig {
             zones: vec![zone("Home", "UTC"), zone("Tokyo", "Asia/Tokyo")],
             ..Default::default()
         });
@@ -489,7 +725,7 @@ mod tests {
 
     #[test]
     fn an_empty_zone_list_still_shows_local_time() {
-        let panel = ClocksPanel::new(ClocksConfig {
+        let panel = panel_from(ClocksConfig {
             zones: Vec::new(),
             ..Default::default()
         });
@@ -499,7 +735,7 @@ mod tests {
 
     #[test]
     fn a_label_falls_back_to_the_zone_name() {
-        let panel = ClocksPanel::new(ClocksConfig {
+        let panel = panel_from(ClocksConfig {
             zones: vec![zone("", "UTC"), zone("", "Asia/Tokyo")],
             ..Default::default()
         });
@@ -509,7 +745,7 @@ mod tests {
 
     #[test]
     fn s_toggles_seconds_and_is_consumed() {
-        let mut panel = ClocksPanel::new(ClocksConfig::default());
+        let mut panel = panel_from(ClocksConfig::default());
         let before = panel.show_seconds;
         let outcome = panel.handle_key(KeyEvent::new(
             KeyCode::Char('s'),
@@ -521,7 +757,7 @@ mod tests {
 
     #[test]
     fn other_keys_fall_through_to_the_application() {
-        let mut panel = ClocksPanel::new(ClocksConfig::default());
+        let mut panel = panel_from(ClocksConfig::default());
         let outcome = panel.handle_key(KeyEvent::new(
             KeyCode::Tab,
             ratatui::crossterm::event::KeyModifiers::NONE,
