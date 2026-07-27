@@ -29,7 +29,7 @@ hooks, calm by default so that *not* calm is legible at a glance.
 ## Commands
 
 ```sh
-cargo test                                    # 343 tests, all fast, no network
+cargo test                                    # all fast, no network, no fixtures
 cargo clippy --all-targets -- -D warnings     # must be silent
 cargo fmt --all -- --check                    # must be silent
 RUSTDOCFLAGS="-D warnings" \
@@ -111,13 +111,19 @@ grid.rs      shared column grid with named headers
 chart.rs     braille graphs + baked colour gradients
 glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
-config.rs    TOML config, validation, default file
+config/      mod.rs: paths, loading, validation; widgets.rs: one settings
+             struct per panel; layout.rs: the grid
+picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 migrate.rs   textual in-place upgrade of configs written by older versions
 layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
+store.rs     write_atomic — every file mirador owns goes through it
 state.rs     UI-changed preferences, remembered across restarts
-task.rs      task model + atomic TOML store
-note.rs      note model + atomic TOML store
+task.rs      task model + TOML store
+note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
+poll.rs      the sliced sleep the two fetch threads share
+samples.rs   the bounded history behind the cpu and network graphs
+selection.rs list cursor movement and click-to-row
 textfield.rs single-line text editor used by task entry
 textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
@@ -130,9 +136,11 @@ widgets/     clocks, weather, todo, notes, stocks, calendar, pomodoro, cpu,
 the same thing — a scroll wheel must move the list it is aimed at without
 yanking the keyboard away from what the user was typing in.
 
-Adding a widget: implement `Panel`, add a config struct, add the name to
-`WIDGET_NAMES` and an arm to `build()` in `widgets/mod.rs`, document it in
-`assets/default_config.toml` and the README. Nothing else needs to know.
+Adding a widget: implement `Panel`, add a config struct to `config/widgets.rs`,
+add the name to `WIDGET_NAMES` and an arm to `build()` in `widgets/mod.rs`,
+document it in `assets/default_config.toml` and the README. Nothing else needs
+to know. `CONTRIBUTING.md` has the same list with more detail — this one is the
+map, that one is the procedure.
 
 ## Invariants — do not break these
 
@@ -189,7 +197,7 @@ Adding a widget: implement `Panel`, add a config struct, add the name to
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all ~145 of them, including the ones mirador
+    trip through `toml` discards all 159 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -401,8 +409,8 @@ inline `[theme]` table from a `theme = "name"` string).
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`0.1.0` is released**, on crates.io and as a GitHub release with binaries
-  for macOS arm64, macOS x86-64 and Linux x86-64. `0.0.0` is still on
+- **`0.4.0` is released**, on crates.io and as a GitHub release with binaries
+  for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. `0.0.0` is still on
   crates.io below it — the name reservation that went out first, since
   reservation is first-come with no reclamation.
 

@@ -90,7 +90,7 @@ much they could cost someone.
 - **Layout changes are written back into your config**, reversing an earlier
   decision to keep them out of it. The rule was never really "do not write to
   the config" — it was "do not *reserialise* it", because a round trip through
-  `toml` discards every comment in the file, including the ~145 mirador wrote to
+  `toml` discards every comment in the file, including the 159 mirador wrote to
   explain its own options. `--migrate-config` had already established the
   alternative: edit the lines that need editing and leave the rest alone.
 

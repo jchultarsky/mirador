@@ -238,7 +238,7 @@ and leaves a backup beside the original.
 
 ## The panels
 
-Eight widgets, each answering one question. Put the ones you want in the
+Nine widgets, each answering one question. Put the ones you want in the
 layout and drop the rest — an unused widget costs nothing but is also not
 built.
 

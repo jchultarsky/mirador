@@ -6,12 +6,10 @@
 //! recording it anywhere else would leave the file describing a dashboard
 //! nobody is looking at.
 //!
-//! Rewriting is **textual**, for the reason [`crate::migrate`] gives at
-//! length: a parse-and-reserialise round trip through `toml` discards every
-//! comment in the file, including the two hundred lines mirador itself wrote to
-//! explain the options. Lines are edited, inserted and deleted in place;
-//! everything else — spacing, ordering, comments, even a comment *inside* the
-//! layout block — is left exactly as the user left it.
+//! Rewriting is **textual**, for the reason [`crate::migrate`] gives at length
+//! and does not need repeating here. Lines are edited, inserted and deleted in
+//! place; everything else — spacing, ordering, comments, even a comment
+//! *inside* the layout block — is left exactly as the user left it.
 //!
 //! The safety property that makes this defensible is at the bottom of
 //! [`apply`]: the edited text is parsed before it is returned, and the layout it
@@ -480,5 +478,27 @@ units = "imperial"
 
         let without = SAMPLE.trim_end_matches('\n');
         assert!(!apply(without, &desired).unwrap().ends_with('\n'));
+    }
+
+    /// The comment count is the whole justification for this module, and it is
+    /// quoted in two places that no compiler checks: `CLAUDE.md` invariant 16
+    /// and the 0.4.0 changelog entry. It had already drifted into "~145" in
+    /// both, and "two hundred" in a third citation since removed.
+    ///
+    /// A failure here is not a bug in the config. It means the number moved and
+    /// the citations have to move with it.
+    #[test]
+    fn the_comment_count_the_docs_quote_is_the_one_in_the_file() {
+        const CITED: usize = 159;
+        let actual = crate::config::DEFAULT_CONFIG
+            .lines()
+            .filter(|line| line.trim_start().starts_with('#'))
+            .count();
+        assert_eq!(
+            actual, CITED,
+            "the default config now has {actual} comment lines. Update this \
+             constant, `CLAUDE.md` invariant 16 and the 0.4.0 changelog entry \
+             — they all quote {CITED}."
+        );
     }
 }
