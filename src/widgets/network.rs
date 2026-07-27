@@ -32,6 +32,14 @@ pub struct NetworkPanel {
     tx_rate: u64,
     rx_total: u64,
     tx_total: u64,
+    /// The since-boot counters as they read at the first sample.
+    ///
+    /// `sysinfo`'s `total_received` counts from boot, not from when the
+    /// `Networks` list was built, so the panel's "session" line was reporting
+    /// the machine's whole uptime. On a host up for three weeks it read 128 GB
+    /// within a minute of launch. Subtracting the first reading makes the label
+    /// true; `None` until that first sample lands.
+    since_boot: Option<(u64, u64)>,
     last_sample: Instant,
     /// False until the second sample, since the first has no delta to compare.
     primed: bool,
@@ -63,6 +71,7 @@ impl NetworkPanel {
             graph_cells: 0,
             rx_total: 0,
             tx_total: 0,
+            since_boot: None,
             last_sample: Instant::now(),
             primed: false,
         }
@@ -109,8 +118,12 @@ impl NetworkPanel {
         let seconds = elapsed.as_secs_f64().max(0.001);
         self.rx_rate = (rx_delta as f64 / seconds) as u64;
         self.tx_rate = (tx_delta as f64 / seconds) as u64;
-        self.rx_total = rx_total;
-        self.tx_total = tx_total;
+        let (rx_base, tx_base) = *self.since_boot.get_or_insert((rx_total, tx_total));
+        // Saturating: an interface disappearing takes its counter with it, so
+        // the sum can fall below the baseline. Zero is the honest answer then,
+        // not a number wrapped around u64.
+        self.rx_total = rx_total.saturating_sub(rx_base);
+        self.tx_total = tx_total.saturating_sub(tx_base);
         self.last_sample = Instant::now();
 
         // The first refresh after construction reports the counters since the
