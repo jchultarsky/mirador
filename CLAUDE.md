@@ -430,15 +430,22 @@ open work is how the list stops being read.
     weather and stocks panels spent a fetch cycle showing "loading" afterwards.
     `rebuild_panels` carries panels across now, so neither happens.
 
-- **The README's images float; its prose does not.** `docs/screenshot.png` is
+- **The README's images float; its prose does not.** `docs/demo.gif` is
   referenced by absolute `raw.githubusercontent.com/.../main/...` URL, because
-  `Cargo.toml` excludes `/docs` and `*.png` and a relative path would render on
-  GitHub and 404 on crates.io. The consequence is easy to miss: replacing the
-  capture updates it on *every* published version at once, while the caption
-  and alt text around it stay frozen at whatever each release baked in. 0.3.0
-  spent an hour showing the pomodoro panel above a caption explaining that the
-  shot predated it. A caption that describes the picture has to ship in the
-  same release as the picture.
+  `Cargo.toml` excludes `/docs`, `*.gif` and `*.png`, and a relative path would
+  render on GitHub and 404 on crates.io. The consequence is easy to miss:
+  replacing the capture updates it on *every* published version at once, while
+  the caption and alt text around it stay frozen at whatever each release baked
+  in. 0.3.0 spent an hour showing the pomodoro panel above a caption explaining
+  that the shot predated it. A caption that describes the picture has to ship in
+  the same release as the picture.
+
+  **`docs/screenshot.png` is no longer in the README and must not be deleted.**
+  0.1.0 through 0.5.1 all shipped a README pointing at that URL, and those
+  READMEs are frozen on crates.io. Removing the file would break the image on
+  six published pages that nobody can edit. It costs nothing to keep — `/docs`
+  never reaches the crate — so it stays as an asset the past still needs. The
+  same will be true of `demo.gif` the day something replaces it.
 
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
