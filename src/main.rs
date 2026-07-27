@@ -9,6 +9,7 @@ mod dateinput;
 mod frame;
 mod glyphs;
 mod grid;
+mod ical;
 mod layout_edit;
 mod migrate;
 mod note;

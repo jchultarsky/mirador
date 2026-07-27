@@ -259,7 +259,7 @@ and leaves a backup beside the original.
 
 ## The panels
 
-Nine widgets, each answering one question. Put the ones you want in the
+Ten widgets, each answering one question. Put the ones you want in the
 layout and drop the rest — an unused widget costs nothing but is also not
 built.
 
@@ -364,6 +364,47 @@ A watchlist with the last price, the day's change, and an intraday sparkline.
 `a` adds a symbol and `d` removes one, and those edits stick — the watchlist
 is a data file rather than config, which is what lets the panel own it. See
 [Market data](#market-data) before filing a bug about HTTP 429.
+
+### Agenda
+
+What is actually next, read from an `.ics` file on your disk.
+
+```
+╭┤5 Agenda├──────────────────────────────┤2 today├╮
+│ TODAY                                           │
+│   09:15  Standup  ·  Zoom                       │
+│ ▸ 14:00  Quarterly planning  ·  Room 12         │
+│ TOMORROW                                        │
+│   all day Public holiday                        │
+│ THURSDAY 30 Jul                                 │
+│   09:00  Call with London                       │
+╰─────────────────── r reload ────────────────────╯
+```
+
+The `▸` marks an event happening now. Days are headed `TODAY` and `TOMORROW`
+where that is clearer than a date, and an event you are already in stays on
+screen until it ends — the meeting you are late for is the one you most want to
+see.
+
+**mirador does not sign in to anything.** No account, no token to refresh, no
+background process holding your credentials. Point `[agenda].file` at a calendar
+you already have; whatever keeps that file current is your business — an export,
+a `vdirsyncer` run, a cron job with `curl`, a symlink into a synced folder. It
+is re-read on a timer and when you press `r`.
+
+Until you set `file`, the panel says so and names the path it looked at. Nothing
+creates that file: unlike the task list, an empty calendar mirador invented
+would be a lie about your day.
+
+Recurring events are expanded for the rules people actually have — daily, weekly
+with `BYDAY`, monthly and yearly, with `INTERVAL`, `COUNT`, `UNTIL` and
+`EXDATE`. A rule using anything more elaborate, such as `BYSETPOS` or an ordinal
+`BYDAY` like `1MO`, shows **only its first occurrence** rather than guessing.
+That is deliberate: a calendar that invents a meeting costs you a wasted trip,
+where one that misses a repeat costs you a glance at the real thing.
+
+An entry the parser cannot read is counted at the bottom of the panel rather
+than dropped silently, so a half-read calendar does not just look empty.
 
 ### Pomodoro
 
@@ -513,6 +554,7 @@ rows = [
 | `notes` | Free-form notes: a list of titles and dates above the note you are reading |
 | `stocks` | A watchlist: last price, the day's change, and an intraday sparkline |
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
+| `agenda` | What is next, from a local `.ics` file |
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |

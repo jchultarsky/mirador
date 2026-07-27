@@ -45,8 +45,8 @@ mod widgets;
 pub use layout::{Layout, LayoutPanel, LayoutRow};
 #[allow(unused_imports)]
 pub use widgets::{
-    CalendarConfig, ClockZone, ClocksConfig, CpuConfig, NetworkConfig, NotesConfig, PomodoroConfig,
-    StocksConfig, TodoConfig, WeatherConfig,
+    AgendaConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig, NetworkConfig, NotesConfig,
+    PomodoroConfig, StocksConfig, TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -61,6 +61,7 @@ pub struct Config {
     pub todo: TodoConfig,
     pub notes: NotesConfig,
     pub stocks: StocksConfig,
+    pub agenda: AgendaConfig,
     pub calendar: CalendarConfig,
     pub pomodoro: PomodoroConfig,
     pub cpu: CpuConfig,
@@ -237,6 +238,19 @@ impl Config {
         match &self.notes.file {
             Some(p) => Ok(expand_tilde(p)),
             None => Ok(Self::default_data_dir()?.join("notes.toml")),
+        }
+    }
+
+    /// Resolve the agenda's `.ics` path, expanding a leading `~`.
+    ///
+    /// Falls back to `calendar.ics` beside the task and note files. Nothing
+    /// creates it — unlike those two, an empty calendar seeded by mirador would
+    /// be a lie about your day. The panel says which path it looked at, so an
+    /// unset `file` reads as a thing to configure rather than as a fault.
+    pub fn agenda_path(&self) -> Result<PathBuf> {
+        match &self.agenda.file {
+            Some(p) => Ok(expand_tilde(p)),
+            None => Ok(Self::default_data_dir()?.join("calendar.ics")),
         }
     }
 

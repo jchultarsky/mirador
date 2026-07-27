@@ -192,6 +192,38 @@ impl Default for NotesConfig {
     }
 }
 
+/// Agenda settings: what is next, from a local `.ics` file.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgendaConfig {
+    /// The `.ics` file to read. `~` is expanded.
+    ///
+    /// No default that guesses at a path. An agenda pointing somewhere the user
+    /// did not choose is either empty, which looks broken, or somebody else's.
+    pub file: Option<PathBuf>,
+    /// How many days ahead to show. A floor on the window rather than a cap on
+    /// the panel — a taller panel simply scrolls less.
+    pub days: u16,
+    /// Show a location beside the summary, when the row has room for both.
+    pub show_location: bool,
+    /// Seconds between re-reads of the file.
+    pub refresh_secs: u64,
+}
+
+impl Default for AgendaConfig {
+    fn default() -> Self {
+        Self {
+            file: None,
+            days: 7,
+            show_location: true,
+            // A local file, so this can be brisk: an export refreshed by cron
+            // should appear without the user pressing anything, and a minute is
+            // the granularity a calendar changes at anyway.
+            refresh_secs: 60,
+        }
+    }
+}
+
 /// Calendar settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

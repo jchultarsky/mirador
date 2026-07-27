@@ -127,8 +127,9 @@ selection.rs list cursor movement and click-to-row
 textfield.rs single-line text editor used by task entry
 textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
-widgets/     clocks, weather, todo, notes, stocks, calendar, pomodoro, cpu,
-             network
+ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
+widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
+             pomodoro, cpu, network
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -197,7 +198,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 167 of them, including the ones mirador
+    trip through `toml` discards all 193 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -395,9 +396,12 @@ open work is how the list stops being read.
    rather than a persistence one.
 2. **Named themes**, per the section above. The `[theme]` table is built; the
    `theme = "nord"` layer over it is not.
-3. **Calendar reading a local `.ics`.** The shipped `calendar` widget is a date
-   grid only, deliberately offline; events are a separate and much larger panel.
-4. **"What changed since I last looked" markers.**
+3. **"What changed since I last looked" markers.**
+4. **A single "is anything on fire" signal.** Named as a gap alongside the other
+   two and then quietly dropped from this list; it is back.
+
+The `.ics` agenda that sat at the top of this list is built — `ical.rs` and
+`widgets/agenda.rs`.
 
 ## Housekeeping
 

@@ -47,12 +47,15 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 42, panels = [
-    { widget = "todo",     width = 48 },
-    { widget = "notes",    width = 30 },
+    { widget = "todo",     width = 36 },
+    # What is next, from [agenda].file. Shows how to point it at your .ics
+    # until you do.
+    { widget = "agenda",   width = 28 },
+    { widget = "notes",    width = 22 },
     # The timer draws block numerals when it has the width for them and falls
     # back to plain text when it does not, so a narrow terminal loses the
     # spectacle rather than the time.
-    { widget = "pomodoro", width = 22 },
+    { widget = "pomodoro", width = 14 },
   ] },
   { height = 24, panels = [
     { widget = "stocks",  width = 40 },
@@ -218,6 +221,35 @@ show_sparkline = true
 [calendar]
 months      = 2          # months across; more stack when there is height
 week_starts = "sunday"   # sunday | monday
+
+# ---------------------------------------------------------------------------
+# Agenda
+#
+# What is next, read from an .ics file on your disk. mirador does not sign in
+# to a calendar server and is not going to: that means an account, a token to
+# refresh, and a background process with opinions about your credentials.
+#
+# Point `file` at a calendar you already have. Whatever keeps it up to date is
+# your business — an export, a vdirsyncer run, a cron job with curl, a symlink
+# into a folder something else syncs. The file is re-read on a timer and when
+# you press `r`, so anything that rewrites it shows up on its own.
+#
+# Until `file` is set the panel says so and names the path it looked at, which
+# is `calendar.ics` beside your tasks and notes. Nothing creates that file:
+# unlike the task list, an empty calendar mirador invented would be a lie
+# about your day.
+#
+# Recurring events are expanded for the common rules — daily, weekly with
+# BYDAY, monthly and yearly, with INTERVAL, COUNT, UNTIL and EXDATE. A rule
+# using anything more elaborate shows only its first occurrence rather than
+# guessing, because a calendar that invents a meeting is worse than one that
+# misses a repeat.
+# ---------------------------------------------------------------------------
+[agenda]
+# file        = "~/calendar.ics"
+days          = 7        # how far ahead to look
+show_location = true     # show the location when the row has room for both
+refresh_secs  = 60       # how often to re-read the file
 
 # ---------------------------------------------------------------------------
 # Pomodoro
