@@ -1318,13 +1318,31 @@ impl App {
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )];
+            // Which arrow moves along the row and which moves between rows is
+            // self-evident the moment you press one, because the panels move.
+            // What is *not* evident is that there is a row past the last one,
+            // so the width saved by collapsing the first two entries into
+            // "move" is spent saying so. Someone had to ask.
+            //
+            // Ordered so that the two that matter most survive a narrow
+            // terminal: knowing how to get out of a mode beats knowing every
+            // trick inside it.
+            let mut used = crate::grid::display_width(" ARRANGE");
             for (key, action) in [
-                ("←→", "move in row"),
-                ("↑↓", "move rows"),
-                ("Ctrl+arrows", "resize"),
+                ("←→↑↓", "move"),
                 ("Enter", "keep"),
                 ("Esc", "cancel"),
+                ("Ctrl+arrows", "resize"),
+                ("↑↓ at the edge", "opens a new row"),
             ] {
+                // Dropped whole rather than clipped: half a hint reads as a
+                // rendering fault, where a missing one just reads as a narrow
+                // terminal.
+                let width = 3 + crate::grid::display_width(key) + 1 + action.len();
+                if used + width > usize::from(area.width) {
+                    break;
+                }
+                used += width;
                 spans.push(Span::styled("   ", muted));
                 spans.push(Span::styled(key, key_style));
                 spans.push(Span::styled(format!(" {action}"), muted));
@@ -1626,6 +1644,21 @@ mod tests {
         }
     }
 
+    /// The status bar as drawn at `width`, with styling dropped.
+    fn status_bar_at(app: &mut App, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("backend");
+        terminal
+            .draw(|frame| app.render_status_bar(frame, Rect::new(0, 0, width, 1)))
+            .expect("draws");
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
     fn widths(app: &App) -> Vec<u16> {
         app.config.layout.rows[0]
             .panels
@@ -1723,6 +1756,42 @@ mod tests {
     /// reason the resize keys are claimed: the calendar binds plain arrows and
     /// does not inspect modifiers, so a left arrow meant to move a panel would
     /// scroll a month instead.
+    /// The mode has to say that there is a row past the last one. Someone read
+    /// `↑↓ move rows`, took it to mean "move between the rows that exist", and
+    /// asked how to make a new one — which the mode had done all along.
+    #[test]
+    fn the_arrange_legend_says_a_row_can_be_opened() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+
+        let bar = status_bar_at(&mut app, 110);
+        assert!(bar.contains("ARRANGE"), "the mode names itself: {bar}");
+        assert!(
+            bar.contains("opens a new row"),
+            "and says rows can be opened: {bar}"
+        );
+    }
+
+    /// A terminal too narrow for every hint keeps the ones that get you out.
+    /// Half a hint reads as a rendering fault; a missing one reads as a narrow
+    /// terminal, which is what it is.
+    #[test]
+    fn a_narrow_arrange_legend_drops_whole_hints_and_keeps_the_way_out() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+
+        for width in 40..110u16 {
+            let bar = status_bar_at(&mut app, width);
+            assert!(
+                crate::grid::display_width(bar.trim_end()) <= usize::from(width),
+                "the bar overflowed at {width}: {bar}"
+            );
+            if width >= 46 {
+                assert!(bar.contains("Esc cancel"), "no way out at {width}: {bar}");
+            }
+        }
+    }
+
     #[test]
     fn arrange_claims_the_arrows_the_focused_panel_would_otherwise_take() {
         let mut app = App::new(resizable()).expect("builds");

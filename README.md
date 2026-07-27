@@ -541,9 +541,20 @@ rather than a cap on what a wider panel can draw.
 
 Press `m`, then move the focused panel with the arrow keys. `←` and `→` swap it
 with its neighbour; `↑` and `↓` move it between rows, landing it under wherever
-it already was rather than at the same index. Push it past the top or bottom
-edge and it gets a row of its own — which is how you end up with four rows
-without opening an editor. The last panel out of a row closes that row.
+it already was rather than at the same index.
+
+**Rows are managed through the panels, not separately.** There is no "add row"
+command because there is nothing useful an empty row could do:
+
+- **To open a row**, push a panel past the top or bottom edge. Hold `↑` and the
+  panel climbs through the rows; press it once more from the top row and the
+  panel takes a row of its own. The height comes out of the row it left, so
+  nothing else on screen resizes.
+- **To close one**, move its last panel into a neighbour. The row closes behind
+  it and hands its height to the row that took the panel.
+
+A panel that already has a row to itself will not take another, so holding `↑`
+at the edge stops rather than spawning a row per keypress.
 
 The panels themselves move as you press, so what you see is what you will get.
 `Enter` keeps the arrangement and `Esc` puts everything back exactly as it was.
