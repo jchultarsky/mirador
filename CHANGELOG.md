@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two mirador windows no longer take each other's saves away.** Every writer
+  of a file used the same `.tmp` name, so whoever renamed second found it gone.
+  Measured with eight concurrent writers: **2,100 of 2,400 saves failed** — and
+  a failed save is reported, so the second window filled with "could not be
+  saved" for no reason. Temporary names are now unique per write.
+
+- **A file you restricted stays restricted.** A save replaces the file, and the
+  replacement was created per the umask — so `chmod 600` on your tasks was
+  silently widened to world-readable the next time you added one.
+
+- **An untouched dashboard no longer writes to its state file.** `[agenda].file`
+  ships commented out, so the baseline was empty while the panel reported a
+  resolved path; one keystroke anywhere pinned that path into `state.toml`,
+  after which setting `[agenda].file` in the config did nothing, because the
+  state file outranks it. That is the failure invariant 17 exists to prevent,
+  reached by a new route.
+
 - **The agenda cloned its whole event list three more times per frame.** Once in
   `render`, once in `counter` — which the frame renderer calls on *every* frame
   with nothing guarding it — and twice more in key handlers that cloned the list
