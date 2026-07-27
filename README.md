@@ -530,9 +530,13 @@ Almost nothing qualifies, and that is the point. The clock, the readings, the
 prices and the graphs change continuously and none of it is news; your notes and
 tasks change because you changed them. An entry is something that happened *to*
 you rather than because of you, and that you would want to know even if you
-never looked at the panel it came from. Out of the box that means two things: an
-event appearing in your `.ics` that you did not put there, and a task crossing
-into overdue because the day turned.
+never looked at the panel it came from. Out of the box that means three things:
+the day turning, a task crossing into overdue because of it, and an event
+appearing in your `.ics` that you did not put there.
+
+The day turning is the one that always happens, which is more useful than it
+sounds — it is the divider that tells you where one day's entries end, and it
+means the panel has something to say even before you point it at a calendar.
 
 **It has no counter, no unread state, and no effect on any other panel.** Unread
 message counts were considered for this dashboard and rejected — a number that

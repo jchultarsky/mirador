@@ -171,17 +171,20 @@ impl Panel for WatchLogPanel {
             };
             explain(
                 &mut lines,
-                "Watching for things you did not do yourself: a task falling \
-                 overdue, an entry appearing in your calendar.",
+                "Watching for things you did not do yourself: the day turning, \
+                 a task falling overdue, an entry appearing in your calendar.",
                 theme.muted,
             );
             if !self.watching_calendar {
                 lines.push(Line::from(""));
+                // Milder than it was, and correctly so: the day always turns,
+                // so the panel is no longer inert without a calendar — it is
+                // merely watching one thing fewer.
                 explain(
                     &mut lines,
-                    "No calendar set, so only the first can happen. Press f on \
-                     the agenda panel.",
-                    theme.warning,
+                    "No calendar set, so that last one cannot happen. Press f \
+                     on the agenda panel to add one.",
+                    theme.muted,
                 );
             }
             frame.render_widget(Paragraph::new(lines), area);

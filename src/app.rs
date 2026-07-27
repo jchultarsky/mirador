@@ -278,6 +278,13 @@ pub struct App {
     /// changes. Events would be lost every time, and a log that forgets when
     /// you rearrange the dashboard is not a log.
     watch: crate::watch::WatchLog,
+    /// The day the watch log last saw.
+    ///
+    /// Held here rather than in a panel because the day turning is not any
+    /// panel's business — the todo panel happens to notice it too, but a
+    /// dashboard whose day-divider disappears when you switch off the task
+    /// list would be a strange thing.
+    today: jiff::civil::Date,
     /// The panel picker, while it is open.
     picker: Option<crate::picker::Picker>,
     /// The layout as it stood when arrange mode opened, kept so that `Esc` can
@@ -347,6 +354,7 @@ impl App {
             show_update_hint: true,
             unused_widgets,
             watch: crate::watch::WatchLog::default(),
+            today: jiff::Zoned::now().date(),
             picker: None,
             arranging: None,
             config_path: None,
@@ -657,6 +665,22 @@ impl App {
     /// report unconditionally than to ask whether it is placed.
     fn collect_events(&mut self) -> bool {
         let mut recorded = false;
+
+        // The day turning is the one thing in here that always happens, which
+        // matters more than it sounds: with a calendar unconfigured and no task
+        // falling due, every other source can go quiet for days and leave the
+        // panel looking broken. It is also the most useful divider a log of
+        // "what changed while I was away" can have.
+        let today = jiff::Zoned::now().date();
+        if today != self.today {
+            self.today = today;
+            self.watch.push(crate::watch::Event::new(
+                "clock",
+                format!("{} began", today.strftime("%A %-d %B")),
+            ));
+            recorded = true;
+        }
+
         for slot in &mut self.slots {
             for event in slot.panel.events() {
                 self.watch.push(event);
@@ -1853,6 +1877,32 @@ mod tests {
                 assert!(bar.contains("Esc cancel"), "no way out at {width}: {bar}");
             }
         }
+    }
+
+    /// The day turning is the one source that always fires, which is what
+    /// stops the watch log looking broken on a dashboard with no calendar and
+    /// nothing falling due. It lives in the shell rather than a panel so that
+    /// switching off the task list cannot take it away.
+    #[test]
+    fn the_day_turning_is_recorded_whatever_panels_are_placed() {
+        // Only a clock: neither of the panels that report events is here.
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        assert!(app.watch.entries().next().is_none(), "nothing yet");
+
+        // Wind the remembered day back, which is what a night does.
+        app.today = app.today.yesterday().expect("a day before today exists");
+        assert!(app.collect_events(), "the rollover is worth a redraw");
+
+        let entry = app.watch.entries().next().expect("an entry was recorded");
+        assert!(
+            entry.text.ends_with("began"),
+            "reads as a day divider: {}",
+            entry.text
+        );
+
+        // And only once — a second pass on the same day adds nothing.
+        assert!(!app.collect_events(), "the same day is not news twice");
+        assert_eq!(app.watch.entries().count(), 1);
     }
 
     #[test]

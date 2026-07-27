@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you. Headlines only — feed summaries are article prose belonging to whoever
   wrote them.
 
+- **The watch log records the day turning.** It is the one source that always
+  fires, so the panel has something to say before you point it at a calendar,
+  and it doubles as the divider marking where one day's entries end. Recorded by
+  the shell rather than a panel: the todo panel notices a rollover too, but a
+  day-divider that vanishes when you switch off the task list would be odd.
+
 - **An empty watch log says what it is watching.** It had no refresh key —
   nothing there is polled, the panels report to it — and "Nothing has happened"
   on its own gave a reader no way to tell working from dead. It now names the
