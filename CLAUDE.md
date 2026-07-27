@@ -466,6 +466,17 @@ The `.ics` agenda that sat at the top of this list is built — `ical.rs` and
   Cargo.toml is refused. The workflow does **not** publish to crates.io — that
   step stays manual and comes after the tag.
 
+  **`main` is protected, so "commit" there means *merged*, not committed
+  locally.** The version bump reaches `main` through a PR like anything else,
+  and the tag belongs on the squashed commit that lands. Tagging the local
+  commit first appears to work — the tag pushes, the workflow runs, the
+  artifacts are correct — and then the squash orphans the commit underneath
+  it, so `git describe` on `main` cannot see the release. 0.8.0 is tagged that
+  way and was deliberately left alone: the trees are byte-identical, and
+  force-moving a tag re-triggers the release workflow against a release that
+  already exists, which is a worse problem than the wart it fixes. Merge
+  first, then tag.
+
   **Every artifact carries a GitHub provenance attestation**, via
   `github-attestations = true`. Verified working at 0.5.0 for both an archive
   and a `-update` binary, both tracing to
