@@ -548,6 +548,71 @@ change the user had watched happen.
 deliberate: each picker change is one keystroke to undo, an arrangement is not.
 The mode's legend names both keys, so there is nothing to guess.
 
+## The road to 1.0.0
+
+1.0 is not "everything is built" — that was true at 0.14.0. It is a promise, and
+the promise has three parts: **your config keeps working, your data files keep
+working, and there are no known crashes or hangs.** Everything below exists to
+earn one of those three.
+
+Ship 0.x releases freely along the way. A version number is cheap; the 1.0 one
+is not, because it is the one people quote back at you.
+
+### Phase 1 — finish the adversarial review
+
+One pass covered the code written on 27 July and found a hang and two per-frame
+allocation faults. The rest of the program has not had the same treatment.
+
+Not yet reviewed: `layout_edit` (the structural path especially), `themes`,
+`prompt`/`textfield`/`textarea`, `arrange`, `ical`, `quote`, `migrate`, `state`,
+`store`, `chart`, `samples`, `selection`, `glyphs`.
+
+*Exit:* every module reviewed, findings fixed or recorded with a reason.
+
+### Phase 2 — harden the untrusted-input boundary
+
+Five things consume input nobody here controls: `ical` (your `.ics`), `feed`
+(third-party RSS), `layout_edit` and `themes` (hand-edited TOML), and
+`grid::wrap` — which is where the hang was, fed by third-party headlines.
+
+That is not a coincidence and it is the strongest signal from the review: the
+one hang found was at exactly this boundary, in the one function that loops over
+attacker-influenced text. Property tests over generated input are the cheap
+version and want no new tooling; a fuzz target is the thorough one and wants
+nightly.
+
+*Exit:* no arbitrary input to any of the five produces a panic, a hang, or
+unbounded memory.
+
+### Phase 3 — soak
+
+Nothing here has run for a day. This phase cannot be done by an agent in a
+headless tmux and needs a person with a real terminal:
+
+- **Terminal focus reporting** — never verified at all. The watch log's rule
+  line falls back to the last keypress until somebody confirms it, and tmux
+  needs `focus-events on`.
+- **A real midnight** — the day-rollover entry has only met a test that winds
+  the date back.
+- **A full day idle**, watching memory and CPU.
+- **Windows**, which has been started exactly once.
+
+*Exit:* the list of unverified behaviour is empty.
+
+### Phase 4 — freeze the formats and say so
+
+1.0 means a config written today opens in 1.9. That needs an audit rather than
+an assumption: every key in `assets/default_config.toml` reachable and
+documented, every data file (`todos.toml`, notes, `watchlist.toml`,
+`zones.toml`, `state.toml`, `update-check.toml`) either forward-compatible or
+migrated, and `migrate.rs` covering every rename ever shipped.
+
+*Exit:* a compatibility statement in the README that is true.
+
+### Phase 5 — cut 1.0.0
+
+When phases 1–4 are done, and not because a date arrived.
+
 ## Feature freeze
 
 **New features are frozen ahead of 1.0.0.** Bug fixes, documentation and tests
