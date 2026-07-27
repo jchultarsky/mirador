@@ -491,7 +491,7 @@ units = "imperial"
     /// `CLAUDE.md` has to move with it.
     #[test]
     fn the_comment_count_the_docs_quote_is_the_one_in_the_file() {
-        const CITED: usize = 193;
+        const CITED: usize = 194;
         let actual = crate::config::DEFAULT_CONFIG
             .lines()
             .filter(|line| line.trim_start().starts_with('#'))

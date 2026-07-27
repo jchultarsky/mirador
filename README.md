@@ -16,20 +16,22 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![All nine mirador panels on a wide terminal, in use: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+![All ten mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
-*All nine panels on a wide terminal, on a first run — the tasks and the note are
-the examples mirador seeds for you. The lit frame is the focused panel, with its
-own keys in its bottom border; every other panel is dimmed, so exactly one thing
-is at full brightness.*
+*All ten panels on a first run, at 200x50 — wide enough that nothing has to fall
+back. The lit frame is the focused panel, with its own keys in its bottom
+border; every other panel is dimmed, so exactly one thing is at full brightness.*
 
-*Thirty seconds of it in use, at 150x42. Focus moves with `Tab`; a task is typed
-in and lands in the list, which goes from four open to five. `w` opens the panel
-picker, switches one off, and the grid closes over the gap; `?` lists every
-binding for the focused panel and scrolls when there are more than fit. The
+*Thirty seconds of it in use. Focus moves with `Tab`; a task is typed in and
+lands in the list, which goes from four open to five. `w` opens the panel picker,
+switches one off, and the grid closes over the gap; `?` lists every binding for
+the focused panel and scrolls when there are more than fit.*
+
+*The tasks and the note are the examples mirador seeds on a first run, and the
 weather, the prices and the graphs are whatever was true while it recorded —
-`docs/record-demo.sh` drives a real build under tmux, and nothing in this README
-is staged or a mock-up.*
+`docs/record-demo.sh` drives a real build under tmux. The one staged thing is
+the calendar, because mirador deliberately never invents one: without a sample
+the agenda panel would spend the recording explaining how to point it at a file.*
 
 ## Why
 
