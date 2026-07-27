@@ -202,6 +202,11 @@ type Built = (Vec<Slot>, Vec<(usize, usize)>);
 
 /// A panel plus its tick bookkeeping.
 struct Slot {
+    /// Which widget this is, so a layout change can carry the panel across
+    /// rather than rebuilding it. Kept on the slot because the config's
+    /// `[layout]` has already been mutated by the time a rebuild runs, so it
+    /// no longer says what the *current* panels are.
+    widget: String,
     panel: Box<dyn Panel>,
     /// When this panel last ticked. `None` until it has, which is what makes
     /// the first tick fire immediately.
@@ -327,6 +332,7 @@ impl App {
                     .with_context(|| format!("building the `{}` panel", entry.widget))?;
                 if let Some(panel) = panel {
                     slots.push(Slot {
+                        widget: entry.widget.clone(),
                         panel,
                         last_tick: None,
                         area: None,
@@ -343,30 +349,135 @@ impl App {
         Ok((slots, positions))
     }
 
-    /// Rebuild every panel after the layout changed.
+    /// Reconcile the panels with a changed layout, carrying across every panel
+    /// that is still placed.
     ///
-    /// Panels are thrown away and remade rather than moved, which costs a fresh
-    /// weather fetch and an empty CPU history for the panels that survived. The
-    /// alternative is matching old panels to new positions by widget name and
-    /// carrying them across, which is a good deal more machinery for something
-    /// that happens when a person deliberately opens a dialog and toggles
-    /// something — a moment where a beat of re-fetching reads as the dashboard
-    /// responding rather than as a stall.
+    /// This used to throw every panel away and remake them all, on the grounds
+    /// that a beat of re-fetching reads as the dashboard responding. That was
+    /// wrong, and the demo recording is what showed it: **start the pomodoro,
+    /// toggle an unrelated panel, and the timer resets to 25:00.** A running
+    /// timer is not a cache that can be refilled — it is the user's state, and
+    /// nothing about switching the network panel off says to discard it. The
+    /// weather and stocks panels lost their readings the same way and spent a
+    /// fetch cycle showing "loading" after any toggle.
     ///
-    /// A failure leaves the previous panels in place: a layout that will not
-    /// build is a reason to refuse the change, not to end up with nothing.
+    /// A panel is matched to a layout entry by widget name. Nothing stops a
+    /// hand-written config placing the same widget twice — `validate` checks
+    /// that names are *known*, not that they are unique — so the surviving
+    /// panels are consumed from a pool rather than looked up, and a second
+    /// `clocks` entry gets a second panel rather than the same one twice.
+    ///
+    /// Two orderings matter here:
+    ///
+    /// 1. Every genuinely new panel is built **before** any existing one is
+    ///    disturbed, so a layout that will not build leaves the running
+    ///    dashboard exactly as it was. That was already true and is preserved.
+    /// 2. Panels are shut down only once the new arrangement is settled, and
+    ///    only the ones actually leaving. Dropping them without `shutdown`
+    ///    discards the task store's save-on-shutdown and leaks the fetch
+    ///    threads.
+    ///
+    /// This is only ever called after a `[layout]` edit, so no panel's *own*
+    /// config can have changed underneath it. A caller that changes, say,
+    /// `[weather].units` cannot use this — the carried-over panel would keep
+    /// the old setting.
     fn rebuild_panels(&mut self) -> Result<()> {
-        let (slots, positions) = Self::build_slots(&self.config)?;
-        // Built first, then the outgoing panels are told to stop: a layout that
-        // will not build must leave the running dashboard alone. Without this
-        // the old panels were simply dropped, so a toggle discarded the task
-        // store's save-on-shutdown and left the fetch threads running.
-        for slot in &mut self.slots {
-            slot.panel.shutdown();
+        use std::collections::{HashMap, VecDeque};
+
+        let desired: Vec<(usize, usize, String)> = self
+            .config
+            .layout
+            .rows
+            .iter()
+            .enumerate()
+            .flat_map(|(row, entry)| {
+                entry
+                    .panels
+                    .iter()
+                    .enumerate()
+                    .map(move |(column, panel)| (row, column, panel.widget.clone()))
+            })
+            .collect();
+
+        // What the live panels can supply, by name.
+        let mut spare: HashMap<&str, usize> = HashMap::new();
+        for slot in &self.slots {
+            *spare.entry(slot.widget.as_str()).or_default() += 1;
         }
+
+        // Build only what cannot be carried across. Any failure returns here,
+        // with `self` untouched.
+        let mut fresh: HashMap<String, VecDeque<Box<dyn Panel>>> = HashMap::new();
+        let mut placed = 0usize;
+        for (_, _, widget) in &desired {
+            if let Some(count) = spare.get_mut(widget.as_str())
+                && *count > 0
+            {
+                *count -= 1;
+                placed += 1;
+                continue;
+            }
+            let panel = crate::widgets::build(widget, &self.config)
+                .with_context(|| format!("building the `{widget}` panel"))?;
+            if let Some(panel) = panel {
+                fresh.entry(widget.clone()).or_default().push_back(panel);
+                placed += 1;
+            }
+        }
+
+        // Checked before anything is taken apart, so a layout that would leave
+        // nothing on screen is refused rather than applied.
+        anyhow::ensure!(
+            placed > 0,
+            "no panels were built; check the `[layout]` table in your config"
+        );
+
+        let focused = self.slots.get(self.focus).map(|slot| slot.widget.clone());
+
+        let mut pool: HashMap<String, VecDeque<Slot>> = HashMap::new();
+        for slot in std::mem::take(&mut self.slots) {
+            pool.entry(slot.widget.clone()).or_default().push_back(slot);
+        }
+
+        let mut slots = Vec::with_capacity(placed);
+        let mut positions = Vec::with_capacity(placed);
+        for (row, column, widget) in desired {
+            let carried = pool.get_mut(&widget).and_then(VecDeque::pop_front);
+            let slot = carried.or_else(|| {
+                fresh
+                    .get_mut(&widget)
+                    .and_then(VecDeque::pop_front)
+                    .map(|panel| Slot {
+                        widget: widget.clone(),
+                        panel,
+                        last_tick: None,
+                        area: None,
+                    })
+            });
+            if let Some(mut slot) = slot {
+                // The panel is almost certainly somewhere else on screen now,
+                // and `area` is what mouse events are matched against. Cleared
+                // rather than trusted until the next draw sets it.
+                slot.area = None;
+                slots.push(slot);
+                positions.push((row, column));
+            }
+        }
+
+        // Whatever is left was removed from the layout.
+        for (_, leaving) in pool {
+            for mut slot in leaving {
+                slot.panel.shutdown();
+            }
+        }
+
+        // Follow the focused panel to wherever it ended up, rather than leaving
+        // the highlight on whatever now occupies its old index.
+        self.focus = focused
+            .and_then(|widget| slots.iter().position(|slot| slot.widget == widget))
+            .unwrap_or_else(|| self.focus.min(slots.len().saturating_sub(1)));
         self.slots = slots;
         self.positions = positions;
-        self.focus = self.focus.min(self.slots.len().saturating_sub(1));
         self.unused_widgets = crate::widgets::unused_widgets(&self.config);
         Ok(())
     }
@@ -1426,6 +1537,97 @@ mod tests {
         let before = widths(&app);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         assert_ne!(widths(&app), before, "Ctrl+Left was swallowed by the panel");
+    }
+
+    #[test]
+    fn toggling_one_panel_leaves_the_others_untouched() {
+        // The bug the demo recording caught: `rebuild_panels` remade every
+        // panel, so switching the network panel off reset a running pomodoro to
+        // 25:00 and sent the weather and stocks panels back to "loading".
+        //
+        // Panels are compared by pointer identity — the same allocation before
+        // and after is the only thing that actually proves state survived,
+        // where comparing a rendered figure would pass for a panel that had
+        // been rebuilt and happened to look the same.
+        let mut app = App::new(config_with(&["clocks", "todo", "pomodoro"])).unwrap();
+        let before: Vec<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+
+        app.toggle_widget("pomodoro");
+        assert!(!app.config.layout.places("pomodoro"), "it went");
+
+        let after: Vec<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+        assert_eq!(after, before[..2], "the surviving panels were rebuilt");
+
+        // And back again: the two that never left are still the same panels.
+        app.toggle_widget("pomodoro");
+        assert!(app.config.layout.places("pomodoro"));
+        let again: Vec<*const u8> = app
+            .slots
+            .iter()
+            .take(2)
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+        assert_eq!(again, before[..2], "re-adding a panel rebuilt the others");
+    }
+
+    #[test]
+    fn focus_follows_the_panel_rather_than_the_index() {
+        // Removing a panel to the left of the focused one shifts every later
+        // index down. Leaving `focus` where it was moves the highlight to a
+        // different panel, which gets noticed only when the next keypress goes
+        // somewhere unexpected.
+        //
+        // The indices are chosen so that clamping cannot pass by accident: with
+        // four panels and focus on the second, removing the first leaves the
+        // old `min(focus, len - 1)` pointing at the *third* widget.
+        let mut app = App::new(config_with(&["clocks", "todo", "pomodoro", "notes"])).unwrap();
+        app.focus = 1;
+        assert_eq!(app.slots[app.focus].widget, "todo");
+
+        app.toggle_widget("clocks");
+        assert_eq!(
+            app.slots[app.focus].widget, "todo",
+            "focus jumped to another panel"
+        );
+    }
+
+    #[test]
+    fn a_widget_placed_twice_gets_two_panels() {
+        // `Config::validate` checks that widget names are *known*, not that
+        // they are unique, so a hand-written config can place one twice.
+        // Matching panels to entries by name has to consume from a pool — a
+        // lookup would hand the same panel to both entries.
+        let mut config = config_with(&["clocks", "clocks", "todo"]);
+        config.layout.rows[0].panels[0].width = 30;
+        config.layout.rows[0].panels[1].width = 30;
+        config.layout.rows[0].panels[2].width = 40;
+
+        let mut app = App::new(config).unwrap();
+        assert_eq!(app.slots.len(), 3);
+
+        let distinct: std::collections::HashSet<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+        assert_eq!(distinct.len(), 3, "two entries share one panel");
+
+        // A rebuild must keep them distinct too.
+        app.toggle_widget("notes");
+        let distinct: std::collections::HashSet<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+        assert_eq!(distinct.len(), app.slots.len(), "a panel was reused twice");
     }
 
     #[test]

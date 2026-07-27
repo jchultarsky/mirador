@@ -424,9 +424,11 @@ open work is how the list stops being read.
   - **150x42, not smaller.** The clock drops its block numerals when its row is
     short, and those numerals are the one thing in mirador that looks like
     nothing else.
-  - **Start the pomodoro *after* the picker segment.** Toggling any panel
-    rebuilds every panel, which resets a running timer — so a demo that starts
-    it earlier records it silently giving up.
+  - **The order of the segments is now taste, not a workaround.** It used to
+    matter: toggling any panel rebuilt every panel, so starting the pomodoro
+    before the picker segment recorded the timer silently resetting, and the
+    weather and stocks panels spent a fetch cycle showing "loading" afterwards.
+    `rebuild_panels` carries panels across now, so neither happens.
 
 - **The README's images float; its prose does not.** `docs/screenshot.png` is
   referenced by absolute `raw.githubusercontent.com/.../main/...` URL, because
