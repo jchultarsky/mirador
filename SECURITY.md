@@ -84,7 +84,7 @@ Each archive also has a `.sha256` sibling, and the release carries a combined
 
 ### What the installers do not check
 
-The one-line installers come from [dist](https://opensource.axo.dev/cargo-dist/)
+The one-line installers come from [dist](https://axodotdev.github.io/cargo-dist/)
 and their verification is dist's, not ours. As of dist 0.32.0:
 
 - The shell installer verifies the sha256 of the archive it downloads, but

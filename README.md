@@ -82,7 +82,7 @@ URL, and the manual route is below.
 
 The shell installer checks the archive against its published sha256; the
 PowerShell one does no verification, and neither verifies the updater binary.
-That is [dist](https://opensource.axo.dev/cargo-dist/)'s behaviour rather than
+That is [dist](https://axodotdev.github.io/cargo-dist/)'s behaviour rather than
 ours, and [SECURITY.md](SECURITY.md#verifying-a-download) says what it does and
 does not buy you. Every artifact carries a GitHub provenance attestation, which
 is the stronger check and the one to run if you care:
