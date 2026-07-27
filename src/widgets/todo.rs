@@ -25,6 +25,40 @@ use crate::task::{DueState, Priority, SortMode, Task, TaskStore};
 use crate::textfield::TextField;
 use crate::theme::Theme;
 
+/// The three tallies the header and the frame counter show.
+///
+/// Cached rather than recomputed, because they were four separate full scans of
+/// the store — three here and one in `counter()` — with `jiff` date arithmetic
+/// per task, and they run on **every frame**. `title()` and `counter()` are
+/// called by the shell's render loop outside `render()`, so no early-out
+/// protects them and a narrow or hidden panel paid the same price as a visible
+/// one. They also grew without bound: the store never drops completed tasks.
+///
+/// Now one pass, recomputed only where the answer can change — a store
+/// mutation, or the date rolling over at midnight, both of which already go
+/// through `refresh_view`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counts {
+    open: usize,
+    overdue: usize,
+    today: usize,
+}
+
+impl Counts {
+    fn of(tasks: &[Task], today: Date) -> Self {
+        let mut counts = Self::default();
+        for task in tasks.iter().filter(|t| !t.done) {
+            counts.open += 1;
+            match task.due_state(today) {
+                DueState::Overdue(_) => counts.overdue += 1,
+                DueState::Today => counts.today += 1,
+                _ => {}
+            }
+        }
+        counts
+    }
+}
+
 /// Keys this panel responds to.
 ///
 /// The first few `primary` entries are what fits in the frame hint, so they
@@ -196,6 +230,8 @@ pub struct TodoPanel {
     mode: Mode,
     /// Task ids in display order, recomputed whenever the list changes.
     view: Vec<u64>,
+    /// The header and counter tallies, recomputed alongside `view`.
+    counts: Counts,
     list_state: ListState,
     /// Transient message with a severity flag.
     status: Option<(String, bool)>,
@@ -222,6 +258,7 @@ impl TodoPanel {
             filter: String::new(),
             mode: Mode::List,
             view: Vec::new(),
+            counts: Counts::default(),
             list_state: ListState::default(),
             status: None,
             today,
@@ -238,6 +275,7 @@ impl TodoPanel {
         self.view = self
             .store
             .view(self.sort, self.show_completed, &self.filter, self.today);
+        self.counts = Counts::of(self.store.tasks(), self.today);
 
         let index = previously_selected
             .and_then(|id| self.view.iter().position(|v| *v == id))
@@ -641,19 +679,11 @@ impl TodoPanel {
 
     /// The summary line: how much is open, and how it is sorted.
     fn header(&self, theme: &Theme) -> Line<'static> {
-        let open = self.store.tasks().iter().filter(|t| !t.done).count();
-        let overdue = self
-            .store
-            .tasks()
-            .iter()
-            .filter(|t| !t.done && matches!(t.due_state(self.today), DueState::Overdue(_)))
-            .count();
-        let today = self
-            .store
-            .tasks()
-            .iter()
-            .filter(|t| !t.done && matches!(t.due_state(self.today), DueState::Today))
-            .count();
+        let Counts {
+            open,
+            overdue,
+            today,
+        } = self.counts;
 
         let mut spans = Vec::new();
 
@@ -857,8 +887,7 @@ impl Panel for TodoPanel {
         if self.store.last_error.is_some() {
             return Some("unsaved!".into());
         }
-        let open = self.store.tasks().iter().filter(|t| !t.done).count();
-        Some(format!("{open} open"))
+        Some(format!("{} open", self.counts.open))
     }
 
     fn refresh_interval(&self) -> std::time::Duration {
@@ -985,10 +1014,16 @@ impl Panel for TodoPanel {
                 rows[2],
             );
         } else {
+            // `TaskStore::get` is a linear scan, so mapping the whole view
+            // through it was O(view x store) on every frame — over a store that
+            // never drops a completed task, so it grows monotonically with
+            // months of use. One pass to index, then a lookup per row.
+            let by_id: std::collections::HashMap<u64, &Task> =
+                self.store.tasks().iter().map(|t| (t.id, t)).collect();
             let visible: Vec<&Task> = self
                 .view
                 .iter()
-                .filter_map(|id| self.store.get(*id))
+                .filter_map(|id| by_id.get(id).copied())
                 .collect();
 
             // The list is indented by the selection marker, so the grid gets

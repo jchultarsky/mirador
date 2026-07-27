@@ -270,6 +270,43 @@ impl WeatherPanel {
         data
     }
 
+    /// The frame counter for a given state.
+    ///
+    /// Split out so it can be computed from a borrow rather than a clone; see
+    /// [`WeatherPanel::with_state`].
+    fn counter_for(&self, state: &State) -> Option<String> {
+        let Some(data) = &state.data else {
+            return Some(if state.error.is_some() {
+                "offline".to_string()
+            } else {
+                "loading".to_string()
+            });
+        };
+
+        // The observation time matters: a dashboard left running all day must
+        // never let you mistake an old reading for a live one. Once it is stale
+        // the age replaces the time outright, because "at 09:00" is only
+        // alarming if you happen to know what time it is now.
+        if self.is_stale(state) {
+            return state.age().map(describe_age);
+        }
+        (!data.observed.is_empty()).then(|| format!("at {}", data.observed))
+    }
+
+    /// Read something out of the shared state without cloning all of it.
+    ///
+    /// `title` and `counter` are called by the shell on every frame, and both
+    /// wanted one small fact — the place name, the observation time. Taking a
+    /// whole `State` for either meant a deep copy of a boxed reading with its
+    /// 24 forecast slots and two `String`s, four times a frame between them and
+    /// `render`.
+    fn with_state<T>(&self, f: impl FnOnce(&State) -> T) -> T {
+        match self.state.lock() {
+            Ok(guard) => f(&guard),
+            Err(poisoned) => f(&poisoned.into_inner()),
+        }
+    }
+
     fn snapshot(&self) -> State {
         // A poisoned lock means the fetch thread panicked. Recover the value
         // rather than propagating the panic into the render loop: one dead
@@ -665,30 +702,14 @@ fn urlencode(input: &str) -> String {
 
 impl Panel for WeatherPanel {
     fn title(&self) -> String {
-        match self.snapshot().data {
+        self.with_state(|state| match &state.data {
             Some(data) => format!("Weather — {}", data.place),
             None => "Weather".to_string(),
-        }
+        })
     }
 
     fn counter(&self) -> Option<String> {
-        let state = self.snapshot();
-        let Some(data) = &state.data else {
-            return Some(if state.error.is_some() {
-                "offline".to_string()
-            } else {
-                "loading".to_string()
-            });
-        };
-
-        // The observation time matters: a dashboard left running all day must
-        // never let you mistake an old reading for a live one. Once it is stale
-        // the age replaces the time outright, because "at 09:00" is only
-        // alarming if you happen to know what time it is now.
-        if self.is_stale(&state) {
-            return state.age().map(describe_age);
-        }
-        (!data.observed.is_empty()).then(|| format!("at {}", data.observed))
+        self.with_state(|state| self.counter_for(state))
     }
 
     fn bindings(&self) -> &'static [Binding] {
@@ -764,10 +785,12 @@ impl Panel for WeatherPanel {
             return;
         }
 
-        let state = self.snapshot();
+        let mut state = self.snapshot();
         let is_old = self.is_stale(&state);
 
-        let Some(reading) = state.data.clone() else {
+        // `take`, not `clone`: `state` is already this function's own copy, so
+        // cloning the boxed reading out of it made a second one for nothing.
+        let Some(reading) = state.data.take() else {
             // Nothing has ever landed. Only here is the panel genuinely empty.
             let lines = match &state.error {
                 Some(message) => vec![
@@ -792,7 +815,9 @@ impl Panel for WeatherPanel {
             return;
         };
 
-        let data = Box::new(self.in_display_units(*reading));
+        // Unboxed once and left unboxed: it was immediately re-boxed, which is
+        // an allocation to hold a value that never leaves this function.
+        let data = self.in_display_units(*reading);
 
         // The art is the one indulgence in this panel, so it is the first thing
         // dropped when the panel gets short.
