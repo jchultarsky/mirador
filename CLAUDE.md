@@ -111,6 +111,7 @@ grid.rs      shared column grid with named headers
 chart.rs     braille graphs + baked colour gradients
 glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
+themes.rs    `theme = "name"`: bundled themes, inherits, palettes
 config/      mod.rs: paths, loading, validation; widgets.rs: one settings
              struct per panel; layout.rs: the grid
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
@@ -202,7 +203,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 214 of them, including the ones mirador
+    trip through `toml` discards all 230 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -362,30 +363,44 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
 - `parse_chart` is split from the HTTP call so it is tested against captured
   JSON. **No test in this repo touches the network** — keep it that way.
 
-## Named themes — decided, not yet built
+## Named themes — built
 
-The `[theme]` table itself **is** built and shipping: every colour the dashboard
-draws with is configurable, gradients included, with names, hex and 256-colour
-indices accepted and bad values rejected at parse time. What is not built is
-*named* themes — `theme = "nord"` and a themes directory.
+`theme = "name"` resolves through `themes.rs`. Four themes are `include_str!`-
+baked (`default`, `default-light`, `high-contrast`, `ansi`) and anything in
+`<config>/mirador/themes/<name>.toml` is found first, so a bundled theme can be
+replaced without renaming it. `inherits` chains with cycle detection; `[palette]`
+names colours once, and a child redefining a palette entry recolours the keys
+its *parent* set with it — which is why palettes are merged separately from the
+colour keys rather than as each document is read.
 
-Follow Helix. `theme = "name"` plus theme files in
-`<config>/mirador/themes/<name>.toml`, with:
+**Two items from the original design were deliberately not built**, and the
+reasons matter more than the decision:
 
-1. **Dotted-scope fallback** (`ui.border.focused` → `ui.border` → `ui`) via
-   `iter::successors`. ~15 lines, makes a two-line theme valid, and makes
-   `border_focused` stop being a special case.
-2. **`[palette]`** with `"default"` → `Color::Reset` and the 16 ANSI names
-   pre-seeded. Literal colour names live *only* in the palette; every other key
-   is semantic.
-3. **`inherits`** with cycle detection and depth-2 palette merge.
-4. Full style objects (fg/bg/modifiers).
+- **Dotted-scope fallback** (`ui.border.focused` → `ui.border` → `ui`). Helix
+  needs it because it has hundreds of syntax scopes and no theme can name them
+  all. mirador has thirteen flat semantic keys that a theme can reasonably set
+  in full, and `inherits` already covers the rest. The stated benefit — that it
+  "makes `border_focused` stop being a special case" — is one field.
+- **Full style objects** (fg/bg/modifiers per key). All ~240 theme reads take a
+  flat `Color`, nothing wants a themed background (invariant 8), and bold and
+  reversed are decided by the widget that knows what it is emphasising.
 
-Ship bundled: `ansi` (ANSI names only, safest default), `default` (true-colour
-dark, `inherits = "ansi"`), `default-light`, `high-contrast`. Nobody downsamples
-colour — the universal strategy is a separate low-colour theme picked on
-`COLORTERM`. Keep a compat shim for one release (TOML type distinguishes an
-inline `[theme]` table from a `theme = "name"` string).
+Both are additions if wanted, not corrections.
+
+**The compat shim is a hand-written visitor, not `#[serde(untagged)]`,** and it
+has to stay that way. An untagged enum reports "data did not match any variant"
+for every failure, which would destroy both the misspelled-key report and the
+`--migrate-config` hint for the pre-0.1.0 `rx`/`tx` keys. The map arm delegates
+to the derived impl, so all of that survives; two tests pin it.
+
+**The TOML ordering trap is real and is guarded.** Colour keys written *after*
+`[palette]` land inside it and set nothing — nothing is misspelled, nothing
+fails to parse, and the theme silently comes out as the defaults. The shipped
+`default.toml` was written that way and the test comparing it against
+`Theme::default()` **passed**, because a file that sets nothing resolves to
+exactly the default. Hence two things: `check_palette_ordering` refuses such a
+file by name, and the drift test is paired with one that asserts a standalone
+theme *sets every key*, which is the property that can actually fail.
 
 ## Recently settled, so it is not re-litigated
 
@@ -420,11 +435,16 @@ The mode's legend names both keys, so there is nothing to guess.
 Only things that are actually open. A "decided and built" entry in a list called
 open work is how the list stops being read.
 
-1. **Named themes**, per the section above. The `[theme]` table is built; the
-   `theme = "nord"` layer over it is not.
-2. **"What changed since I last looked" markers.**
-3. **A single "is anything on fire" signal.** Named as a gap alongside the other
-   two and then quietly dropped from this list; it is back.
+1. **"What changed since I last looked" markers.** No design yet.
+2. **A single "is anything on fire" signal.** No design yet. Named as a gap
+   alongside the other two and then quietly dropped from this list; it is back.
+
+Both of these are the last two gaps from the original four-questions analysis,
+and both are structurally attention-grabbing mechanisms — which is the thing
+the unread-email-count rejection was about. Whatever they become has to earn
+its way past that rule rather than around it.
+
+Named themes sat at the top of this list and is built; see the section above.
 
 Editing `[weather].location` from the panel sat at the top of this list and is
 built — `prompt.rs`, reached with `L`. The same prompt does the agenda file

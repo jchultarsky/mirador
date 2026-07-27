@@ -1,0 +1,31 @@
+# Maximum separation, for bright rooms, projectors and low-vision use.
+#
+# Inherits `ansi`, so anything not named below is still a colour your terminal
+# has agreed to — the point of this theme is contrast, and reaching for
+# true-colour hex to get it would trade away the one thing ansi guarantees.
+#
+# The deliberate difference from every other theme: `muted` is not muted. Dim
+# grey is the first thing to disappear on a washed-out screen, so the
+# de-emphasised text here is merely a different colour rather than a fainter
+# one, and emphasis is carried by weight and case instead.
+
+inherits = "ansi"
+
+border         = "gray"
+border_focused = "white"
+rule           = "gray"
+title          = "white"
+text           = "white"
+muted          = "light-cyan"
+label          = "light-cyan"
+accent         = "light-yellow"
+key            = "light-yellow"
+success        = "light-green"
+warning        = "light-yellow"
+error          = "light-red"
+track          = "gray"
+
+[cpu_gradient]
+start = "light-green"
+mid   = "light-yellow"
+end   = "light-red"

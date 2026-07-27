@@ -1,0 +1,60 @@
+# The instrument panel in daylight.
+#
+# Not the dark theme with the colours flipped: on a light background the same
+# hues have to go *darker* to keep their contrast, and the greys invert
+# entirely. Brass in particular becomes unreadable if it is merely reused, so it
+# is deepened to a bronze.
+#
+# `text` stays `reset` for the same reason it does everywhere — your terminal's
+# own foreground is already the right one for your background.
+
+border         = "paper"
+border_focused = "bronze"
+rule           = "paper"
+title          = "bronze"
+text           = "reset"
+muted          = "ink"
+label          = "teal"
+accent         = "bronze"
+key            = "bronze"
+success        = "moss"
+warning        = "amber"
+error          = "rust"
+track          = "pencil"
+
+[palette]
+bronze    = "#875f00"
+teal      = "#005f5f"
+paper     = "#c6c6c6"
+pencil    = "#949494"
+ink       = "#585858"
+moss      = "#5f8700"
+amber     = "#af5f00"
+rust      = "#af0000"
+# The ramps start light rather than dark, so an idle graph recedes *into* a
+# pale background instead of standing out as a dark smudge on it.
+
+[cpu_gradient]
+start = "#afd7af"
+mid   = "#af8700"
+end   = "#af0000"
+
+[rx_gradient]
+start = "#afd7af"
+mid   = "#5f8700"
+end   = "#005f00"
+
+[tx_gradient]
+start = "#d7afd7"
+mid   = "#875f87"
+end   = "#5f005f"
+
+[gain_gradient]
+start = "#afd7af"
+mid   = "#5f8700"
+end   = "#005f00"
+
+[loss_gradient]
+start = "#d7afaf"
+mid   = "#af5f5f"
+end   = "#870000"

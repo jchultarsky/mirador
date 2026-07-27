@@ -27,6 +27,7 @@ mod task;
 mod textarea;
 mod textfield;
 mod theme;
+mod themes;
 mod update;
 mod widgets;
 mod zones;
