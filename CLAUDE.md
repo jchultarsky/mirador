@@ -455,7 +455,7 @@ The `.ics` agenda that sat at the top of this list is built — `ical.rs` and
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`0.6.0` is released**, on crates.io and as a GitHub release with binaries
+- **`0.7.0` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. `0.0.0` is still on
   crates.io below it — the name reservation that went out first, since
   reservation is first-come with no reclamation.

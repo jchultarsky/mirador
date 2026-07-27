@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-07-27
 
 ### Added
 
@@ -29,8 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would have added 30 crates and **2.3 MB** to a 3.4 MB binary — measured — most
   of it `chrono-tz` carrying a second timezone database.
 
+  An unconfigured panel says "No agenda file" and how to set one, in ordinary
+  colours — that is a panel nobody has set up, not a fault. A file that exists
+  and cannot be read is the fault, and says so.
+
   **The default layout now places ten panels**, so the last of them has no
-  number to jump to; `1`–`9` covers the rest and `Tab` reaches everything.
+  number to jump to; `1`–`9` covers the rest and `Tab` reaches everything. The
+  bottom row is reordered so the pomodoro keeps the width its numerals need.
 
 ## [0.6.0] - 2026-07-27
 
@@ -637,7 +642,7 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/jchultarsky/mirador/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jchultarsky/mirador/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/jchultarsky/mirador/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jchultarsky/mirador/compare/v0.5.0...v0.5.1
