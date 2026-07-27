@@ -160,9 +160,13 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
         }
     }
 
-    let mut result = out.join("\n");
+    // Rejoined with the ending the file already had. `str::lines()` strips
+    // `\r`, so joining with `\n` would quietly convert a CRLF config to LF and
+    // rewrite every line in it because one panel moved.
+    let newline = crate::store::line_ending(source);
+    let mut result = out.join(newline);
     if source.ends_with('\n') {
-        result.push('\n');
+        result.push_str(newline);
     }
 
     // The whole reason this is safe to do at all. If the text no longer says
@@ -686,6 +690,117 @@ units = "imperial"
             .collect();
         assert_eq!(changed.len(), 1, "exactly one line moved:\n{out}");
         assert!(after[changed[0]].contains("width = 30"));
+    }
+
+    /// A config written on Windows uses CRLF. `str::lines()` strips the `\r`,
+    /// so reassembling with `\n` converted the whole file to LF — moving one
+    /// panel reported every line in the config as changed, which is a
+    /// whole-file diff in git and nothing the user asked for.
+    /// Throws a lot of shapes at the real shipped config and asserts the only
+    /// two acceptable outcomes: the edit applies and the file still describes
+    /// exactly what was asked, or it is refused and the file is untouched.
+    ///
+    /// There is no third outcome. "Wrote something plausible" is the failure
+    /// this module exists to make impossible, and the check at the end of
+    /// `apply` is what makes it so — this exercises that check against shapes
+    /// nobody would think to write by hand.
+    #[test]
+    fn no_mutation_of_the_shipped_config_produces_a_wrong_file() {
+        let shipped = include_str!("../assets/default_config.toml");
+        let base = layout_of(shipped);
+
+        // A deterministic spread of structural mutations. No randomness: a
+        // failure has to be reproducible from the test name alone.
+        let mut shapes: Vec<Layout> = Vec::new();
+        for row in 0..base.rows.len() {
+            for column in 0..base.rows[row].panels.len() {
+                // Move one panel to every other row.
+                for target in 0..base.rows.len() {
+                    let mut want = base.clone();
+                    let panel = want.rows[row].panels.remove(column);
+                    want.rows[target].panels.insert(0, panel);
+                    want.rows.retain(|r| !r.panels.is_empty());
+                    shapes.push(want);
+                }
+                // Give it a row of its own at either end.
+                for at in [0, base.rows.len()] {
+                    let mut want = base.clone();
+                    let panel = want.rows[row].panels.remove(column);
+                    want.rows.insert(
+                        at,
+                        LayoutRow {
+                            height: 10,
+                            panels: vec![panel],
+                        },
+                    );
+                    want.rows.retain(|r| !r.panels.is_empty());
+                    shapes.push(want);
+                }
+                // Drop it entirely.
+                let mut want = base.clone();
+                want.rows[row].panels.remove(column);
+                want.rows.retain(|r| !r.panels.is_empty());
+                shapes.push(want);
+            }
+            // Reverse a row.
+            let mut want = base.clone();
+            want.rows[row].panels.reverse();
+            shapes.push(want);
+        }
+
+        let (mut applied, mut refused) = (0, 0);
+        for (index, want) in shapes.iter().enumerate() {
+            match apply(shipped, want) {
+                Ok(out) => {
+                    applied += 1;
+                    let reparsed = toml::from_str::<Config>(&out)
+                        .unwrap_or_else(|e| panic!("shape {index} produced unparsable TOML: {e}"));
+                    assert_eq!(
+                        shape(&reparsed.layout),
+                        shape(want),
+                        "shape {index} wrote a layout nobody asked for"
+                    );
+                    // The rest of the file is not this module's business.
+                    assert!(
+                        out.contains("[weather]") && out.contains("[news]"),
+                        "shape {index} lost a section outside `[layout]`"
+                    );
+                }
+                Err(_) => refused += 1,
+            }
+        }
+
+        assert_eq!(applied + refused, shapes.len());
+        assert!(
+            applied > shapes.len() / 2,
+            "only {applied} of {} shapes applied; the editor has become too \
+             timid to be useful",
+            shapes.len()
+        );
+    }
+
+    #[test]
+    fn a_crlf_config_stays_crlf() {
+        let crlf = SAMPLE.replace('\n', "\r\n");
+        let mut desired = layout_of(&crlf);
+        desired.rows[1].panels[0].width = 60;
+
+        let out = apply(&crlf, &desired).expect("applies");
+        assert_eq!(
+            out.matches("\r\n").count(),
+            out.matches('\n').count(),
+            "every newline is still a CRLF:\n{out:?}"
+        );
+        assert_eq!(layout_of(&out).rows[1].panels[0].width, 60, "and it took");
+    }
+
+    /// The other direction, so the fix cannot be "always write CRLF".
+    #[test]
+    fn an_lf_config_stays_lf() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows[1].panels[0].width = 60;
+        let out = apply(SAMPLE, &desired).expect("applies");
+        assert_eq!(out.matches('\r').count(), 0, "no carriage returns appeared");
     }
 
     #[test]

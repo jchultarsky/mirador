@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Editing a config on Windows no longer rewrites every line in it.** Both
+  places that rewrite a file you wrote by hand — the layout editor and the
+  config migrator — reassembled it from `str::lines()`, which strips the `\r`
+  of a CRLF ending. Joining with `\n` then converted the whole file to LF: you
+  moved one panel and git reported every line as changed. The ending the file
+  already uses is preserved now, in both directions.
+
 ## [0.14.1] - 2026-07-27
 
 ### Fixed
