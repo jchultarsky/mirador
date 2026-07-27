@@ -1,0 +1,48 @@
+# The safest theme there is: the sixteen ANSI colours and nothing else.
+#
+# Every one of them is whatever your terminal says it is, so this follows a
+# palette you have already chosen and works on a console with no true-colour
+# support at all. It is also the theme to inherit from when you want a starting
+# point that cannot look wrong anywhere.
+#
+# Nobody downsamples true colour at runtime — the universal strategy is a
+# separate low-colour theme, and this is it.
+
+border         = "dark-gray"
+border_focused = "yellow"
+rule           = "dark-gray"
+title          = "yellow"
+text           = "reset"
+muted          = "gray"
+label          = "cyan"
+accent         = "yellow"
+key            = "yellow"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "dark-gray"
+
+[cpu_gradient]
+start = "green"
+mid   = "yellow"
+end   = "red"
+
+[rx_gradient]
+start = "green"
+mid   = "green"
+end   = "light-green"
+
+[tx_gradient]
+start = "magenta"
+mid   = "magenta"
+end   = "light-magenta"
+
+[gain_gradient]
+start = "green"
+mid   = "green"
+end   = "light-green"
+
+[loss_gradient]
+start = "red"
+mid   = "red"
+end   = "light-red"

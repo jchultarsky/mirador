@@ -141,6 +141,15 @@ pub struct Theme {
     pub gain_gradient: GradientStops,
     /// Ramp for a falling position.
     pub loss_gradient: GradientStops,
+
+    /// The theme this came from, when the config named one.
+    ///
+    /// Skipped by serde in both directions. On the way in it is set by
+    /// [`de_theme`] from a bare `theme = "name"`, which the derived field
+    /// deserializer never sees; on the way out it is not a colour and has no
+    /// business in a theme file.
+    #[serde(skip)]
+    pub name: Option<String>,
 }
 
 impl Default for Theme {
@@ -191,8 +200,48 @@ impl Default for Theme {
                 (0xaf, 0x5f, 0x5f),
                 (0xd7, 0x87, 0x87),
             ),
+            name: None,
         }
     }
+}
+
+/// Accept either `theme = "name"` or an inline `[theme]` table.
+///
+/// Written by hand rather than as an untagged enum, and the reason is the
+/// error messages. An untagged enum reports "data did not match any variant"
+/// for *every* failure, which would have thrown away both the misspelled-key
+/// report and the `--migrate-config` hint for the pre-0.1.0 `rx`/`tx` keys —
+/// two things this crate has tests for precisely because they were hard-won.
+/// Delegating the map arm to the derived impl keeps all of it.
+pub fn de_theme<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Theme, D::Error> {
+    use serde::de::value::MapAccessDeserializer;
+    use serde::de::{MapAccess, Visitor};
+
+    struct Either;
+
+    impl<'de> Visitor<'de> for Either {
+        type Value = Theme;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a theme name in quotes, or a table of colours")
+        }
+
+        fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<Theme, E> {
+            // Resolved after the config is parsed: deserializing must not go
+            // looking for files, and the themes directory is not known until
+            // the config's own path is.
+            Ok(Theme {
+                name: Some(name.to_string()),
+                ..Theme::default()
+            })
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Theme, A::Error> {
+            Theme::deserialize(MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(Either)
 }
 
 /// Gradients baked once at startup, so drawing a frame is array lookups.
@@ -210,6 +259,91 @@ pub struct Gradients {
 }
 
 impl Theme {
+    /// Every key a theme file may set.
+    ///
+    /// Used to catch a TOML mistake that is otherwise silent — see
+    /// [`crate::themes`]. Kept honest by
+    /// `every_named_key_is_one_a_theme_file_can_actually_set`, which parses
+    /// each one on its own; an entry that is not a real field fails there.
+    /// A *field* missing from this list only weakens the check, so the cost of
+    /// forgetting one is a trap that goes unguarded rather than a wrong theme.
+    pub const KEYS: &'static [&'static str] = &[
+        "border",
+        "border_focused",
+        "rule",
+        "title",
+        "text",
+        "muted",
+        "label",
+        "accent",
+        "key",
+        "success",
+        "warning",
+        "error",
+        "track",
+        "cpu_gradient",
+        "rx_gradient",
+        "tx_gradient",
+        "gain_gradient",
+        "loss_gradient",
+    ];
+
+    /// Deserialize from an already-parsed table, for [`crate::themes`].
+    ///
+    /// Goes through the derived impl, so a theme file gets the same
+    /// unknown-key and bad-colour reporting a `[theme]` table has always had.
+    pub fn deserialize_table(table: toml::Table) -> anyhow::Result<Self> {
+        Ok(toml::Value::Table(table).try_into()?)
+    }
+
+    /// The same theme, tagged with where it came from.
+    #[must_use]
+    pub fn named(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
+        self
+    }
+
+    /// Every colour, for comparing two themes without their names.
+    ///
+    /// A theme resolved from a file carries its name and the built-in one does
+    /// not, so comparing whole themes would report a difference that is not
+    /// about colour at all.
+    #[cfg(test)]
+    pub fn colours(&self) -> Vec<Color> {
+        let stops = |s: &GradientStops| {
+            vec![
+                s.start,
+                s.mid.unwrap_or(Color::Reset),
+                s.end.unwrap_or(Color::Reset),
+            ]
+        };
+        let mut out = vec![
+            self.border,
+            self.border_focused,
+            self.rule,
+            self.title,
+            self.text,
+            self.muted,
+            self.label,
+            self.accent,
+            self.key,
+            self.success,
+            self.warning,
+            self.error,
+            self.track,
+        ];
+        for gradient in [
+            &self.cpu_gradient,
+            &self.rx_gradient,
+            &self.tx_gradient,
+            &self.gain_gradient,
+            &self.loss_gradient,
+        ] {
+            out.extend(stops(gradient));
+        }
+        out
+    }
+
     /// Bake every configured ramp.
     pub fn gradients(&self) -> Gradients {
         Gradients {

@@ -1,0 +1,60 @@
+# mirador's shipped look: an aged instrument panel.
+#
+# Brass for the instruments, verdigris for engraved labels, slate for chrome.
+# `text` is `reset` on purpose — body text inherits whatever foreground you have
+# already tuned your terminal to, rather than fighting it.
+#
+# This file and `Theme::default()` in src/theme.rs describe the same thing and
+# are reached by different routes: a config with no `theme` key takes the Rust
+# one, `theme = "default"` takes this. A test pins them together.
+
+border         = "slate"
+border_focused = "brass"
+rule           = "graphite"
+title          = "brass"
+text           = "reset"
+muted          = "ash"
+label          = "verdigris"
+accent         = "brass"
+key            = "brass"
+success        = "moss"
+warning        = "amber"
+error          = "rust"
+track          = "graphite"
+
+[palette]
+brass      = "#d7af87"
+verdigris  = "#5f8787"
+slate      = "#3a3a3a"
+graphite   = "#303030"
+ash        = "#707070"
+moss       = "#87af5f"
+amber      = "#d7af5f"
+rust       = "#d75f5f"
+# Ramps run dark and desaturated at the cool end to bright at the hot one, so an
+# idle graph recedes and a busy one comes forward without any per-frame decision.
+
+[cpu_gradient]
+start = "#3f5f4f"
+mid   = "#d7af5f"
+end   = "#d75f5f"
+
+[rx_gradient]
+start = "#2f4f3f"
+mid   = "#6f9f5f"
+end   = "#afd787"
+
+[tx_gradient]
+start = "#4a3a5a"
+mid   = "#8a6f9f"
+end   = "#c7afd7"
+
+[gain_gradient]
+start = "#3f5f3f"
+mid   = "#6f9f5f"
+end   = "#afd787"
+
+[loss_gradient]
+start = "#5f3a3a"
+mid   = "#af5f5f"
+end   = "#d78787"

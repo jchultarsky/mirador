@@ -54,6 +54,13 @@ pub use widgets::{
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub general: General,
+    /// The resolved theme.
+    ///
+    /// Holds whatever `[theme]` said, or — when the config named one with
+    /// `theme = "nord"` — a placeholder carrying only that name until
+    /// [`Config::load`] resolves it. Nothing but `load` should ever see the
+    /// placeholder; `--print-config` and the tests go through it too.
+    #[serde(deserialize_with = "crate::theme::de_theme")]
     pub theme: Theme,
     pub layout: Layout,
     pub clocks: ClocksConfig,
@@ -130,9 +137,24 @@ impl Config {
 
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        let config: Self = toml::from_str(&raw).map_err(|e| stale_config_hint(&e, &path))?;
+        let mut config: Self = toml::from_str(&raw).map_err(|e| stale_config_hint(&e, &path))?;
+        config.resolve_theme(&path)?;
         config.validate()?;
         Ok((config, path))
+    }
+
+    /// Turn `theme = "name"` into the colours it stands for.
+    ///
+    /// Separate from deserializing because that must not touch the filesystem,
+    /// and because the themes directory is not known until the config's own
+    /// path is — a `--config` somewhere unusual looks for its themes beside it.
+    fn resolve_theme(&mut self, config_path: &Path) -> Result<()> {
+        let Some(name) = self.theme.name.clone() else {
+            return Ok(());
+        };
+        let dir = crate::themes::user_dir(config_path);
+        self.theme = crate::themes::resolve(&name, dir.as_deref())?;
+        Ok(())
     }
 
     /// Platform-appropriate config location.

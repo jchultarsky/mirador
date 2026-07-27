@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Named themes.** `theme = "high-contrast"` in place of the `[theme]` table.
+  Four ship inside the binary — `default`, `default-light`, `high-contrast` and
+  `ansi` — and anything in `themes/<name>.toml` beside your config is found
+  first, so a bundled theme can be replaced without renaming it.
+
+  A theme file may `inherits` another, so a variant is the lines that differ
+  rather than a copy of all eighteen keys, and may define a `[palette]` of named
+  colours. Redefining a palette entry in a child recolours the keys its *parent*
+  set with it.
+
+  The same key does both jobs and TOML decides which: a quoted string is a name,
+  a table is colours written out. Your existing `[theme]` table keeps working
+  and keeps its error messages — the misspelled-key report and the
+  `--migrate-config` hint for the pre-0.1.0 `rx`/`tx` keys both survive, which
+  an untagged enum would have flattened into "data did not match any variant".
+
+  Not built, deliberately: dotted-scope fallback (sized for Helix's hundreds of
+  syntax scopes, where mirador has thirteen flat semantic keys) and per-key
+  style objects with fg/bg/modifiers (every theme read takes a flat colour, and
+  emphasis belongs to the widget that knows what it is emphasising).
+
+- **A theme file with its colour keys after `[palette]` is refused by name.**
+  TOML puts every key following a table header *inside* that table, so those
+  keys set nothing — without failing, without a typo, and with the theme quietly
+  coming out as the defaults. mirador's own `default.toml` was written that way
+  during development and the test comparing it against the built-in default
+  passed, because a file that sets nothing resolves to exactly the default.
+
 ## [0.9.1] - 2026-07-27
 
 ### Changed

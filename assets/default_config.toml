@@ -89,6 +89,22 @@ rows = [
 # The shipped palette is an aged instrument panel: brass for the instruments,
 # verdigris for engraved labels, slate for chrome. Body text is `reset` so it
 # inherits whatever foreground you have already tuned your terminal to.
+#
+# There are two ways to write this, and they use the same key.
+#
+# Name a theme, and this whole table goes away:
+#
+#     theme = "high-contrast"
+#
+# Four ship inside the binary — `default` (this), `default-light`,
+# `high-contrast` and `ansi` — and anything in themes/<name>.toml beside this
+# file is found first, so a bundled theme can be replaced without renaming it.
+# A theme file may `inherits` another and may define a `[palette]` of named
+# colours; see the README.
+#
+# Or keep the table below and set colours here. Naming a theme and writing the
+# table are mutually exclusive: TOML will not let one key be both a string and
+# a table, which is exactly the distinction being used.
 # ---------------------------------------------------------------------------
 [theme]
 border         = "#3a3a3a"   # frame of an unfocused panel

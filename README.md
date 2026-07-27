@@ -690,12 +690,60 @@ working; copying a value off the dashboard needs the terminal's override
 modifier, which is Shift in most terminals and Option in macOS Terminal and
 iTerm2. Set `[general].mouse = false` to keep ordinary selection instead.
 
-### Colours
+### Colours and themes
 
 Every colour the dashboard draws with lives under `[theme]`, and the graph
 gradients under `[theme.rx_gradient]` and friends. A colour accepts a name
 (`red`, `light-blue`), a hex string (`#ff8800`), or a 256-colour index (`12`).
 `reset` uses your terminal's own default.
+
+You can also name a theme instead, and drop the table entirely:
+
+```toml
+theme = "high-contrast"
+```
+
+Four ship inside the binary:
+
+| Theme | For |
+| --- | --- |
+| `default` | The shipped look — true colour, dark background |
+| `default-light` | Light backgrounds. Not the dark theme inverted: the hues are deepened so they keep their contrast on paper-coloured terminals |
+| `high-contrast` | Bright rooms, projectors, low vision. `muted` is deliberately *not* dim — faint grey is the first thing to vanish on a washed-out screen, so de-emphasis is carried by hue instead |
+| `ansi` | The sixteen ANSI colours and nothing else, so it follows whatever palette your terminal already uses and works with no true-colour support |
+
+The same key does both jobs, and TOML decides which: a quoted string is a theme
+name, a table is colours written out. You cannot do both, because one key cannot
+be both types.
+
+#### Writing your own
+
+Put `<name>.toml` in `themes/` beside your config — `mirador --config-path` will
+tell you where that is. A file there wins over a bundled theme of the same name,
+so you can replace `default` without renaming it.
+
+```toml
+# themes/nord.toml
+inherits = "ansi"
+
+accent         = "frost"
+border_focused = "frost"
+title          = "frost"
+
+[palette]
+frost = "#88c0d0"
+```
+
+`inherits` starts from another theme, so a variant is the handful of lines that
+differ rather than a copy of all eighteen keys. `[palette]` names colours once,
+after which any key can use the name — and redefining a palette entry in a child
+theme recolours the keys its *parent* set with it.
+
+**The colour keys have to come before `[palette]`, not after.** In TOML every
+key following a table header belongs to that table, so keys written underneath
+`[palette]` end up inside it and set nothing. mirador refuses a theme file that
+does this and says which keys are affected, because the alternative is a theme
+that quietly comes out as the defaults.
 
 ### When something is wrong with your config
 
