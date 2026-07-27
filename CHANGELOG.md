@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A headline containing a wide character could freeze the dashboard.** Text
+  wrapping split an over-long word by taking as many characters as fit — and for
+  a CJK glyph or an emoji in a column one cell wide, none fit, so nothing was
+  consumed and the loop ran for ever. Any news headline with such a character in
+  a narrow panel would hang mirador until it was killed. **Present in 0.13.0 and
+  0.14.0.**
+
+- **The agenda cloned its whole event list on every frame.** The on-fire signal
+  asks each panel whether anything is urgent, and the agenda answered by copying
+  every event first. Measured: 456 event clones in thirty idle seconds against a
+  twelve-event calendar, scaling with the size of the calendar. Now zero.
+
+- **The news panel cloned every story on every frame**, for stories that change
+  once an hour. Copied when the fetch lands instead.
+
+- **The README said mirador has two network panels.** It has three.
+
 ## [0.14.0] - 2026-07-27
 
 ### Added

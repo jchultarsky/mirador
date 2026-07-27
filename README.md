@@ -55,10 +55,15 @@ that is off until you turn it on.
 filtering and full editing without leaving the dashboard. That is the panel most
 dashboards treat as a checkbox, and it is the one you will use most.
 
-The two network panels use free key-less endpoints:
-[Open-Meteo](https://open-meteo.com) for weather, and Yahoo's public chart
-endpoint for prices — see [Market data](#market-data) for what the second one
-means for you.
+The three network panels use free key-less endpoints:
+[Open-Meteo](https://open-meteo.com) for weather, Yahoo's public chart endpoint
+for prices — see [Market data](#market-data) for what that one means for you —
+and, for news, whichever RSS feeds you configure. The shipped feeds are NASA,
+Phys.org and Ars Technica; change or empty them in `[news.feeds]`.
+
+Those three fetch the data their panels exist to show, which is not the same as
+phoning home: nothing is sent about you, and switching a panel off with `w`
+stops its requests entirely.
 
 ## How this was built
 
