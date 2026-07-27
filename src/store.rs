@@ -77,6 +77,25 @@ pub fn report(result: Result<()>, last_error: &mut Option<String>) {
     };
 }
 
+/// The line ending a file already uses.
+///
+/// Two modules rewrite files a person wrote by hand — [`crate::layout_edit`]
+/// and [`crate::migrate`] — and both reassemble them from `str::lines()`, which
+/// strips `\r` and hands back bare lines. Joining those with `\n` silently
+/// converts a CRLF file to LF: on Windows, moving one panel rewrote every line
+/// in the config, which shows up as a whole-file diff in git and is not
+/// remotely what the user asked for.
+///
+/// Judged by the first ending in the file rather than by counting. A file with
+/// mixed endings is already inconsistent and there is no answer that preserves
+/// it; matching the first is at least predictable.
+pub fn line_ending(source: &str) -> &'static str {
+    match source.find('\n') {
+        Some(at) if at > 0 && source.as_bytes()[at - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -560,6 +560,18 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**`layout_edit` and `migrate`: done.** Found that both flattened CRLF to LF —
+`str::lines()` strips the `\r`, so a Windows config was rewritten entirely
+because one panel moved. `store::line_ending` now carries the file's own ending
+through both. `migrate` had a third site the first fix missed, in a `writeln!`
+that hard-codes `\n`; the test caught it, which is the argument for writing the
+test before believing the fix.
+
+Also added: eighty-eight structural mutations of the *real shipped config*,
+asserting the only two acceptable outcomes — applied and exactly right, or
+refused and untouched. "Wrote something plausible" is the outcome this module
+exists to make impossible.
+
 One pass covered the code written on 27 July and found a hang and two per-frame
 allocation faults. The rest of the program has not had the same treatment.
 

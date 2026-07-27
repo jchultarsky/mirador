@@ -116,6 +116,9 @@ fn key_of(line: &str) -> Option<&str> {
 
 /// Rewrite `contents`, returning the new text and a description of each change.
 pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
+    // Whatever the file already used. `str::lines()` strips `\r`, so pushing
+    // `\n` would convert a CRLF config to LF and report every line as changed.
+    let newline = crate::store::line_ending(contents);
     let mut out = String::with_capacity(contents.len());
     let mut changes = Vec::new();
     let mut section = String::new();
@@ -124,13 +127,13 @@ pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
         if let Some(name) = section_of(line) {
             section = name.to_string();
             out.push_str(line);
-            out.push('\n');
+            out.push_str(newline);
             continue;
         }
 
         let Some(key) = key_of(line) else {
             out.push_str(line);
-            out.push('\n');
+            out.push_str(newline);
             continue;
         };
 
@@ -152,11 +155,14 @@ pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
                     let eq_col = line.find('=').unwrap_or_default();
                     let pad = eq_col.saturating_sub(indent.len() + to.len()).max(1);
                     // Writing into a String is infallible.
-                    let _ = writeln!(
+                    // `write!` and an explicit ending, not `writeln!`, which
+                    // hard-codes `\n` and would put an LF line into a CRLF file.
+                    let _ = write!(
                         out,
                         "{indent}{to}{:pad$}= {value}  # migrated from {from}",
                         ""
                     );
+                    out.push_str(newline);
                     changes.push(format!("[{want}] {from} -> {to}: {why}"));
                     handled = true;
                 }
@@ -167,7 +173,8 @@ pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
                 } if section == *want && key == *k => {
                     // Commented rather than deleted: the old value stays
                     // visible so the user can see what their colour was.
-                    let _ = writeln!(out, "# {}  # removed: {why}", line.trim());
+                    let _ = write!(out, "# {}  # removed: {why}", line.trim());
+                    out.push_str(newline);
                     changes.push(format!("[{want}] {k} removed: {why}"));
                     handled = true;
                 }
@@ -180,7 +187,7 @@ pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
 
         if !handled {
             out.push_str(line);
-            out.push('\n');
+            out.push_str(newline);
         }
     }
 
@@ -239,6 +246,26 @@ pub fn migrate_file(path: &Path) -> Result<Report> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Same hazard as `layout_edit`: `str::lines()` strips the `\r`, so a
+    /// migration of a Windows config rewrote every line in it.
+    #[test]
+    fn a_crlf_config_stays_crlf() {
+        let lf = "[theme]\nrx = \"green\"\n";
+        let (out, changes) = migrate_text(&lf.replace('\n', "\r\n"));
+        assert!(!changes.is_empty(), "something was migrated");
+        assert_eq!(
+            out.matches("\r\n").count(),
+            out.matches('\n').count(),
+            "every newline is still a CRLF: {out:?}"
+        );
+    }
+
+    #[test]
+    fn an_lf_config_stays_lf() {
+        let (out, _) = migrate_text("[theme]\nrx = \"green\"\n");
+        assert_eq!(out.matches('\r').count(), 0);
+    }
 
     #[test]
     fn a_renamed_key_keeps_the_alignment_of_its_block() {
