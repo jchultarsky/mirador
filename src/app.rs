@@ -33,6 +33,10 @@ const GLOBAL: &[Binding] = &[
     // knowing how to add a panel. The unused-widget notice names this key
     // anyway, which is where someone actually needs to be told about it.
     Binding::primary("w", "panels"),
+    // Last of the primaries, so it is the first to go when the terminal is too
+    // narrow for all of them — but a primary, because the alternative is what
+    // happened to the resize keys below: shipped, useful, and undiscoverable.
+    Binding::primary("m", "arrange"),
     Binding::extra("Shift+Tab", "focus back"),
     Binding::extra("1-9", "jump to panel"),
     Binding::extra("Ctrl+←/→", "resize width"),
@@ -269,6 +273,11 @@ pub struct App {
     show_update_hint: bool,
     /// The panel picker, while it is open.
     picker: Option<crate::picker::Picker>,
+    /// The layout as it stood when arrange mode opened, kept so that `Esc` can
+    /// put it back. Moving panels is a bigger, more spatial change than
+    /// toggling one on, and being able to try an arrangement and back out of it
+    /// is most of what makes it safe to try at all.
+    arranging: Option<Arrangement>,
     /// The config file, so layout changes can be written back to it. `None` in
     /// tests, which is what keeps them off a real user's config.
     config_path: Option<PathBuf>,
@@ -288,6 +297,15 @@ pub struct App {
     /// What the config file itself says. Preferences are recorded as the
     /// difference from this, which is what lets one be un-set.
     baseline: UiState,
+}
+
+/// What arrange mode has to put back if the user changes their mind.
+struct Arrangement {
+    layout: crate::config::Layout,
+    /// Whether the layout was already unwritten when the mode opened — a resize
+    /// a moment earlier, say. Cancelling restores the layout, and must not also
+    /// throw away a change that was never part of this arrangement.
+    was_dirty: bool,
 }
 
 impl std::fmt::Debug for App {
@@ -322,6 +340,7 @@ impl App {
             show_update_hint: true,
             unused_widgets,
             picker: None,
+            arranging: None,
             config_path: None,
             last_resize: None,
             layout_dirty: false,
@@ -701,6 +720,16 @@ impl App {
             return;
         }
 
+        // Arrange mode claims the bare arrows, which is the whole point of it
+        // being a mode: no modifier to discover, and no terminal that declines
+        // to deliver the chord. Anything with Ctrl held falls through, so the
+        // resize keys keep working while you are rearranging — which is when
+        // you are most likely to want them.
+        if self.arranging.is_some() && !ctrl {
+            self.handle_arrange_key(key);
+            return;
+        }
+
         // Resizing is a shell-level concern, the way it is in tmux, so it is
         // claimed before panels get a look. It has to be: the calendar binds
         // the bare arrow keys and does not inspect modifiers, so offering the
@@ -730,6 +759,94 @@ impl App {
         }
 
         self.dispatch_key(key);
+    }
+
+    /// Open arrange mode, remembering what to go back to.
+    fn enter_arrange(&mut self) {
+        self.arranging = Some(Arrangement {
+            layout: self.config.layout.clone(),
+            was_dirty: self.layout_dirty,
+        });
+    }
+
+    /// Move the focused panel, or leave the mode.
+    fn handle_arrange_key(&mut self, key: KeyEvent) {
+        use crate::arrange::Direction;
+
+        let direction = match key.code {
+            KeyCode::Left | KeyCode::Char('h') => Some(Direction::Left),
+            KeyCode::Right | KeyCode::Char('l') => Some(Direction::Right),
+            KeyCode::Up | KeyCode::Char('k') => Some(Direction::Up),
+            KeyCode::Down | KeyCode::Char('j') => Some(Direction::Down),
+            _ => None,
+        };
+
+        if let Some(direction) = direction {
+            self.move_focused(direction);
+            return;
+        }
+
+        match key.code {
+            // Pick a different panel to move without leaving the mode.
+            // Rearranging a dashboard means moving several things, and having
+            // to commit and re-enter between each one would make a two-panel
+            // swap a six-keystroke job.
+            KeyCode::Tab => self.cycle_focus(true),
+            KeyCode::BackTab => self.cycle_focus(false),
+            KeyCode::Char(c @ '1'..='9') => {
+                let index = c as usize - '1' as usize;
+                if index < self.slots.len() {
+                    self.focus = index;
+                }
+            }
+            // Keeping it is the ordinary way out, so it gets the ordinary keys.
+            // Written here rather than on every arrow: trying four arrangements
+            // should cost one write, and the mode is a natural commit point —
+            // the same reasoning as the picker.
+            KeyCode::Enter | KeyCode::Char('m' | 'q') => {
+                self.arranging = None;
+                self.write_layout();
+            }
+            // Esc backs out of it, which is what Esc means everywhere else in
+            // mirador. The picker commits on Esc instead, and that is defensible
+            // there because each of its changes is one keystroke to undo; an
+            // arrangement is not.
+            KeyCode::Esc => {
+                if let Some(before) = self.arranging.take() {
+                    self.config.layout = before.layout;
+                    // Rebuilding from a layout that was live a moment ago
+                    // cannot fail, and if it somehow did there is nothing
+                    // better to fall back to.
+                    let _ = self.rebuild_panels();
+                    self.layout_dirty = before.was_dirty;
+                    self.layout_error = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Move the focused panel one step, putting the layout back if the result
+    /// will not build.
+    fn move_focused(&mut self, direction: crate::arrange::Direction) {
+        let Some(&(row, column)) = self.positions.get(self.focus) else {
+            return;
+        };
+        let before = self.config.layout.clone();
+        if crate::arrange::move_panel(&mut self.config.layout, row, column, direction).is_none() {
+            return;
+        }
+
+        // Focus follows the panel by name, so the moved panel keeps the
+        // highlight wherever it lands and nothing here has to chase it.
+        if let Err(e) = self.rebuild_panels() {
+            self.config.layout = before;
+            let _ = self.rebuild_panels();
+            self.layout_error = Some(format!("{e:#}"));
+            return;
+        }
+        self.layout_error = None;
+        self.layout_dirty = true;
     }
 
     /// Act on whatever the picker made of a keypress.
@@ -852,6 +969,7 @@ impl App {
                 self.help_scroll = 0;
             }
             KeyCode::Char('w') => self.picker = Some(crate::picker::Picker::new()),
+            KeyCode::Char('m') => self.enter_arrange(),
             KeyCode::Char(c @ '1'..='9') => {
                 let index = c as usize - '1' as usize;
                 if index < self.slots.len() {
@@ -1190,6 +1308,31 @@ impl App {
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
 
+        // In arrange mode the bar belongs to the mode. The global keys are not
+        // reachable anyway — the arrows have been claimed — so listing them
+        // would be listing keys that do nothing.
+        if self.arranging.is_some() {
+            let mut spans = vec![Span::styled(
+                " ARRANGE",
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )];
+            for (key, action) in [
+                ("←→", "move in row"),
+                ("↑↓", "move rows"),
+                ("Ctrl+arrows", "resize"),
+                ("Enter", "keep"),
+                ("Esc", "cancel"),
+            ] {
+                spans.push(Span::styled("   ", muted));
+                spans.push(Span::styled(key, key_style));
+                spans.push(Span::styled(format!(" {action}"), muted));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+
         let mut spans = vec![Span::styled(
             " mirador",
             Style::default()
@@ -1495,6 +1638,17 @@ mod tests {
         app.config.layout.rows.iter().map(|r| r.height).collect()
     }
 
+    /// The whole grid as widget names, which is what a move is supposed to
+    /// change and what a cancelled one is supposed to restore.
+    fn widgets_by_row(app: &App) -> Vec<Vec<String>> {
+        app.config
+            .layout
+            .rows
+            .iter()
+            .map(|row| row.panels.iter().map(|p| p.widget.clone()).collect())
+            .collect()
+    }
+
     #[test]
     fn widening_a_panel_narrows_its_neighbour_and_holds_the_total() {
         let mut app = App::new(resizable()).unwrap();
@@ -1563,6 +1717,97 @@ mod tests {
             "a panel squeezed to nothing can never be focused to get its space back: {after:?}"
         );
         assert_eq!(after.iter().sum::<u16>(), 100, "total still holds");
+    }
+
+    /// The mode has to claim the bare arrows before panels do, for the same
+    /// reason the resize keys are claimed: the calendar binds plain arrows and
+    /// does not inspect modifiers, so a left arrow meant to move a panel would
+    /// scroll a month instead.
+    #[test]
+    fn arrange_claims_the_arrows_the_focused_panel_would_otherwise_take() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        assert!(app.arranging.is_some(), "m opened the mode");
+
+        let before = widgets_by_row(&app);
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        assert_ne!(
+            widgets_by_row(&app),
+            before,
+            "the arrow moved a panel rather than reaching the calendar"
+        );
+    }
+
+    /// Esc means "back out of this" everywhere else in mirador, and an
+    /// arrangement is exactly the kind of change worth being able to abandon.
+    #[test]
+    fn esc_puts_the_layout_back_exactly_as_it_was() {
+        let mut app = App::new(resizable()).expect("builds");
+        let before = widgets_by_row(&app);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        for code in [KeyCode::Right, KeyCode::Down, KeyCode::Up] {
+            app.handle_key(KeyEvent::from(code));
+        }
+        assert_ne!(widgets_by_row(&app), before, "something actually moved");
+
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.arranging.is_none(), "the mode closed");
+        assert_eq!(widgets_by_row(&app), before, "and the layout came back");
+        assert!(
+            !app.layout_dirty,
+            "a cancelled arrangement leaves nothing to write"
+        );
+    }
+
+    /// A resize made before the mode opened is not part of the arrangement, so
+    /// cancelling must not swallow it. Restoring the layout and clearing the
+    /// flag unconditionally would lose a change the user had already made.
+    #[test]
+    fn cancelling_does_not_discard_a_change_made_before_the_mode_opened() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert!(app.layout_dirty, "the resize is waiting to be written");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+        assert!(
+            app.layout_dirty,
+            "the earlier resize still needs writing after the cancel"
+        );
+    }
+
+    /// Focus follows the widget rather than the slot index, so the panel you
+    /// are moving stays the one under the highlight. Without this you would
+    /// move a panel once and then start moving whatever slid into its place.
+    #[test]
+    fn the_moved_panel_keeps_the_focus() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.focus = 0;
+        let moving = app.slots[0].widget.clone();
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+
+        assert_eq!(
+            app.slots[app.focus].widget, moving,
+            "the highlight went with the panel"
+        );
+    }
+
+    /// The arrows are the mode's, but Ctrl+arrow still has to reach the resize
+    /// path — rearranging is exactly when you want to adjust proportions.
+    #[test]
+    fn ctrl_arrows_still_resize_inside_arrange_mode() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+
+        let before = widths(&app);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_ne!(widths(&app), before, "Ctrl+Right resized rather than moved");
+        assert!(app.arranging.is_some(), "and did not close the mode");
     }
 
     #[test]

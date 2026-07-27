@@ -3,6 +3,7 @@
 //! See <https://github.com/jchultarsky/mirador> for documentation.
 
 mod app;
+mod arrange;
 mod chart;
 mod config;
 mod dateinput;
