@@ -810,10 +810,13 @@ impl Panel for NotesPanel {
             );
             frame.render_widget(Paragraph::new(grid.header(theme)), header_area);
 
+            // `NoteStore::get` is a linear scan; see the same fix in `todo.rs`.
+            let by_id: std::collections::HashMap<u64, &Note> =
+                self.store.notes().iter().map(|n| (n.id, n)).collect();
             let visible: Vec<&Note> = self
                 .view
                 .iter()
-                .filter_map(|id| self.store.get(*id))
+                .filter_map(|id| by_id.get(id).copied())
                 .collect();
             let items: Vec<ListItem> = visible
                 .iter()
