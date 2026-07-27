@@ -105,7 +105,7 @@ real test and a reassuring one.
 ```
 main.rs      CLI parsing, terminal setup
 app.rs       event loop, focus ring, grid geometry, help overlay, status bar
-panel.rs     the Panel trait — the only extension seam
+panel.rs     the Panel trait — the seam every widget goes through (in-tree)
 frame.rs     panel frames, Binding type, key hints punched into borders
 grid.rs      shared column grid with named headers
 chart.rs     braille graphs + baked colour gradients

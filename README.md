@@ -25,13 +25,26 @@ panel is dimmed. Every screen in this README is a real capture, not a mock-up.*
 
 ## Why
 
-There are good terminal dashboards already, but the task panels in them tend to
-be flat checklists. mirador treats the to-do list as a first-class feature: due
-dates, priorities, notes, tags, and full editing without leaving the dashboard.
-Everything is stored in a plain TOML file you can hand-edit or keep in git.
+Most terminal dashboards are built to be *watched* — a system monitor you open
+when something is wrong, dense and busy and refreshing as fast as it can.
+mirador is built to be **glanced at**: one tab, all day, in the corner of your
+eye. Everything follows from that. Nothing blinks or shimmers. The unfocused
+panels dim so exactly one thing is at full brightness. A notice retires on your
+first keypress, because a dashboard that nags is a dashboard you close.
 
-No accounts. No API keys. No telemetry. Weather comes from
-[Open-Meteo](https://open-meteo.com), which is free and key-less.
+**Your data stays in files you own.** Tasks, notes and the watchlist are plain
+TOML you can hand-edit, keep in git, or delete. No database, no sync service,
+no account, no API key, no telemetry, and nothing phones home — including the
+updater, which runs only when you run it.
+
+**It is a real task list, not a checklist.** Due dates, priorities, notes, tags,
+filtering and full editing without leaving the dashboard. That is the panel most
+dashboards treat as a checkbox, and it is the one you will use most.
+
+The two network panels use free key-less endpoints:
+[Open-Meteo](https://open-meteo.com) for weather, and Yahoo's public chart
+endpoint for prices — see [Market data](#market-data) for what the second one
+means for you.
 
 ## Install
 
@@ -498,8 +511,28 @@ rows = [
 
 ### Market data
 
-The watchlist reads a free, keyless endpoint. Two things follow from that, and
-they are worth knowing before you file a bug:
+The watchlist reads `query1.finance.yahoo.com`, the endpoint Yahoo's own charts
+call. **It is not a documented or supported API**, and Yahoo has never published
+terms permitting third-party programs to use it. It could be changed, rate-
+limited or withdrawn without notice, and whether your particular use of it is
+permitted is between you and Yahoo — this project cannot grant you a licence to
+someone else's service, and does not claim to.
+
+mirador's position, stated plainly so you can decide for yourself:
+
+- It is used because it is the only source that needs no account and no key, and
+  bundling an API key in a public binary would make it a shared secret with a
+  shared rate limit.
+- It is treated as a guest: one request per symbol, never faster than once a
+  minute, sequential rather than parallel, and prices are never written to disk.
+- `QuoteSource` is a trait with exactly this in mind. When the endpoint changes
+  or you would rather use a provider you have an agreement with, the panel does
+  not need rewriting — the source does.
+- If none of that sits right with you, leave `stocks` out of your `[layout]`.
+  Nothing else in mirador contacts Yahoo, and a panel that is not placed is not
+  built.
+
+Two practical consequences, worth knowing before you file a bug:
 
 - **Access is gated on your IP address, not on a key.** Datacenter and VPN
   ranges are blocked wholesale, so the same build can work on your laptop and
