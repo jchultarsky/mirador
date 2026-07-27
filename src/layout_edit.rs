@@ -481,15 +481,17 @@ units = "imperial"
     }
 
     /// The comment count is the whole justification for this module, and it is
-    /// quoted in two places that no compiler checks: `CLAUDE.md` invariant 16
-    /// and the 0.4.0 changelog entry. It had already drifted into "~145" in
-    /// both, and "two hundred" in a third citation since removed.
+    /// quoted in `CLAUDE.md` invariant 16, which no compiler checks. It had
+    /// already drifted into "~145" there, "two hundred" in this file's header,
+    /// and "159" in the 0.4.0 changelog entry — the last two citations have
+    /// since been removed rather than maintained, a changelog being a record of
+    /// what was true then rather than a place to keep a live number.
     ///
     /// A failure here is not a bug in the config. It means the number moved and
-    /// the citations have to move with it.
+    /// `CLAUDE.md` has to move with it.
     #[test]
     fn the_comment_count_the_docs_quote_is_the_one_in_the_file() {
-        const CITED: usize = 159;
+        const CITED: usize = 167;
         let actual = crate::config::DEFAULT_CONFIG
             .lines()
             .filter(|line| line.trim_start().starts_with('#'))
@@ -497,8 +499,7 @@ units = "imperial"
         assert_eq!(
             actual, CITED,
             "the default config now has {actual} comment lines. Update this \
-             constant, `CLAUDE.md` invariant 16 and the 0.4.0 changelog entry \
-             — they all quote {CITED}."
+             constant and `CLAUDE.md` invariant 16 — both quote {CITED}."
         );
     }
 }

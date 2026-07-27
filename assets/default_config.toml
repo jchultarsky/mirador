@@ -258,7 +258,13 @@ chime_command            = []
 # ---------------------------------------------------------------------------
 [cpu]
 history       = 120            # samples kept in the moving chart
-sample_secs   = 1
+sample_secs   = 2             # seconds between samples. Every sample is a new
+                              # number, and a new number means a repaint, so
+                              # this and [network] set the floor on what an idle
+                              # dashboard costs: 66 redraws a minute at 1, 36 at
+                              # 2, with the clock's seconds off. 1 watches more
+                              # closely; 2 covers twice the time in the same
+                              # chart.
 show_per_core = true
 warn_pct      = 70.0
 critical_pct  = 90.0
@@ -272,4 +278,6 @@ critical_pct  = 90.0
 [network]
 interfaces  = []
 history     = 120
-sample_secs = 1
+sample_secs = 2               # see the note under [cpu]. Sampling the
+                              # interface list is the more expensive of the
+                              # two by roughly fifteen times.

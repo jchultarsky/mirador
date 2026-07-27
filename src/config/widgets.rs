@@ -266,6 +266,32 @@ pub struct CpuConfig {
     /// Number of samples retained in the moving chart.
     pub history: usize,
     /// Seconds between samples.
+    ///
+    /// Two, not one. Since the redraw follows visible change rather than the
+    /// tick, a fresh sample is a new number and every new number costs a
+    /// repaint of the whole grid — so this panel and `network` set the floor on
+    /// what an idle dashboard does.
+    ///
+    /// Measured at 400x100 on the default layout, redraws per idle minute:
+    ///
+    /// ```text
+    ///                        sample_secs = 1    = 2
+    ///   show_seconds = true          95          81
+    ///   show_seconds = false         66          36
+    /// ```
+    ///
+    /// The second row is the change; the first is what the clock costs. With
+    /// seconds on, the clock alone asks for a repaint every second and swamps
+    /// this, which is worth knowing before attributing an idle dashboard's cost
+    /// to the graphs.
+    ///
+    /// It also buys a chart covering twice the wall-clock time for the same
+    /// buffer — the span beside the figure is computed from the live sample
+    /// count, so it says so.
+    ///
+    /// The cost is that the figure is a two-second average, so a brief spike
+    /// reads slightly lower. Set it to 1 if you would rather watch it closely
+    /// than leave it open all day; the floor is 1 either way.
     pub sample_secs: u64,
     /// Also draw a per-core breakdown when the panel is tall enough.
     pub show_per_core: bool,
@@ -279,7 +305,7 @@ impl Default for CpuConfig {
     fn default() -> Self {
         Self {
             history: 120,
-            sample_secs: 1,
+            sample_secs: 2,
             show_per_core: true,
             warn_pct: 70.0,
             critical_pct: 90.0,
@@ -295,7 +321,11 @@ pub struct NetworkConfig {
     pub interfaces: Vec<String>,
     /// Number of samples retained in the moving chart.
     pub history: usize,
-    /// Seconds between samples.
+    /// Seconds between samples. See [`CpuConfig::sample_secs`] for why it is 2.
+    ///
+    /// This one is also the more expensive of the pair: enumerating interfaces
+    /// costs the better part of a millisecond a sample on macOS, against 60
+    /// microseconds for reading CPU usage.
     pub sample_secs: u64,
 }
 
@@ -304,7 +334,7 @@ impl Default for NetworkConfig {
         Self {
             interfaces: Vec::new(),
             history: 120,
-            sample_secs: 1,
+            sample_secs: 2,
         }
     }
 }

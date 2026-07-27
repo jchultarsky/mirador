@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`[cpu].sample_secs` and `[network].sample_secs` now default to 2.** Since
+  the redraw follows visible change, every sample is a new number and every new
+  number costs a repaint, so these two panels set the floor on what an idle
+  dashboard does. Measured at 400x100 on the default layout, redraws per idle
+  minute:
+
+  |                        | `sample_secs = 1` | `= 2` |
+  | ---                    | ---               | ---   |
+  | `show_seconds = true`  | 95                | 81    |
+  | `show_seconds = false` | 66                | 36    |
+
+  The second row is the change. The first is what the clock costs: with seconds
+  on it asks for a repaint every second and swamps the rest, which is worth
+  knowing before blaming the graphs.
+
+  The charts now cover twice the wall-clock time for the same buffer, and the
+  span beside the figure says so. The cost is a two-second average, so a brief
+  spike reads slightly lower — set it back to 1 if you would rather watch
+  closely than leave it open all day.
+
+  **Only new installs are affected.** The config seeds on first run and mirador
+  never rewrites it, so an existing `config.toml` keeps whatever it already
+  says.
+
 ## [0.5.2] - 2026-07-27
 
 Documentation only; no code changed since 0.5.1.
@@ -153,7 +181,7 @@ before 0.1.0, `mirador --migrate-config` will update it.
 - **Layout changes are written back into your config**, reversing an earlier
   decision to keep them out of it. The rule was never really "do not write to
   the config" — it was "do not *reserialise* it", because a round trip through
-  `toml` discards every comment in the file, including the 159 mirador wrote to
+  `toml` discards every comment in the file, including the ones mirador wrote to
   explain its own options. `--migrate-config` had already established the
   alternative: edit the lines that need editing and leave the rest alone.
 
@@ -582,6 +610,7 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.5.2...HEAD
 [0.5.2]: https://github.com/jchultarsky/mirador/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/jchultarsky/mirador/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jchultarsky/mirador/compare/v0.4.0...v0.5.0
