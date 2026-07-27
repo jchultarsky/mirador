@@ -137,28 +137,28 @@ key a 0.7                                        # add a task
 type_text "Renew the domain"
 key Enter 1.8                                    # and it is in the list
 
-# `End` selects the last widget, `network`. Toggling any panel rebuilds the
-# whole dashboard, and a re-added widget goes to the emptiest row — so removing
-# the *last* one is the case where it comes back exactly where it was. Any other
-# choice reshuffles the row, which reads as a glitch rather than as a feature.
+# `End` selects the last widget, `network`. A re-added widget goes to the
+# emptiest row, so removing the *last* one is the case where it comes back
+# exactly where it was; any other choice reshuffles the row, which reads as a
+# glitch rather than as a feature. The panels that stay put are carried across
+# rather than rebuilt, so nothing else on screen so much as blinks.
 tmux send-keys -t "$SESSION" 'w'; hold 1.0      # the panel picker
 key End 0.5
 key space 1.3                                    # a panel goes, the grid reflows
 key space 1.3                                    # and comes back
 key Escape 0.8
 
-# The help overlay goes last on purpose. Rebuilding the panels restarts the
-# weather and price fetches, so for a few seconds those two read "loading" —
-# real behaviour, but it looks like a fault in a silent GIF. Holding the overlay
-# over the top gives them time to come back before the last frames.
+# The help overlay before the timer, so the GIF ends on a running clock rather
+# than on a dialog. (This used to be a workaround: toggling a panel restarted
+# the weather and price fetches, and the overlay hid the few seconds of
+# "loading". Panels are carried across now, so it is just the better order.)
 tmux send-keys -t "$SESSION" '?'; hold 1.8      # every binding, scrollable
 key Down 0.4
 key Down 0.4
 key Down 0.8
 tmux send-keys -t "$SESSION" 'x'; hold 1.0      # any other key closes it
 
-# The timer is started last. Toggling a panel rebuilds every panel, which resets
-# a running pomodoro — so starting it earlier would show it silently give up.
+# Started last so the recording ends on something moving.
 tmux send-keys -t "$SESSION" '6'; hold 0.6
 key space 2.8                                    # started, and counting down
 
