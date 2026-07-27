@@ -20,7 +20,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::config::NotesConfig;
 use crate::frame::Binding;
-use crate::grid::{Column, Grid};
+use crate::grid::{Column, Grid, wrapped_height};
 use crate::note::{Note, NoteStore};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::textarea::TextArea;
@@ -846,46 +846,6 @@ impl Panel for NotesPanel {
     fn shutdown(&mut self) {
         self.store.save_reporting();
     }
-}
-
-/// Rows `body` occupies once wrapped to `width`.
-///
-/// Word wrapping, matching how the reader renders it, and measured in display
-/// cells rather than characters — a note full of CJK or emoji wraps at half the
-/// character count. An empty line still occupies a row.
-fn wrapped_height(body: &str, width: u16) -> u16 {
-    if width == 0 {
-        return 0;
-    }
-    let width = usize::from(width);
-    let mut rows: usize = 0;
-
-    for line in body.lines() {
-        let mut used = 0usize;
-        let mut rows_here = 1usize;
-        for word in line.split_inclusive(' ') {
-            let w = display_width(word);
-            if used > 0 && used + w > width {
-                rows_here += 1;
-                used = w;
-            } else {
-                used += w;
-            }
-            // A single word longer than the line wraps within itself.
-            while used > width {
-                rows_here += 1;
-                used -= width;
-            }
-        }
-        rows += rows_here;
-    }
-
-    u16::try_from(rows.max(1)).unwrap_or(u16::MAX)
-}
-
-/// Width in display cells.
-fn display_width(text: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(text)
 }
 
 #[cfg(test)]

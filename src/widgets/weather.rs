@@ -26,7 +26,7 @@ use crate::config::WeatherConfig;
 use crate::frame::Binding;
 use crate::glyphs;
 use crate::grid::{Column, Grid};
-use crate::panel::{Panel, RenderContext};
+use crate::panel::{Panel, RenderContext, describe_age};
 
 /// How long to wait on any single HTTP request.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -153,19 +153,6 @@ impl State {
     }
 }
 
-/// Render a duration the way a person would say it.
-fn describe_age(age: Duration) -> String {
-    let minutes = age.as_secs() / 60;
-    if minutes < 60 {
-        return format!("{minutes}m old");
-    }
-    let hours = minutes / 60;
-    if hours < 24 {
-        return format!("{hours}h old");
-    }
-    format!("{}d old", hours / 24)
-}
-
 /// The weather panel.
 #[derive(Debug)]
 pub struct WeatherPanel {
@@ -285,34 +272,75 @@ impl WeatherPanel {
     }
 }
 
-/// Fetch now, then every `refresh_minutes`, until the process exits.
+/// Fetch now, then every `refresh_minutes`, until `stop` is set.
 fn fetch_loop(
     config: &WeatherConfig,
     state: &Arc<Mutex<State>>,
     refresh: &Arc<Mutex<bool>>,
     stop: &Arc<AtomicBool>,
 ) {
-    // Resolve coordinates once; a geocoding failure is fatal for this panel and
-    // there is no point retrying it every cycle.
-    let located = match resolve_location(config) {
-        Ok(v) => v,
-        Err(e) => {
-            update(state, |s| s.error = Some(format!("{e:#}")));
-            return;
-        }
-    };
-
     let interval = Duration::from_secs(config.refresh_minutes.max(1) * 60);
+    poll(
+        config,
+        state,
+        refresh,
+        stop,
+        interval,
+        &resolve_location,
+        &fetch_weather,
+    );
+}
+
+/// The loop itself, with its two network calls as parameters.
+///
+/// Injected rather than called directly so a test can prove the thread outlives
+/// a failure without needing a network. The property under test is structural —
+/// that nothing returns early — and that cannot be checked from the outside.
+// No `Send`/`Sync` bound: `poll` runs entirely on the thread that called it,
+// and the caller owns the closures for the whole call.
+type Resolver<'a> = &'a dyn Fn(&WeatherConfig) -> Result<Located>;
+type Fetcher<'a> = &'a dyn Fn(&WeatherConfig, &Located) -> Result<WeatherData>;
+
+fn poll(
+    config: &WeatherConfig,
+    state: &Arc<Mutex<State>>,
+    refresh: &Arc<Mutex<bool>>,
+    stop: &Arc<AtomicBool>,
+    interval: Duration,
+    resolve_location: Resolver<'_>,
+    fetch_weather: Fetcher<'_>,
+) {
+    // Resolved once and then kept: a place does not move, and geocoding is a
+    // second request nobody asked for.
+    //
+    // A *failure* is a different matter. It used to end the thread, on the
+    // grounds that a bad location name will not fix itself — but the common
+    // failure is not a bad name, it is a laptop that resumed before Wi-Fi
+    // associated, or `rebuild_panels` firing during a blip. The panel drew
+    // "r to retry" and the key was dead, because nothing was left to read the
+    // flag it set. So the thread stays alive and retries until it succeeds.
+    let mut located: Option<Located> = None;
+
     while !stop.load(Ordering::Relaxed) {
-        match fetch_weather(config, &located) {
-            Ok(data) => update(state, |s| {
-                s.data = Some(Box::new(data));
-                s.fetched = Some(Instant::now());
-                s.error = None;
-            }),
-            // The reading and its timestamp are deliberately left alone, so a
-            // blip shows the last good data with its age rather than nothing.
-            Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
+        if located.is_none() {
+            match resolve_location(config) {
+                Ok(place) => located = Some(place),
+                Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
+            }
+        }
+
+        if let Some(place) = &located {
+            match fetch_weather(config, place) {
+                Ok(data) => update(state, |s| {
+                    s.data = Some(Box::new(data));
+                    s.fetched = Some(Instant::now());
+                    s.error = None;
+                }),
+                // The reading and its timestamp are deliberately left alone, so
+                // a blip shows the last good data with its age rather than
+                // nothing.
+                Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
+            }
         }
 
         // Sleep in short slices so a manual refresh does not wait out the full
@@ -1377,5 +1405,129 @@ mod tests {
         assert!(grid.has("temp"));
         assert!(!grid.has("wind"));
         assert!(!grid.has("feels"));
+    }
+
+    #[test]
+    fn a_failed_geocode_is_retried_rather_than_ending_the_thread() {
+        use std::sync::atomic::AtomicUsize;
+
+        // Geocoding used to be resolved once before the loop, and a failure
+        // returned from the thread. The panel went on drawing "r to retry" with
+        // nothing left alive to read the flag that `r` sets, so the key did
+        // nothing, for ever — on the exact failure a laptop resuming before its
+        // Wi-Fi associates produces.
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&attempts);
+        let resolve = move |_: &WeatherConfig| -> Result<Located> {
+            // Fail the first two attempts, then succeed.
+            if counter.fetch_add(1, Ordering::Relaxed) < 2 {
+                anyhow::bail!("could not resolve `nowhere`");
+            }
+            Ok(Located {
+                name: "Cincinnati".into(),
+                latitude: 39.1,
+                longitude: -84.5,
+            })
+        };
+        let fetch = |_: &WeatherConfig, _: &Located| Ok(sample_data(true));
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let refresh = Arc::new(Mutex::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // A zero interval turns the wait into a no-op, so the passes happen as
+        // fast as the closures return and the test does not sleep.
+        poll_until(
+            &WeatherConfig::default(),
+            &state,
+            &refresh,
+            &stop,
+            Duration::ZERO,
+            &resolve,
+            &fetch,
+            3,
+        );
+
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            3,
+            "geocoding must be retried after it fails, and not once it succeeds"
+        );
+        let guard = state.lock().unwrap();
+        assert!(
+            guard.data.is_some(),
+            "the third pass should have produced a reading"
+        );
+        assert!(guard.error.is_none(), "a recovered fetch clears the error");
+    }
+
+    #[test]
+    fn a_geocode_failure_is_reported_without_losing_the_panel() {
+        let resolve = |_: &WeatherConfig| -> Result<Located> { anyhow::bail!("no such place") };
+        let fetch = |_: &WeatherConfig, _: &Located| -> Result<WeatherData> {
+            unreachable!("nothing to fetch without coordinates")
+        };
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let refresh = Arc::new(Mutex::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        poll_until(
+            &WeatherConfig::default(),
+            &state,
+            &refresh,
+            &stop,
+            Duration::ZERO,
+            &resolve,
+            &fetch,
+            2,
+        );
+
+        let guard = state.lock().unwrap();
+        assert!(guard.data.is_none());
+        assert!(
+            guard
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("no such place")),
+            "the reason must reach the panel: {:?}",
+            guard.error
+        );
+    }
+
+    /// Run [`poll`] for exactly `passes` iterations by setting `stop` from a
+    /// watcher thread once the resolver has been called enough times.
+    ///
+    /// `poll` deliberately has no iteration limit — that is the whole point of
+    /// it — so a test bounds it from the outside, the way `shutdown` does.
+    #[allow(clippy::too_many_arguments)]
+    fn poll_until(
+        config: &WeatherConfig,
+        state: &Arc<Mutex<State>>,
+        refresh: &Arc<Mutex<bool>>,
+        stop: &Arc<AtomicBool>,
+        interval: Duration,
+        resolve: Resolver<'_>,
+        fetch: Fetcher<'_>,
+        passes: usize,
+    ) {
+        let seen = std::cell::Cell::new(0usize);
+        let counted_resolve = |c: &WeatherConfig| {
+            seen.set(seen.get() + 1);
+            if seen.get() >= passes {
+                stop.store(true, Ordering::Relaxed);
+            }
+            resolve(c)
+        };
+        // `poll` checks `stop` at the top of each pass, so the pass that trips
+        // the flag still completes.
+        poll(
+            config,
+            state,
+            refresh,
+            stop,
+            interval,
+            &counted_resolve,
+            fetch,
+        );
     }
 }

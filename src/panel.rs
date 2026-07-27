@@ -125,12 +125,18 @@ pub trait Panel {
 
     /// Contribute any preference this panel wants remembered across restarts.
     ///
-    /// Write a setting only when it differs from the value the panel was built
-    /// with. A panel that reports everything pins the config's own values into
-    /// the state file the first time any *other* preference moves, and editing
-    /// the config then silently stops working — which is the failure this whole
-    /// mechanism exists to avoid. Comparing against the seed is what keeps
-    /// "changed by the user" and "merely configured" apart.
+    /// Report the panel's *current* values, unconditionally. Deciding whether a
+    /// value is worth writing is not a panel's job: the shell compares the whole
+    /// set against the config as it was read, before any remembered preference
+    /// was folded in, and writes only the difference.
+    ///
+    /// Do not filter here by comparing against the value the panel was built
+    /// with. That was the previous design and it made a preference impossible to
+    /// retract: panels are built *after* remembered preferences are applied, so
+    /// once a setting had been recorded the panel was constructed from the
+    /// recorded value and could never see it as equal to the config's again.
+    /// Setting it back to the config's value then wrote nothing, which left the
+    /// old entry standing for ever. See `CLAUDE.md` invariant 17.
     ///
     /// There is no matching load hook on purpose. Remembered preferences are
     /// applied to the config before any panel is built, so a panel sees the
@@ -139,4 +145,20 @@ pub trait Panel {
 
     /// Called once before the terminal is torn down, so panels can flush state.
     fn shutdown(&mut self) {}
+}
+
+/// Render a duration the way a person would say it.
+///
+/// Used wherever a panel shows data it fetched rather than computed, which is
+/// the only honest way to present a reading that may have stopped updating.
+pub fn describe_age(age: Duration) -> String {
+    let minutes = age.as_secs() / 60;
+    if minutes < 60 {
+        return format!("{minutes}m old");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h old");
+    }
+    format!("{}d old", hours / 24)
 }

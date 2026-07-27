@@ -27,6 +27,85 @@ pub fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
+/// Cut `text` down to `width` terminal cells, ending in `…` if anything was
+/// dropped.
+///
+/// Measured in cells for the same reason as [`display_width`]: budgeting by
+/// `chars().count()` means one CJK glyph or emoji per two cells of overflow,
+/// which is enough to push the text through the panel's own border.
+///
+/// The result never exceeds `width`, but may fall one cell short of it when a
+/// double-width character would not fit — there is no half a cell to give
+/// back. Callers that need an exact width should pad, as [`fit`] does.
+pub fn truncate(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if display_width(text) <= width {
+        return text.to_string();
+    }
+
+    // Take characters while they fit, keeping one cell back for the ellipsis.
+    let budget = width - 1;
+    let mut out = String::new();
+    let mut used = 0usize;
+    for c in text.chars() {
+        let w = char_width(c);
+        if used + w > budget {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out
+}
+
+/// Display width of a single character, treating unprintables as zero-width.
+fn char_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// Rows that `text` occupies once word-wrapped to `width` cells.
+///
+/// Needed wherever something is sized to fit its own contents — a scroll
+/// clamp, or a dialog that must not be shorter than the text inside it. The
+/// unwrapped line count is not a substitute: it is right until a line is
+/// longer than the box, and then it is short by exactly the amount that
+/// matters.
+///
+/// Matches `Paragraph::new(text).wrap(Wrap { trim: false })`, whose own
+/// `line_count` is private. An empty line still occupies a row.
+pub fn wrapped_height(text: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    let width = usize::from(width);
+    let mut rows: usize = 0;
+
+    for line in text.lines() {
+        let mut used = 0usize;
+        let mut rows_here = 1usize;
+        for word in line.split_inclusive(' ') {
+            let w = display_width(word);
+            if used > 0 && used + w > width {
+                rows_here += 1;
+                used = w;
+            } else {
+                used += w;
+            }
+            // A single word longer than the line wraps within itself.
+            while used > width {
+                rows_here += 1;
+                used -= width;
+            }
+        }
+        rows += rows_here;
+    }
+
+    u16::try_from(rows.max(1)).unwrap_or(u16::MAX)
+}
+
 /// How a column is sized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
@@ -265,21 +344,9 @@ fn fit(text: &str, width: u16, align: Align) -> String {
 
     let actual = display_width(text);
     if actual > width {
-        // Take characters while they fit, leaving one cell for the ellipsis.
-        let mut out = String::new();
-        let mut used = 0usize;
-        for c in text.chars() {
-            let w = UnicodeWidthStr::width(c.to_string().as_str());
-            if used + w > width.saturating_sub(1) {
-                break;
-            }
-            out.push(c);
-            used += w;
-        }
-        out.push('…');
-        used += 1;
+        let mut out = truncate(text, width);
         // A double-width character can leave the result a cell short.
-        out.push_str(&" ".repeat(width.saturating_sub(used)));
+        out.push_str(&" ".repeat(width.saturating_sub(display_width(&out))));
         return out;
     }
 

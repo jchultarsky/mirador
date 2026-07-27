@@ -40,6 +40,24 @@ const GLOBAL: &[Binding] = &[
     Binding::extra("Ctrl+C", "quit"),
 ];
 
+/// The text of `lines` with the styling dropped, for measuring.
+///
+/// Only the characters decide how text wraps, so a measurement does not need
+/// the spans — but it does need them concatenated in order, which is why this
+/// is not simply the first span of each line.
+fn plain_text(lines: &[Line<'_>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Smallest weight a panel or row may be squeezed to.
 const MIN_WEIGHT: u16 = 1;
 
@@ -190,6 +208,14 @@ pub struct App {
     positions: Vec<(usize, usize)>,
     focus: usize,
     show_help: bool,
+    /// First visible line of the help overlay.
+    help_scroll: u16,
+    /// How far the help overlay can scroll, and how tall its viewport is — both
+    /// measured during the render that laid it out, because both depend on the
+    /// terminal width the text wrapped at. Zero overflow is also what tells the
+    /// key handler to leave the arrow keys alone and close on anything.
+    help_overflow: u16,
+    help_viewport: u16,
     should_quit: bool,
     /// Widgets available but not placed by this layout.
     ///
@@ -245,6 +271,9 @@ impl App {
             positions,
             focus: 0,
             show_help: false,
+            help_scroll: 0,
+            help_overflow: 0,
+            help_viewport: 0,
             should_quit: false,
             show_widget_hint: !unused_widgets.is_empty(),
             unused_widgets,
@@ -456,8 +485,28 @@ impl App {
             return;
         }
 
-        // The help overlay swallows the next key, whatever it is.
+        // The help overlay swallows the next key, whatever it is — except the
+        // ones that scroll it, because on an 80x24 terminal the focused panel's
+        // own bindings do not fit and a key that cannot be reached is a key
+        // that does not exist. Scrolling only binds when there is something
+        // below the fold, so on a tall terminal any key still closes it.
         if self.show_help {
+            if self.help_overflow > 0 {
+                let page = self.help_viewport.max(1);
+                let moved = match key.code {
+                    KeyCode::Down | KeyCode::Char('j') => Some(self.help_scroll.saturating_add(1)),
+                    KeyCode::Up | KeyCode::Char('k') => Some(self.help_scroll.saturating_sub(1)),
+                    KeyCode::PageDown => Some(self.help_scroll.saturating_add(page)),
+                    KeyCode::PageUp => Some(self.help_scroll.saturating_sub(page)),
+                    KeyCode::Home => Some(0),
+                    KeyCode::End => Some(self.help_overflow),
+                    _ => None,
+                };
+                if let Some(to) = moved {
+                    self.help_scroll = to.min(self.help_overflow);
+                    return;
+                }
+            }
             self.show_help = false;
             return;
         }
@@ -613,7 +662,12 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => self.cycle_focus(true),
             KeyCode::BackTab => self.cycle_focus(false),
-            KeyCode::Char('?') => self.show_help = true,
+            KeyCode::Char('?') => {
+                self.show_help = true;
+                // Opening it always starts at the top; the bindings for the
+                // panel you just focused are the reason you pressed `?`.
+                self.help_scroll = 0;
+            }
             KeyCode::Char('w') => self.picker = Some(0),
             KeyCode::Char(c @ '1'..='9') => {
                 let index = c as usize - '1' as usize;
@@ -830,7 +884,13 @@ impl App {
 
         let heights = distribute(area.height, &row_weights, &row_maxima);
 
-        let mut rects = Vec::with_capacity(self.slots.len());
+        // Indexed by slot, not by layout column, and written through `slot_at`.
+        // Pushing one rect per column assumes every layout entry produced a
+        // panel; a single entry that did not shifts every later slot onto the
+        // previous entry's rectangle, which is what `slot.area` hit-tests, so
+        // clicks land on the wrong panel. A slot that gets no rectangle keeps
+        // the zero one and is skipped by the caller's size check.
+        let mut rects = vec![Rect::default(); self.slots.len()];
         let mut y = area.y;
         for (row_index, row) in rows.iter().enumerate() {
             let height = heights.get(row_index).copied().unwrap_or(0);
@@ -845,8 +905,10 @@ impl App {
             let columns = distribute(area.width, &widths, &maxima);
 
             let mut x = area.x;
-            for width in columns {
-                rects.push(Rect::new(x, y, width, height));
+            for (column, width) in columns.into_iter().enumerate() {
+                if let Some(slot) = self.slot_at(row_index, column) {
+                    rects[slot] = Rect::new(x, y, width, height);
+                }
                 x = x.saturating_add(width);
             }
             y = y.saturating_add(height);
@@ -1070,8 +1132,9 @@ impl App {
         );
     }
 
-    fn render_help(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let theme = &self.config.theme;
+    fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        let theme = self.config.theme.clone();
+        let theme = &theme;
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
 
@@ -1110,11 +1173,10 @@ impl App {
         if !self.unused_widgets.is_empty() {
             lines.push(Line::from(""));
             lines.push(section("widgets not in your layout"));
-            // The overlay clips silently when the content outgrows the screen,
-            // so the actionable line comes before the list: losing the names
-            // still leaves you able to act, losing the instruction does not.
-            // The names go on one wrapped line for the same reason — one line
-            // per widget cost eight rows on a stale config.
+            // The actionable line comes before the list because it is the more
+            // useful of the two if only one is on screen. The names go on one
+            // wrapped line because one line per widget cost eight rows on a
+            // stale config.
             lines.push(Line::from(vec![
                 Span::styled("  press ", muted),
                 Span::styled("w", key_style),
@@ -1126,16 +1188,22 @@ impl App {
             )));
         }
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  any key to close",
-            Style::default()
-                .fg(theme.muted)
-                .add_modifier(Modifier::ITALIC),
-        )));
-
+        // The footer is rendered separately and pinned to the last row, rather
+        // than being the last line of the scrolling text. A hint saying how to
+        // close the overlay is no use once it has scrolled out of the overlay.
         let width = 46.min(area.width);
-        let height = (u16::try_from(lines.len()).unwrap_or(u16::MAX) + 2).min(area.height);
+        // Two borders and one cell of padding on each side.
+        let text_width = width.saturating_sub(4).max(1);
+        // Measured after wrapping, not from `lines.len()`. The two differ
+        // whenever a line is longer than the popup, which the list of unused
+        // widgets routinely is — sizing from the unwrapped count is how the
+        // overlay came to be shorter than its own contents.
+        let text_height = crate::grid::wrapped_height(&plain_text(&lines), text_width);
+        let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+
+        // Borders, the blank line, and the footer.
+        let chrome = 4;
+        let height = text_height.saturating_add(chrome).min(area.height);
         let popup = Rect {
             x: area.x + area.width.saturating_sub(width) / 2,
             y: area.y + area.height.saturating_sub(height) / 2,
@@ -1161,7 +1229,72 @@ impl App {
             ]));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+
+        if inner.height == 0 {
+            self.help_overflow = 0;
+            self.help_viewport = 0;
+            return;
+        }
+
+        // Give the footer the last row and the blank line the one above it,
+        // but never at the cost of showing no text at all.
+        let footer_rows = 2.min(inner.height.saturating_sub(1));
+        let viewport = Rect {
+            height: inner.height - footer_rows,
+            ..inner
+        };
+
+        self.help_viewport = viewport.height;
+        self.help_overflow = text_height.saturating_sub(viewport.height);
+        // The terminal may have shrunk since the last frame, or the focused
+        // panel changed to one with fewer bindings.
+        self.help_scroll = self.help_scroll.min(self.help_overflow);
+
+        frame.render_widget(body.scroll((self.help_scroll, 0)), viewport);
+
+        if footer_rows > 0 {
+            let footer = Rect {
+                y: inner.y + inner.height - 1,
+                height: 1,
+                ..inner
+            };
+            frame.render_widget(Paragraph::new(self.help_footer(theme)), footer);
+        }
+    }
+
+    /// The pinned last row of the help overlay.
+    ///
+    /// It says how to close the overlay, and when there is more text than fits,
+    /// that scrolling is possible and where in the list you are. Without the
+    /// position there is no way to tell a full list from a truncated one.
+    fn help_footer(&self, theme: &crate::theme::Theme) -> Line<'static> {
+        let italic = Style::default()
+            .fg(theme.muted)
+            .add_modifier(Modifier::ITALIC);
+
+        if self.help_overflow == 0 {
+            return Line::from(Span::styled("any key to close", italic));
+        }
+
+        let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
+        let more_above = self.help_scroll > 0;
+        let more_below = self.help_scroll < self.help_overflow;
+        let arrows = match (more_above, more_below) {
+            (true, true) => "↑↓",
+            (true, false) => "↑",
+            _ => "↓",
+        };
+        Line::from(vec![
+            Span::styled(arrows, key_style),
+            Span::styled(
+                format!(
+                    " {}/{} · any other key to close",
+                    self.help_scroll + self.help_viewport,
+                    self.help_overflow + self.help_viewport,
+                ),
+                italic,
+            ),
+        ])
     }
 }
 
@@ -1409,6 +1542,74 @@ mod tests {
                 .draw(|frame| app.render_for_test(frame))
                 .unwrap_or_else(|e| panic!("help failed to draw at {width}x{height}: {e}"));
         }
+    }
+
+    #[test]
+    fn every_binding_of_the_focused_panel_is_reachable_on_an_80x24_terminal() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // The tasks panel declares 17 bindings; with the global block, the
+        // section headings and the footer that is well past the 22 rows an
+        // 80x24 terminal leaves inside the overlay. It used to clip there
+        // silently, so about a third of the keys did not exist as far as
+        // anyone reading `?` could tell.
+        let mut app = App::new(config_with(&["todo"])).unwrap();
+        let bindings = app.slots[0].panel.bindings().len();
+        assert!(bindings > 4, "this test needs a panel with many bindings");
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+
+        assert!(
+            app.help_overflow > 0,
+            "the overlay fits at 80x24, so this test no longer proves anything"
+        );
+
+        // Scroll to the bottom one key at a time, redrawing as a user would.
+        let mut guard = 0;
+        while app.help_scroll < app.help_overflow {
+            app.handle_key(KeyEvent::from(KeyCode::Down));
+            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+            assert!(app.show_help, "scrolling must not dismiss the overlay");
+            guard += 1;
+            assert!(guard < 200, "scrolling made no progress");
+        }
+
+        // The last row of text is on screen, and `End` and `Home` agree.
+        app.handle_key(KeyEvent::from(KeyCode::Home));
+        assert_eq!(app.help_scroll, 0);
+        app.handle_key(KeyEvent::from(KeyCode::End));
+        assert_eq!(app.help_scroll, app.help_overflow);
+
+        // Anything that is not a scroll key still closes it.
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(
+            !app.show_help,
+            "a non-scroll key must still close the overlay"
+        );
+    }
+
+    #[test]
+    fn the_overlay_closes_on_any_key_when_it_all_fits() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // Scrolling only binds the arrow keys when there is something below the
+        // fold. On a terminal with room to spare, `?` then Down must close,
+        // because that is what "any key to close" promises.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 60)).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+
+        assert_eq!(
+            app.help_overflow, 0,
+            "120x60 has room for the whole overlay"
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(!app.show_help);
     }
 
     #[test]
@@ -1701,6 +1902,38 @@ mod tests {
             assert!(rect.x + rect.width <= area.x + area.width);
             assert!(rect.y + rect.height <= area.y + area.height);
         }
+    }
+
+    #[test]
+    fn a_layout_entry_that_builds_no_panel_does_not_shift_the_rest() {
+        // `geometry` used to push one rect per layout column and `render` read
+        // it back by slot index. Any entry that produced no panel made the two
+        // disagree, so every later slot drew — and hit-tested clicks — in the
+        // previous entry's box.
+        //
+        // `Config::validate` rejects an unknown widget name, but `App::new`
+        // does not re-validate and neither does `rebuild_panels`, so this is
+        // one `config.layout` mutation away from being reachable.
+        let mut config = config_with(&["nope", "clocks", "cpu"]);
+        config.layout.rows[0].panels[0].width = 25;
+        config.layout.rows[0].panels[1].width = 25;
+        config.layout.rows[0].panels[2].width = 50;
+
+        let app = App::new(config).unwrap();
+        assert_eq!(app.slots.len(), 2, "the unknown widget builds no panel");
+        assert_eq!(app.positions, vec![(0, 1), (0, 2)]);
+
+        let rects = app.geometry(Rect::new(0, 0, 80, 24));
+        assert_eq!(rects.len(), 2, "one rect per slot, not per layout column");
+
+        // Column 0 is 20 cells wide and belongs to nothing. The clock is the
+        // first *slot* but the second *column*, so it starts at x = 20.
+        assert_eq!(
+            rects[0].x, 20,
+            "the clock took the missing panel's rectangle"
+        );
+        assert_eq!(rects[1].x, rects[0].x + rects[0].width);
+        assert_eq!(rects[0].width + rects[1].width, 60);
     }
 
     #[test]

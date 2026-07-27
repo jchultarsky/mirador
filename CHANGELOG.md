@@ -33,6 +33,30 @@ much they could cost someone.
   and back left the state file insisting on metric, permanently. The comparison
   that decides what to record now happens once, against the config as it was
   read, rather than in each panel against the value it was built with.
+- **`?` scrolls.** With the tasks panel focused on an 80x24 terminal the overlay
+  had 29 rows of content and 22 rows to draw it in, so nine of that panel's
+  seventeen key bindings — including `/`, `e`, `p`, `s` and `c` — were invisible,
+  with nothing on screen to say so. Arrow keys, `PgUp`/`PgDn`, `Home` and `End`
+  scroll it, and the footer shows where you are. On a terminal with room to spare
+  nothing changes: any key still closes it.
+- **A long task title no longer draws over the panel border.** Titles were
+  truncated by counting characters against a budget measured in terminal cells,
+  so every CJK character or emoji overflowed by one cell.
+- **A misspelled key under `[theme]` is now reported** rather than accepted and
+  ignored. This also un-blocked the `--migrate-config` hint for the pre-0.1.0
+  `rx` and `tx` theme keys, which could never fire because those keys parsed
+  cleanly.
+- **The weather panel recovers from a failure to look up your location.** It used
+  to end its fetch thread, then go on offering "r to retry" with nothing left to
+  act on the key — most often after a laptop resumed before its Wi-Fi did.
+- **A failed price fetch keeps the last price and labels it with its age.** One
+  timed-out request used to blank the price, the change, the percentage and the
+  sparkline together for a whole refresh interval; a fetch thread that stopped
+  quietly showed confident numbers indefinitely. A retained price is now shown
+  muted, with how old it is.
+- Panel rectangles are indexed consistently, so a layout entry that builds no
+  panel cannot shift every later panel onto its neighbour's rectangle — which is
+  what mouse clicks are matched against.
 
 ### Security
 

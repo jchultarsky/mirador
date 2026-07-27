@@ -856,6 +856,48 @@ mod tests {
     }
 
     #[test]
+    fn a_misspelled_theme_key_is_reported_rather_than_ignored() {
+        // `deny_unknown_fields` on `Config` only guards the top level, so
+        // `[theme]` was handed to a struct that accepted anything and dropped
+        // what it did not know. A one-letter slip meant a colour that never
+        // changed and nothing on screen to say why.
+        for source in [
+            "[theme]\nacent = \"#ff0000\"",
+            "[theme.rx_gradient]\nstrat = \"green\"",
+        ] {
+            let err = toml::from_str::<Config>(source)
+                .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
+                .unwrap_err();
+            let message = format!("{err:#}");
+            assert!(
+                message.contains("acent") || message.contains("strat"),
+                "{source} was accepted, or the error did not name the key: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pre_0_1_0_theme_keys_reach_their_migration_hint() {
+        // These two entries sat in `RENAMED` unreachable: `[theme] rx = ...`
+        // parsed clean, so the hint telling the user to run
+        // `--migrate-config` could not fire for the very keys it names.
+        for key in ["rx", "tx"] {
+            let err = toml::from_str::<Config>(&format!("[theme]\n{key} = \"green\""))
+                .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
+                .expect_err("an old theme key must be rejected");
+            let message = format!("{err:#}");
+            assert!(
+                message.contains("--migrate-config"),
+                "`{key}` did not reach the migration hint: {message}"
+            );
+            assert!(
+                message.contains(&format!("[theme.{key}_gradient]")),
+                "`{key}` did not name its replacement: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn bad_units_are_rejected() {
         let config: Config = toml::from_str("[weather]\nunits = \"kelvin\"").expect("parses");
         assert!(config.validate().is_err());
