@@ -70,10 +70,20 @@ const MIN_WEIGHT: u16 = 1;
 /// declare the point past which more space does nothing for it, and the surplus
 /// moves sideways to a neighbour that will actually fill it.
 ///
-/// When *every* slot is bounded there is nobody to hand the surplus to, and the
-/// maxima are ignored rather than leaving a gap: panels draw their own frames,
-/// so unallocated cells would show as a hole in the middle of the dashboard.
-/// Better a slightly over-wide panel than a visible seam.
+/// When *every* slot is bounded there is nobody left who can use the surplus,
+/// and it is spread back across the whole row rather than left unallocated:
+/// panels draw their own frames, so a gap would show as a hole in the middle of
+/// the dashboard. Better every panel slightly over its maximum than a seam.
+///
+/// The emphasis on *spread* is the fix for a real bug. The surplus used to be
+/// handed to the slots that could still grow without re-capping them, so on the
+/// next pass they were over their own maxima, nobody could absorb it, and the
+/// loop broke leaving the whole overshoot on one panel. On the shipped default
+/// layout at 400 columns that gave the clock 302 of them — and the clock's
+/// numerals stop growing at 158, so about 145 columns were literally blank
+/// while the weather panel beside it sat at 51 and the task list below ran out
+/// of room. It only appeared once the terminal was wider than the row's maxima
+/// summed, which is why nothing caught it until someone opened a 4K terminal.
 fn distribute(total: u16, weights: &[u16], maxima: &[Option<u16>]) -> Vec<u16> {
     let count = weights.len();
     if count == 0 || total == 0 {
@@ -83,34 +93,44 @@ fn distribute(total: u16, weights: &[u16], maxima: &[Option<u16>]) -> Vec<u16> {
     let mut sizes = proportional(total, weights);
 
     // Each pass caps whoever is over and re-splits what they gave up. Bounded
-    // by the slot count: every pass either caps at least one more slot or ends.
+    // by the slot count: every pass either caps at least one more slot or ends,
+    // because a slot only receives surplus while it is still under its maximum.
     for _ in 0..count {
-        let capped = |i: usize, sizes: &[u16]| maxima[i].is_some_and(|m| sizes[i] >= m);
-
-        let surplus: u16 = (0..count)
-            .filter_map(|i| maxima[i].and_then(|m| sizes[i].checked_sub(m)))
-            .sum();
+        let mut surplus: u32 = 0;
+        for i in 0..count {
+            if let Some(max) = maxima[i]
+                && sizes[i] > max
+            {
+                surplus += u32::from(sizes[i] - max);
+                sizes[i] = max;
+            }
+        }
         if surplus == 0 {
             break;
         }
+        // `surplus` was summed out of `sizes`, which sums to `total`.
+        let surplus = u16::try_from(surplus).unwrap_or(u16::MAX);
 
-        let takers: Vec<usize> = (0..count).filter(|&i| !capped(i, &sizes)).collect();
+        let takers: Vec<usize> = (0..count)
+            .filter(|&i| maxima[i].is_none_or(|max| sizes[i] < max))
+            .collect();
+
         if takers.is_empty() {
-            // Nobody can absorb it. Leave the proportional split alone so the
-            // row still covers its full width.
-            break;
-        }
-
-        for i in 0..count {
-            if let Some(max) = maxima[i] {
-                sizes[i] = sizes[i].min(max);
+            // Every slot is at its declared maximum and there are still cells
+            // to place. Spread them across the row in proportion, so the
+            // overshoot is shared rather than landing entirely on whichever
+            // slot happened to be uncapped last.
+            for (i, extra) in proportional(surplus, weights).into_iter().enumerate() {
+                sizes[i] = sizes[i].saturating_add(extra);
             }
+            break;
         }
 
         let taker_weights: Vec<u16> = takers.iter().map(|&i| weights[i].max(1)).collect();
         for (slot, extra) in takers.iter().zip(proportional(surplus, &taker_weights)) {
             sizes[*slot] = sizes[*slot].saturating_add(extra);
         }
+        // A taker may now be over its own maximum; the next pass caps it.
     }
 
     sizes
@@ -1634,11 +1654,80 @@ mod tests {
         // Nobody to hand the surplus to. Panels draw their own frames, so
         // leaving cells unallocated would show as a hole in the dashboard —
         // an over-wide panel is the lesser evil.
+        //
+        // Note this case is capped *before* redistribution, so it never reaches
+        // the path that was broken. `no_slot_exceeds_its_maximum_while_another`
+        // is the one that does; this one alone could not fail.
         let sizes = distribute(200, &[50, 50], &[Some(30), Some(30)]);
         assert_eq!(
             sizes.iter().sum::<u16>(),
             200,
             "no gap may be left: {sizes:?}"
+        );
+        assert_eq!(sizes, vec![100, 100], "and the overshoot is shared");
+    }
+
+    #[test]
+    fn a_row_too_wide_for_its_maxima_shares_the_overshoot() {
+        // The invariant that actually distinguishes the fix from the bug.
+        //
+        // "Nobody exceeds their maximum while somebody is under theirs" is not
+        // enough: the buggy output [302, 47, 51] satisfies it, because 47 and
+        // 51 are exactly at their maxima rather than under. What it violates is
+        // that the *excess* be shared — [140, 0, 0] against weights
+        // [26, 34, 40] is not a proportional split of anything.
+        //
+        // The real default top row: clocks / calendar / weather, at every width
+        // from too-narrow to a 4K terminal.
+        let weights = [26u16, 34, 40];
+        let maxima = [Some(162u16), Some(47), Some(51)];
+        let ceiling: u16 = maxima.iter().map(|m| m.unwrap()).sum();
+
+        for total in (20u16..=1000).step_by(7) {
+            let sizes = distribute(total, &weights, &maxima);
+
+            assert_eq!(
+                sizes.iter().map(|s| u32::from(*s)).sum::<u32>(),
+                u32::from(total),
+                "the row must cover its width exactly at {total}: {sizes:?}"
+            );
+
+            if total <= ceiling {
+                // There is room to honour every maximum, so nobody may exceed.
+                for i in 0..3 {
+                    assert!(
+                        sizes[i] <= maxima[i].unwrap(),
+                        "at {total}: slot {i} exceeded its maximum with room to \
+                         spare — {sizes:?} against {maxima:?}"
+                    );
+                }
+                continue;
+            }
+
+            // Past the ceiling everybody has to go over. The excess must track
+            // the weights, not land on one panel.
+            let excess: Vec<u16> = (0..3).map(|i| sizes[i] - maxima[i].unwrap()).collect();
+            let want = proportional(total - ceiling, &weights);
+            assert_eq!(
+                excess, want,
+                "at {total}: the overshoot is not shared — {sizes:?}, excess \
+                 {excess:?}, expected {want:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wide_terminal_does_not_park_the_surplus_on_one_panel() {
+        // The specific regression, with the numbers from the bug report.
+        let sizes = distribute(400, &[26, 34, 40], &[Some(162), Some(47), Some(51)]);
+        assert_eq!(sizes.iter().sum::<u16>(), 400);
+        assert!(
+            sizes[0] < 250,
+            "the clock took the whole surplus again: {sizes:?}"
+        );
+        assert!(
+            sizes[2] > 51,
+            "the panel that could have used the space got none of it: {sizes:?}"
         );
     }
 
