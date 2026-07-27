@@ -365,11 +365,6 @@ impl Watchlist {
         if !self.dirty {
             return Ok(());
         }
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating data directory {}", parent.display()))?;
-        }
-
         let file = WatchlistFile {
             symbols: self.symbols.clone(),
         };
@@ -379,20 +374,14 @@ impl Watchlist {
              # Only the symbols live here — prices are never written to disk.\n\n{body}"
         );
 
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &contents).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("replacing {} with {}", self.path.display(), tmp.display()))?;
+        crate::store::write_atomic(&self.path, &contents)?;
 
         self.dirty = false;
         Ok(())
     }
 
     pub fn save_reporting(&mut self) {
-        match self.save() {
-            Ok(()) => self.last_error = None,
-            Err(e) => self.last_error = Some(format!("{e:#}")),
-        }
+        crate::store::report(self.save(), &mut self.last_error);
     }
 }
 

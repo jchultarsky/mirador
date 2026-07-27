@@ -615,10 +615,16 @@ impl App {
             return;
         };
 
+        // Atomic, like every other file mirador writes. This used to be a bare
+        // `fs::write`, which is the one place it mattered most: the target is
+        // the user's own config, complete with the comments they may have edited
+        // and the ones mirador wrote to explain itself, and a crash or a full
+        // disk part-way through a plain overwrite leaves them a truncated file
+        // and nothing to recover from.
         let result = std::fs::read_to_string(&path)
             .map_err(anyhow::Error::from)
             .and_then(|source| crate::layout_edit::apply(&source, &self.config.layout))
-            .and_then(|updated| std::fs::write(&path, updated).map_err(anyhow::Error::from));
+            .and_then(|updated| crate::store::write_atomic(&path, &updated));
 
         match result {
             Ok(()) => {
@@ -1104,14 +1110,10 @@ impl App {
             Span::styled(" close", Style::default().fg(theme.muted)),
         ]));
 
-        let width = 40.min(area.width);
-        let height = (u16::try_from(lines.len()).unwrap_or(u16::MAX) + 2).min(area.height);
-        let popup = Rect {
-            x: area.x + area.width.saturating_sub(width) / 2,
-            y: area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        };
+        let height = u16::try_from(lines.len())
+            .unwrap_or(u16::MAX)
+            .saturating_add(2);
+        let popup = crate::frame::centred(area, 40, height);
 
         frame.render_widget(Clear, popup);
         frame.render_widget(
@@ -1192,8 +1194,7 @@ impl App {
         // than being the last line of the scrolling text. A hint saying how to
         // close the overlay is no use once it has scrolled out of the overlay.
         let width = 46.min(area.width);
-        // Two borders and one cell of padding on each side.
-        let text_width = width.saturating_sub(4).max(1);
+        let text_width = width.saturating_sub(crate::frame::FRAME_WIDTH).max(1);
         // Measured after wrapping, not from `lines.len()`. The two differ
         // whenever a line is longer than the popup, which the list of unused
         // widgets routinely is — sizing from the unwrapped count is how the
@@ -1204,12 +1205,7 @@ impl App {
         // Borders, the blank line, and the footer.
         let chrome = 4;
         let height = text_height.saturating_add(chrome).min(area.height);
-        let popup = Rect {
-            x: area.x + area.width.saturating_sub(width) / 2,
-            y: area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        };
+        let popup = crate::frame::centred(area, width, height);
 
         frame.render_widget(Clear, popup);
         let block = Block::default()

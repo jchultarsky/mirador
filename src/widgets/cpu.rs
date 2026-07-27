@@ -88,27 +88,16 @@ impl CpuPanel {
         self.last_sample = Some(Instant::now());
 
         let capacity = self.capacity();
-        // A loop rather than a single pop: the capacity shrinks when the panel
-        // is narrowed, and dropping one sample per tick would leave the buffer
-        // oversized for as many ticks as the window lost cells.
-        while self.history.len() >= capacity {
-            self.history.pop_front();
-        }
-        self.history
-            .push_back(self.current.clamp(0.0, 100.0).round() as u64);
+        crate::samples::push_bounded(
+            &mut self.history,
+            self.current.clamp(0.0, 100.0).round() as u64,
+            capacity,
+        );
     }
 
-    /// How many samples to retain.
-    ///
-    /// `[cpu].history` is a floor, not a ceiling. The graph packs two samples
-    /// into every cell and fills from the right, so a buffer of N samples can
-    /// only ever cover N/2 cells — on a panel wider than that the graph stops
-    /// short of its own left edge and the rest is dead space. Letting the
-    /// buffer grow to the width fixes that, and the span readout beside the
-    /// figure is computed from the live sample count, so it stays honest
-    /// rather than continuing to claim the configured number.
+    /// How many samples to retain; see [`crate::samples::capacity`].
     fn capacity(&self) -> usize {
-        self.config.history.max(1).max(self.graph_cells * 2)
+        crate::samples::capacity(self.config.history, self.graph_cells)
     }
 }
 

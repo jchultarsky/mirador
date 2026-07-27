@@ -23,7 +23,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use serde::Deserialize;
 
 use crate::config::WeatherConfig;
-use crate::frame::Binding;
+use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs;
 use crate::grid::{Column, Grid};
 use crate::panel::{Panel, RenderContext, describe_age};
@@ -77,13 +77,6 @@ const BINDINGS: &[Binding] = &[
     Binding::primary("r", "refresh"),
     Binding::primary("u", "units"),
 ];
-
-/// Rows the frame costs: the two borders. The interior padding is horizontal,
-/// so it does not enter a height figure.
-const FRAME_HEIGHT: u16 = 2;
-
-/// Columns the frame costs: a border and a padding column on each side.
-const FRAME_WIDTH: u16 = 4;
 
 /// Most hours ever fetched or shown. A day ahead is the limit of what the
 /// panel's question — "what is the rest of my day like" — can use, and it
@@ -343,22 +336,12 @@ fn poll(
             }
         }
 
-        // Sleep in short slices so a manual refresh does not wait out the full
-        // interval, without needing a channel or a condvar.
-        let mut waited = Duration::ZERO;
-        while waited < interval {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(500));
-            waited += Duration::from_millis(500);
-            let asked = match refresh.lock() {
-                Ok(mut flag) => std::mem::replace(&mut *flag, false),
-                Err(poisoned) => std::mem::replace(&mut *poisoned.into_inner(), false),
-            };
-            if asked {
-                break;
-            }
+        let woke = crate::poll::wait(interval, stop, || match refresh.lock() {
+            Ok(mut flag) => std::mem::replace(&mut *flag, false),
+            Err(poisoned) => std::mem::replace(&mut *poisoned.into_inner(), false),
+        });
+        if woke == crate::poll::Wake::Stop {
+            return;
         }
     }
 }

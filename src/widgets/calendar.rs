@@ -18,7 +18,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::config::CalendarConfig;
-use crate::frame::Binding;
+use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::theme::Theme;
 
@@ -41,14 +41,6 @@ const GAP: u16 = 3;
 /// whole panel jump, which is exactly the restlessness this dashboard avoids.
 const MONTH_HEIGHT: u16 = 8;
 const WEEK_ROWS: usize = 6;
-
-/// Columns the frame costs: a border each side plus one column of interior
-/// padding each side. A `max_*` figure describes the whole panel, so it has to
-/// include them.
-const FRAME_WIDTH: u16 = 4;
-
-/// Rows the frame costs. Only the two borders — the padding is horizontal.
-const FRAME_HEIGHT: u16 = 2;
 
 /// Never put more than a year on screen at once. Past that the grid stops
 /// being something you read and becomes something you search.

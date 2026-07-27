@@ -18,7 +18,7 @@ use ratatui::widgets::{
 
 use crate::config::TodoConfig;
 use crate::dateinput::parse_due;
-use crate::frame::Binding;
+use crate::frame::{Binding, centred};
 use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::task::{DueState, Priority, SortMode, Task, TaskStore};
@@ -265,21 +265,12 @@ impl TodoPanel {
 
     /// Move the selection `n` rows down, stopping at the last task.
     fn select_down(&mut self, n: usize) {
-        let Some(last) = self.view.len().checked_sub(1) else {
-            return;
-        };
-        let current = self.list_state.selected().unwrap_or(0);
-        self.list_state
-            .select(Some(current.saturating_add(n).min(last)));
+        crate::selection::down(&mut self.list_state, n, self.view.len());
     }
 
     /// Move the selection `n` rows up, stopping at the first task.
     fn select_up(&mut self, n: usize) {
-        if self.view.is_empty() {
-            return;
-        }
-        let current = self.list_state.selected().unwrap_or(0);
-        self.list_state.select(Some(current.saturating_sub(n)));
+        crate::selection::up(&mut self.list_state, n, self.view.len());
     }
 
     /// Persist and report the outcome in the status line.
@@ -923,20 +914,12 @@ impl Panel for TodoPanel {
                 let Some(area) = self.list_area else {
                     return KeyOutcome::Ignored;
                 };
-                if !area.contains(Position::new(event.column, event.row)) {
+                let at = Position::new(event.column, event.row);
+                let Some(index) =
+                    crate::selection::row_at(&self.list_state, area, at, self.view.len())
+                else {
                     return KeyOutcome::Ignored;
-                }
-                // `offset` is the first task on screen, so the row under the
-                // pointer counts from there rather than from the top of the
-                // list — otherwise clicking a scrolled list selects the wrong
-                // task by exactly the scroll distance.
-                let row = usize::from(event.row - area.y);
-                let index = self.list_state.offset() + row;
-                if index >= self.view.len() {
-                    // Clicking the empty space below the last task is not a
-                    // selection of the last task.
-                    return KeyOutcome::Ignored;
-                }
+                };
                 self.status = None;
                 self.list_state.select(Some(index));
                 KeyOutcome::Consumed
@@ -1122,18 +1105,6 @@ fn hint_for(field: Field) -> &'static str {
         Field::Due => "2026-07-28, today, tomorrow, fri, +3d, 2w — or empty.",
         Field::Priority => "←/→ or space to change.",
         Field::Tags => "Comma or space separated, e.g. rust, mirador.",
-    }
-}
-
-/// A rectangle of the given size, centred inside `area`.
-fn centred(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
     }
 }
 

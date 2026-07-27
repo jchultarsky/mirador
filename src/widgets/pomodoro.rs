@@ -20,7 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::config::PomodoroConfig;
-use crate::frame::Binding;
+use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
@@ -33,11 +33,6 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// makes `max_width` small enough to matter: without it the panel claims 102
 /// columns it cannot use, and takes them from the task list next door.
 const MAX_SCALE: u16 = 1;
-/// Left and right border plus one column of padding each side.
-const FRAME_WIDTH: u16 = 4;
-/// Top and bottom border.
-const FRAME_HEIGHT: u16 = 2;
-
 /// Longest interval the panel will let you dial in, in minutes. Well past any
 /// real pomodoro, but a bound stops `+` held down from producing a timer that
 /// no longer fits its own display.
@@ -593,9 +588,10 @@ fn draw_clock(
     big.height
 }
 
-/// Width in display cells, which is the only measure a terminal respects.
+/// Width in display cells, as a `u16` because every caller here is doing
+/// arithmetic on `Rect` fields. The measurement itself is `grid::display_width`.
 fn display_width(text: &str) -> u16 {
-    u16::try_from(unicode_width::UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
+    u16::try_from(crate::grid::display_width(text)).unwrap_or(u16::MAX)
 }
 
 /// One row of meter: filled cells in `fill`, the rest in `track`, same glyph

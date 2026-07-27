@@ -204,11 +204,6 @@ impl NoteStore {
             return Ok(());
         }
 
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating data directory {}", parent.display()))?;
-        }
-
         let file = NoteFile {
             notes: self.notes.clone(),
         };
@@ -218,10 +213,7 @@ impl NoteStore {
              # Fields: id, title, body, created (YYYY-MM-DD), updated.\n\n{body}"
         );
 
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &contents).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("replacing {} with {}", self.path.display(), tmp.display()))?;
+        crate::store::write_atomic(&self.path, &contents)?;
 
         self.dirty = false;
         Ok(())
@@ -230,10 +222,7 @@ impl NoteStore {
     /// Save, recording any failure rather than propagating it, so a read-only
     /// disk shows up in the panel instead of vanishing.
     pub fn save_reporting(&mut self) {
-        match self.save() {
-            Ok(()) => self.last_error = None,
-            Err(e) => self.last_error = Some(format!("{e:#}")),
-        }
+        crate::store::report(self.save(), &mut self.last_error);
     }
 }
 
