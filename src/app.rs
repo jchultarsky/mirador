@@ -227,8 +227,8 @@ pub struct App {
     /// of any kind: a dashboard you leave open all day must not nag, and a
     /// notice that will not go away is a nag.
     show_widget_hint: bool,
-    /// Open panel picker, and which row it is on.
-    picker: Option<usize>,
+    /// The panel picker, while it is open.
+    picker: Option<crate::picker::Picker>,
     /// The config file, so layout changes can be written back to it. `None` in
     /// tests, which is what keeps them off a real user's config.
     config_path: Option<PathBuf>,
@@ -546,30 +546,21 @@ impl App {
         self.dispatch_key(key);
     }
 
-    /// Drive the panel picker.
+    /// Act on whatever the picker made of a keypress.
     fn handle_picker_key(&mut self, key: KeyEvent) {
-        let names = crate::widgets::WIDGET_NAMES;
-        let Some(selected) = self.picker else { return };
-        let last = names.len().saturating_sub(1);
-
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q' | 'w') | KeyCode::Enter => {
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        match picker.handle_key(key) {
+            crate::picker::Action::None => {}
+            crate::picker::Action::Toggle(name) => self.toggle_widget(name),
+            crate::picker::Action::Close => {
                 self.picker = None;
                 // Written on close rather than on every toggle: someone trying
                 // three arrangements should cost one write, not three, and the
                 // dialog is a natural commit point.
                 self.write_layout();
             }
-            KeyCode::Down | KeyCode::Char('j') => self.picker = Some((selected + 1).min(last)),
-            KeyCode::Up | KeyCode::Char('k') => self.picker = Some(selected.saturating_sub(1)),
-            KeyCode::Home | KeyCode::Char('g') => self.picker = Some(0),
-            KeyCode::End | KeyCode::Char('G') => self.picker = Some(last),
-            KeyCode::Char(' ') => {
-                if let Some(name) = names.get(selected) {
-                    self.toggle_widget(name);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -674,7 +665,7 @@ impl App {
                 // panel you just focused are the reason you pressed `?`.
                 self.help_scroll = 0;
             }
-            KeyCode::Char('w') => self.picker = Some(0),
+            KeyCode::Char('w') => self.picker = Some(crate::picker::Picker::new()),
             KeyCode::Char(c @ '1'..='9') => {
                 let index = c as usize - '1' as usize;
                 if index < self.slots.len() {
@@ -922,6 +913,12 @@ impl App {
         rects
     }
 
+    /// Which row the open picker is on, for tests that drive it by keystroke.
+    #[cfg(test)]
+    fn picker_row(&self) -> Option<usize> {
+        self.picker.as_ref().map(crate::picker::Picker::selected)
+    }
+
     /// Test-only access to the private render pass.
     #[cfg(test)]
     pub fn render_for_test(&mut self, frame: &mut ratatui::Frame) {
@@ -985,8 +982,14 @@ impl App {
         if self.show_help {
             self.render_help(frame, area);
         }
-        if let Some(selected) = self.picker {
-            self.render_picker(frame, area, selected);
+        if let Some(picker) = &self.picker {
+            picker.render(
+                frame,
+                area,
+                &self.config.theme,
+                |name| self.config.layout.places(name),
+                self.layout_error.as_deref(),
+            );
         }
     }
 
@@ -1050,88 +1053,6 @@ impl App {
             self.unused_widgets.len(),
             self.unused_widgets.join(", ")
         ))
-    }
-
-    /// The panel picker: every widget mirador has, and whether it is on.
-    fn render_picker(&self, frame: &mut ratatui::Frame, area: Rect, selected: usize) {
-        let theme = &self.config.theme;
-        let names = crate::widgets::WIDGET_NAMES;
-
-        let mut lines: Vec<Line> = Vec::new();
-        for (index, name) in names.iter().enumerate() {
-            let on = self.config.layout.places(name);
-            let here = index == selected;
-            // A filled mark and an empty one in the track colour, the same
-            // vocabulary the meters use, so "on" is legible without relying on
-            // the word beside it.
-            let mark = if on { "■" } else { "□" };
-            let mark_style = Style::default().fg(if on { theme.accent } else { theme.track });
-            let name_style = if here {
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::REVERSED)
-            } else if on {
-                Style::default().fg(theme.text)
-            } else {
-                Style::default().fg(theme.muted)
-            };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    if here { " ▸ " } else { "   " },
-                    Style::default().fg(theme.accent),
-                ),
-                Span::styled(format!("{mark} "), mark_style),
-                Span::styled(format!("{name:<10}"), name_style),
-            ]));
-        }
-
-        lines.push(Line::from(""));
-        if let Some(error) = &self.layout_error {
-            lines.push(Line::from(Span::styled(
-                format!("  {error}"),
-                Style::default().fg(theme.error),
-            )));
-        } else {
-            lines.push(Line::from(Span::styled(
-                "  written to your config on close",
-                Style::default().fg(theme.muted),
-            )));
-        }
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  space",
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" toggle   ", Style::default().fg(theme.muted)),
-            Span::styled(
-                "esc",
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" close", Style::default().fg(theme.muted)),
-        ]));
-
-        let height = u16::try_from(lines.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(2);
-        let popup = crate::frame::centred(area, 40, height);
-
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border_focused))
-                    .title(Span::styled(
-                        crate::glyphs::utility(" panels "),
-                        Style::default()
-                            .fg(theme.title)
-                            .add_modifier(Modifier::BOLD),
-                    ))
-                    .padding(Padding::horizontal(1)),
-            ),
-            popup,
-        );
     }
 
     fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
@@ -2013,7 +1934,7 @@ mod tests {
         let before = app.slots.len();
 
         app.handle_key(key(KeyCode::Char('w')));
-        assert_eq!(app.picker, Some(0), "opens on the first widget");
+        assert!(app.picker.is_some(), "w opens the dialog");
 
         // WIDGET_NAMES starts with clocks, which this layout already places.
         app.handle_key(key(KeyCode::Char(' ')));
@@ -2034,15 +1955,15 @@ mod tests {
         let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
         app.handle_key(key(KeyCode::Char('w')));
 
+        // Cursor movement itself is `picker`'s; what matters here is that the
+        // keys reach it rather than the panels or the global bindings.
         app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.picker, Some(1));
+        assert_eq!(app.picker_row(), Some(1));
         app.handle_key(key(KeyCode::Up));
-        assert_eq!(app.picker, Some(0));
-        app.handle_key(key(KeyCode::Up));
-        assert_eq!(app.picker, Some(0), "clamps at the top");
+        assert_eq!(app.picker_row(), Some(0));
 
         app.handle_key(key(KeyCode::Esc));
-        assert_eq!(app.picker, None);
+        assert!(app.picker.is_none());
         assert!(
             !app.should_quit,
             "Esc closes the dialog rather than falling through to quit"
@@ -2108,7 +2029,10 @@ mod tests {
             .iter()
             .position(|n| *n == "pomodoro")
             .unwrap();
-        app.picker = Some(index);
+        for _ in 0..index {
+            app.handle_key(key(KeyCode::Down));
+        }
+        assert_eq!(app.picker_row(), Some(index));
         app.handle_key(key(KeyCode::Char(' ')));
 
         assert!(
