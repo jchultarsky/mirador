@@ -1,0 +1,87 @@
+# cargo-deny: what mirador will and will not take on as a dependency.
+#
+# Run it the way CI does:
+#
+#     cargo deny check
+#
+# Three questions, in the order they matter here:
+#
+#   advisories  is anything we depend on known to be vulnerable
+#   licenses    can this actually ship under MIT
+#   sources     did every crate come from crates.io
+#
+# The last one is the quiet one. mirador ships prebuilt binaries that people
+# install with a one-line `curl | sh`, so "where did this code come from" is a
+# question the build should answer, not the reader.
+
+[graph]
+# Every platform we publish a binary for. Without this, cargo-deny walks the
+# dependency graph for the host only, and a Windows-only crate's licence or
+# advisory would go unchecked until someone ran it on Windows.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+all-features = false
+no-default-features = false
+
+[advisories]
+# Fail on anything in the RustSec database. There is nothing to ignore, and an
+# empty list is the state worth defending — every entry here is a known
+# vulnerability someone decided to live with, so each one should have to argue
+# for itself in a diff.
+ignore = []
+
+[licenses]
+# Permissive licences only, and every one of these was taken from the tree
+# rather than copied from a template: `cargo metadata` over all four targets
+# produces exactly this set. A licence that turns up and is not on the list
+# fails the build, which is the point — the failure is the review.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    # File-level copyleft, and the only non-permissive licence in the tree.
+    # `option-ext` reaches us through `dirs`, which is how mirador finds your
+    # config directory on three platforms. MPL-2.0 obliges anyone modifying
+    # *those files* to publish the changes; it says nothing about code that
+    # merely links the crate, so it does not reach mirador's own MIT terms.
+    # Named here rather than waved through so the next person knows it is a
+    # decision and not an oversight.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "WTFPL",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Duplicate versions are a warning, not an error. They are usually somebody
+# else's transitive problem, and failing the build on one would mean either
+# pinning dependencies we do not control or ignoring the check entirely.
+multiple-versions = "warn"
+# A wildcard version is a promise to build against code nobody has seen. There
+# are none, and a build that breaks the moment an unrelated crate publishes is
+# not a build.
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+# Everything comes from crates.io. A git dependency in a project that ships
+# signed binaries is a supply chain nobody can audit from the manifest, so this
+# is "deny" rather than the template's "warn".
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
