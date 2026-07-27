@@ -47,7 +47,7 @@ fn de_opt_color<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Col
 /// `mid` and `end` are optional: with neither, the ramp is flat; with `end`
 /// only, it is a single linear segment.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GradientStops {
     #[serde(deserialize_with = "de_color")]
     pub start: Color,
@@ -83,8 +83,13 @@ impl GradientStops {
 }
 
 /// Every colour the dashboard draws with.
+///
+/// `deny_unknown_fields` matters more here than it looks. Without it a
+/// misspelled colour is accepted and silently ignored — and because the
+/// pre-0.1.0 theme keys `rx` and `tx` also parsed clean, the
+/// `--migrate-config` hint that names them could never fire.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Theme {
     /// Frame of an unfocused panel.
     #[serde(deserialize_with = "de_color")]

@@ -16,7 +16,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -28,7 +28,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use crate::config::StocksConfig;
 use crate::frame::Binding;
 use crate::grid::{Column, Grid};
-use crate::panel::{KeyOutcome, Panel, RenderContext};
+use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 use crate::quote::{Quote, QuoteSource, Watchlist, source_for, sparkline};
 use crate::textfield::TextField;
 use crate::theme::Theme;
@@ -77,11 +77,36 @@ const COLUMNS: &[Column] = &[
 ];
 
 /// What the background thread has produced for one symbol.
-#[derive(Debug, Clone)]
-enum Cell {
-    Loading,
-    Ready(Quote),
-    Failed(String),
+///
+/// Shaped like the weather panel's `State` and for the same reason: a
+/// failed request keeps the last good price and shows how old it is, instead of
+/// replacing a real number with a dash for a whole refresh interval. This panel
+/// used to overwrite the quote with the error, so one timed-out request blanked
+/// the price, the change, the percentage and the sparkline together — and with
+/// no timestamp anywhere, a thread that quietly stopped went on showing
+/// confident numbers for as long as the dashboard was open.
+///
+/// The rule is the one weather follows: old data labelled old is useful, no
+/// data is not, and old data presented as current is the only unacceptable
+/// outcome.
+#[derive(Debug, Clone, Default)]
+struct Cell {
+    /// The last good quote and when it landed, if one ever did.
+    quote: Option<(Quote, Instant)>,
+    /// Why the most recent attempt failed, if it did.
+    error: Option<String>,
+}
+
+impl Cell {
+    /// How long ago the price on screen was fetched.
+    fn age(&self) -> Option<Duration> {
+        self.quote.as_ref().map(|(_, at)| at.elapsed())
+    }
+
+    /// Whether what is on screen should be presented as possibly out of date.
+    fn is_stale(&self, after: Duration) -> bool {
+        self.error.is_some() || self.age().is_some_and(|age| age > after)
+    }
 }
 
 /// The shared snapshot: one entry per symbol, in watchlist order.
@@ -117,6 +142,10 @@ pub struct StocksPanel {
     status: Option<(String, bool)>,
     source_name: &'static str,
     list_area: Option<Rect>,
+    /// Twice the refresh interval. Past this a price is shown as stale even
+    /// when nothing has failed — a fetch thread that quietly stopped and a
+    /// laptop resumed from sleep both look like success from here.
+    stale_after: Duration,
     /// Set to ask the fetch thread to finish.
     ///
     /// Without it the thread outlives the panel: the picker rebuilds every
@@ -143,7 +172,7 @@ impl StocksPanel {
         let board: Board = watchlist
             .symbols()
             .iter()
-            .map(|s| (s.clone(), Cell::Loading))
+            .map(|s| (s.clone(), Cell::default()))
             .collect();
         let board = Arc::new(Mutex::new(board));
         let request = Arc::new(Mutex::new(Request {
@@ -184,6 +213,9 @@ impl StocksPanel {
             status: None,
             source_name,
             list_area: None,
+            // Twice the interval, matching the weather panel: one missed cycle
+            // is a blip, two is a pattern.
+            stale_after: interval * 2,
             stop,
         };
         panel.reselect();
@@ -264,7 +296,7 @@ impl StocksPanel {
                     .iter()
                     .find(|(s, _)| s == symbol)
                     .map(|(_, cell)| cell.clone());
-                (symbol.clone(), previous.unwrap_or(Cell::Loading))
+                (symbol.clone(), previous.unwrap_or_default())
             })
             .collect();
     }
@@ -363,7 +395,14 @@ impl StocksPanel {
     }
 
     /// One row of the board.
-    fn row(symbol: &str, cell: &Cell, theme: &Theme, grid: &Grid, spark: u16) -> Line<'static> {
+    fn row(
+        symbol: &str,
+        cell: &Cell,
+        stale: bool,
+        theme: &Theme,
+        grid: &Grid,
+        spark: u16,
+    ) -> Line<'static> {
         let symbol_span = Span::styled(
             symbol.to_string(),
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
@@ -371,24 +410,32 @@ impl StocksPanel {
 
         // Never an empty cell: a blank column reads as a broken panel, where
         // an explicit `…` or `–` reads as a fact about the data.
-        let (last, chg, pct, spark_text, tone) = match cell {
-            Cell::Loading => (
-                "…".to_string(),
-                "…".to_string(),
-                "…".to_string(),
-                String::new(),
-                theme.muted,
-            ),
-            Cell::Failed(_) => (
+        let (last, chg, pct, spark_text, tone) = match &cell.quote {
+            // Nothing has ever landed for this symbol. Only here is the row
+            // genuinely empty — a failure with a price behind it keeps the
+            // price.
+            None if cell.error.is_some() => (
                 "–".to_string(),
                 "–".to_string(),
                 "–".to_string(),
                 String::new(),
                 theme.error,
             ),
-            Cell::Ready(q) => {
+            None => (
+                "…".to_string(),
+                "…".to_string(),
+                "…".to_string(),
+                String::new(),
+                theme.muted,
+            ),
+            Some((q, _)) => {
                 let change = q.change();
-                let tone = if change > 0.0 {
+                // A price that may have moved since must not be coloured as
+                // though the direction were current, so a stale row goes muted
+                // whichever way it last went.
+                let tone = if stale {
+                    theme.muted
+                } else if change > 0.0 {
                     theme.success
                 } else if change < 0.0 {
                     theme.error
@@ -409,9 +456,10 @@ impl StocksPanel {
             }
         };
 
-        let value_style = match cell {
-            Cell::Ready(_) => Style::default().fg(theme.text),
-            _ => Style::default().fg(tone),
+        let value_style = if cell.quote.is_some() && !stale {
+            Style::default().fg(theme.text)
+        } else {
+            Style::default().fg(tone)
         };
 
         grid.row(&[
@@ -446,9 +494,16 @@ impl StocksPanel {
             _ => {
                 // With nothing else to say, surface the first failure rather
                 // than leaving a row showing `–` with no explanation anywhere.
-                let failure = board.iter().find_map(|(symbol, cell)| match cell {
-                    Cell::Failed(why) => Some(format!("{symbol}: {why}")),
-                    _ => None,
+                let failure = board.iter().find_map(|(symbol, cell)| {
+                    cell.error.as_ref().map(|why| match cell.age() {
+                        // A price is still on screen behind the error, so
+                        // say how old it is rather than only why the last
+                        // attempt failed.
+                        Some(age) => {
+                            format!("{symbol}: {why} — showing {}", describe_age(age))
+                        }
+                        None => format!("{symbol}: {why}"),
+                    })
                 });
                 match failure {
                     // Left full length: the paragraph clips it to the panel,
@@ -483,11 +538,8 @@ fn fetch_loop(
         };
 
         for symbol in &symbols {
-            let cell = match source.fetch(symbol) {
-                Ok(quote) => Cell::Ready(quote),
-                Err(e) => Cell::Failed(format!("{e:#}")),
-            };
-            update(board, symbol, cell);
+            let result = source.fetch(symbol);
+            update(board, symbol, result);
             if stop.load(Ordering::Relaxed) {
                 return;
             }
@@ -518,15 +570,25 @@ fn fetch_loop(
     }
 }
 
-/// Write one symbol's result into the shared board, ignoring symbols that were
+/// Merge one symbol's result into the shared board, ignoring symbols that were
 /// removed while the request was in flight.
-fn update(board: &Arc<Mutex<Board>>, symbol: &str, cell: Cell) {
+///
+/// Merge rather than replace: a failure records the reason and leaves whatever
+/// price was already there, so the row keeps a real number with its age on it.
+fn update(board: &Arc<Mutex<Board>>, symbol: &str, result: anyhow::Result<Quote>) {
     let mut guard = match board.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
     };
-    if let Some(slot) = guard.iter_mut().find(|(s, _)| s == symbol) {
-        slot.1 = cell;
+    let Some(slot) = guard.iter_mut().find(|(s, _)| s == symbol) else {
+        return;
+    };
+    match result {
+        Ok(quote) => {
+            slot.1.quote = Some((quote, Instant::now()));
+            slot.1.error = None;
+        }
+        Err(e) => slot.1.error = Some(format!("{e:#}")),
     }
 }
 
@@ -657,7 +719,10 @@ impl Panel for StocksPanel {
 
         let items: Vec<ListItem> = board
             .iter()
-            .map(|(symbol, cell)| ListItem::new(Self::row(symbol, cell, theme, &grid, spark)))
+            .map(|(symbol, cell)| {
+                let stale = cell.is_stale(self.stale_after);
+                ListItem::new(Self::row(symbol, cell, stale, theme, &grid, spark))
+            })
             .collect();
 
         self.list_area = Some(rows[1]);
@@ -720,6 +785,22 @@ mod tests {
 
     fn press(p: &mut StocksPanel, code: KeyCode) {
         p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// A cell holding a live quote, as a successful fetch leaves it.
+    fn ready(quote: Quote) -> Cell {
+        Cell {
+            quote: Some((quote, Instant::now())),
+            error: None,
+        }
+    }
+
+    /// A cell whose only fetch failed, so there is no price behind the error.
+    fn failed(why: &str) -> Cell {
+        Cell {
+            quote: None,
+            error: Some(why.to_string()),
+        }
     }
 
     fn type_str(p: &mut StocksPanel, text: &str) {
@@ -822,7 +903,7 @@ mod tests {
         assert!(
             board
                 .iter()
-                .all(|(_, c)| matches!(c, Cell::Loading | Cell::Ready(_) | Cell::Failed(_))),
+                .all(|(_, c)| c.quote.is_some() || c.error.is_some() || c.age().is_none()),
             "every row must render as something"
         );
     }
@@ -847,19 +928,29 @@ mod tests {
         let theme = Theme::default();
         let grid = Grid::new(COLUMNS, 60);
 
-        for cell in [
-            Cell::Loading,
-            Cell::Failed("network request failed".into()),
-            Cell::Ready(Quote {
-                symbol: "AAPL".into(),
-                price: 213.5,
-                previous_close: 211.0,
-                currency: Some("USD".into()),
-                series: vec![211.0, 213.5],
-                delayed: false,
-            }),
+        let quote = Quote {
+            symbol: "AAPL".into(),
+            price: 213.5,
+            previous_close: 211.0,
+            currency: Some("USD".into()),
+            series: vec![211.0, 213.5],
+            delayed: false,
+        };
+        for (cell, stale) in [
+            // Loading, never-succeeded failure, live, and a failure with a
+            // price behind it — the state that used to render as three dashes.
+            (Cell::default(), false),
+            (failed("network request failed"), false),
+            (ready(quote.clone()), false),
+            (
+                Cell {
+                    error: Some("timed out".into()),
+                    ..ready(quote.clone())
+                },
+                true,
+            ),
         ] {
-            let line = StocksPanel::row("AAPL", &cell, &theme, &grid, 8);
+            let line = StocksPanel::row("AAPL", &cell, stale, &theme, &grid, 8);
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             assert!(
                 !text.trim().is_empty(),
@@ -887,7 +978,7 @@ mod tests {
         down.price = 9.0;
 
         let text = |q: Quote| -> String {
-            StocksPanel::row("X", &Cell::Ready(q), &theme, &grid, 0)
+            StocksPanel::row("X", &ready(q), false, &theme, &grid, 0)
                 .spans
                 .iter()
                 .map(|s| s.content.as_ref())
@@ -903,7 +994,7 @@ mod tests {
         assert!(fall.contains("-10.00%"), "got `{fall}`");
 
         let colour_of = |q: Quote| {
-            StocksPanel::row("X", &Cell::Ready(q), &theme, &grid, 0).spans[4]
+            StocksPanel::row("X", &ready(q), false, &theme, &grid, 0).spans[4]
                 .style
                 .fg
         };
@@ -918,7 +1009,7 @@ mod tests {
     fn a_failure_is_surfaced_in_the_status_line_rather_than_only_as_a_dash() {
         let (p, _g) = panel("failure", &["AAPL"]);
         let theme = Theme::default();
-        let board: Board = vec![("AAPL".into(), Cell::Failed("HTTP 429".into()))];
+        let board: Board = vec![("AAPL".into(), failed("HTTP 429"))];
 
         let text: String = p
             .status_line(&theme, &board)
@@ -930,6 +1021,66 @@ mod tests {
         assert!(
             text.contains("429"),
             "the reason must reach the user: `{text}`"
+        );
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_last_good_price_and_says_it_is_old() {
+        let (p, _g) = panel("retain", &["AAPL"]);
+        let theme = Theme::default();
+        let grid = Grid::new(COLUMNS, 60);
+
+        let quote = Quote {
+            symbol: "AAPL".into(),
+            price: 213.5,
+            previous_close: 211.0,
+            currency: Some("USD".into()),
+            series: vec![211.0, 213.5],
+            delayed: false,
+        };
+
+        let board = Arc::new(Mutex::new(vec![("AAPL".to_string(), Cell::default())]));
+        update(&board, "AAPL", Ok(quote));
+        update(&board, "AAPL", Err(anyhow::anyhow!("HTTP 429")));
+
+        let snapshot = board.lock().unwrap().clone();
+        let cell = &snapshot[0].1;
+
+        // The whole point: the error did not take the price with it. This used
+        // to render as three dashes and an empty sparkline for a full refresh
+        // interval, because the error replaced the quote outright.
+        assert!(cell.error.is_some(), "the reason is still recorded");
+        let row: String = StocksPanel::row("AAPL", cell, true, &theme, &grid, 8)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(row.contains("213.50"), "the price was lost: `{row}`");
+        assert!(!row.contains('–'), "a retained price must not show a dash");
+
+        // And it is not passed off as current: the status line says how old it
+        // is, and the row is muted rather than coloured by direction.
+        let status: String = p
+            .status_line(&theme, &snapshot)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(status.contains("429"), "got `{status}`");
+        assert!(
+            status.contains("old"),
+            "a retained price must be labelled with its age: `{status}`"
+        );
+
+        let live = StocksPanel::row("AAPL", cell, false, &theme, &grid, 8).spans[2]
+            .style
+            .fg;
+        let stale = StocksPanel::row("AAPL", cell, true, &theme, &grid, 8).spans[2]
+            .style
+            .fg;
+        assert_ne!(
+            live, stale,
+            "a stale price must not look the same as a live one"
         );
     }
 

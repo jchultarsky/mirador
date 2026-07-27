@@ -1137,18 +1137,11 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
-/// Truncate to `width` characters with an ellipsis, respecting char boundaries.
-fn truncate(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
+// Truncation is `grid::truncate`, which measures display cells. This module
+// had its own copy that counted `chars()`, and both callers pass a cell count
+// — `inner.width` and `bottom.width` — so a CJK title overflowed the panel by
+// one cell per character.
+use crate::grid::truncate;
 
 #[cfg(test)]
 mod tests {
@@ -1165,11 +1158,24 @@ mod tests {
     }
 
     #[test]
-    fn truncate_respects_char_boundaries() {
+    fn a_truncated_title_never_outgrows_its_budget_in_cells() {
         assert_eq!(truncate("hello", 10), "hello");
         assert_eq!(truncate("hello", 3), "he…");
-        assert_eq!(truncate("日本語テスト", 3), "日本…");
         assert_eq!(truncate("hello", 0), "");
+
+        // This used to assert `"日本…"` — five cells for a three-cell budget,
+        // which is how a task title got to overwrite the panel's own border.
+        // The test pinned the bug rather than catching it.
+        assert_eq!(truncate("日本語テスト", 3), "日…");
+
+        for width in 0..12 {
+            for text in ["hello", "日本語テスト", "a日b本c", "☀ 21°C"] {
+                assert!(
+                    crate::grid::display_width(&truncate(text, width)) <= width,
+                    "truncate({text:?}, {width}) overflows its budget"
+                );
+            }
+        }
     }
 
     #[test]
