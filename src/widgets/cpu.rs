@@ -66,14 +66,19 @@ impl CpuPanel {
     }
 
     /// Take a sample if enough time has passed since the last one.
-    fn sample(&mut self) {
+    ///
+    /// Returns whether it actually sampled. The tick runs at 500ms and the
+    /// default sample interval is a second, so half of all ticks do nothing —
+    /// and a tick that does nothing must not cost a repaint of the whole
+    /// dashboard.
+    fn sample(&mut self) -> bool {
         let interval = Duration::from_secs(self.config.sample_secs.max(1))
             // sysinfo needs a minimum gap between refreshes for its deltas to
             // be meaningful; sampling faster than this yields zeros.
             .max(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
 
         if self.last_sample.is_some_and(|at| at.elapsed() < interval) {
-            return;
+            return false;
         }
 
         self.system.refresh_cpu_usage();
@@ -93,6 +98,7 @@ impl CpuPanel {
             self.current.clamp(0.0, 100.0).round() as u64,
             capacity,
         );
+        true
     }
 
     /// How many samples to retain; see [`crate::samples::capacity`].
@@ -121,8 +127,8 @@ impl Panel for CpuPanel {
         Duration::from_millis(500)
     }
 
-    fn tick(&mut self) {
-        self.sample();
+    fn tick(&mut self) -> bool {
+        self.sample()
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {

@@ -379,14 +379,22 @@ impl Panel for PomodoroPanel {
         Duration::from_secs(1)
     }
 
-    fn tick(&mut self) {
-        if self.is_running() && self.remaining().is_zero() {
+    fn tick(&mut self) -> bool {
+        if !self.is_running() {
+            // A paused or unstarted timer shows a fixed number. Nothing moves
+            // until a key does, and a key already forces a redraw.
+            return false;
+        }
+        if self.remaining().is_zero() {
             // Only a phase that ran out announces itself. Pressing `n` to skip
             // is you already knowing, and a bell for something you just did is
             // noise.
             self.sound_chime();
             self.advance();
         }
+        // A running timer's displayed minute:second changes every tick, which
+        // is exactly why `refresh_interval` is one second.
+        true
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {

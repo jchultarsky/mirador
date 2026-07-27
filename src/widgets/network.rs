@@ -78,11 +78,14 @@ impl NetworkPanel {
     }
 
     /// Sample byte counters and convert them to a rate.
-    fn sample(&mut self) {
+    ///
+    /// Returns whether it actually sampled; see `CpuPanel::sample` for why the
+    /// answer matters more than it looks.
+    fn sample(&mut self) -> bool {
         let interval = Duration::from_secs(self.config.sample_secs.max(1));
         let elapsed = self.last_sample.elapsed();
         if elapsed < interval {
-            return;
+            return false;
         }
 
         self.networks.refresh(true);
@@ -116,12 +119,14 @@ impl NetworkPanel {
             self.primed = true;
             self.rx_rate = 0;
             self.tx_rate = 0;
-            return;
+            // Still a change: the panel goes from "no reading" to two zeroes.
+            return true;
         }
 
         let capacity = self.capacity();
         push_bounded(&mut self.rx_history, self.rx_rate, capacity);
         push_bounded(&mut self.tx_history, self.tx_rate, capacity);
+        true
     }
 
     /// How many samples to retain; see [`crate::samples::capacity`].
@@ -191,8 +196,8 @@ impl Panel for NetworkPanel {
         Duration::from_millis(500)
     }
 
-    fn tick(&mut self) {
-        self.sample();
+    fn tick(&mut self) -> bool {
+        self.sample()
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {

@@ -291,9 +291,15 @@ impl Panel for CalendarPanel {
         std::time::Duration::from_secs(30)
     }
 
-    fn tick(&mut self) {
-        // Re-read the date so the highlight crosses midnight on its own.
-        self.today = jiff::Zoned::now().date();
+    fn tick(&mut self) -> bool {
+        // Re-read the date so the highlight crosses midnight on its own — but
+        // report a change only when it actually crossed. This ran every 30
+        // seconds and assigned unconditionally, so it repainted the dashboard
+        // 2,880 times a day to move a highlight once.
+        let today = jiff::Zoned::now().date();
+        let moved = today != self.today;
+        self.today = today;
+        moved
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {

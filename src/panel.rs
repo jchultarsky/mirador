@@ -113,13 +113,43 @@ pub trait Panel {
     }
 
     /// How often [`Panel::tick`] should be called.
+    ///
+    /// This is how often the panel wants to *look*, which is not the same as
+    /// how often it expects to have something new to show — a clock with
+    /// seconds ticks four times a second and changes once. Say how often you
+    /// need to check, and answer the second question from [`Panel::tick`].
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
 
-    /// Advance any time-based state. Must not block: panels needing network or
-    /// disk I/O do it on a background thread and poll the result here.
-    fn tick(&mut self) {}
+    /// Advance any time-based state, and report whether anything **a viewer
+    /// could see** changed.
+    ///
+    /// Must not block: panels needing network or disk I/O do it on a background
+    /// thread and poll the result here.
+    ///
+    /// The return value drives the redraw, and the distinction it draws is the
+    /// whole point. `true` means the next frame will differ from the last one.
+    /// It does *not* mean "my timer elapsed", "I re-read the clock", or "I
+    /// looked and there was nothing new" — a panel that says `true` on every
+    /// tick makes the shell repaint the entire dashboard at that panel's
+    /// cadence, whether or not a single cell would change.
+    ///
+    /// That was measurably the largest thing the program did. With the default
+    /// layout the clock panel drove a 250ms tick and reported nothing at all,
+    /// so the dashboard repainted four times a second, for ever — and with
+    /// `show_seconds = false`, where the visible content changes once a minute,
+    /// idle CPU was *identical*. 240 repaints per visible change.
+    ///
+    /// The cheap way to answer honestly is usually to compare what you are
+    /// about to render against what you rendered last: the formatted string,
+    /// the date, a generation counter bumped by your fetch thread. If a panel
+    /// truly cannot tell, `true` is correct and costs a repaint — but it should
+    /// then say why in a comment, because the next reader will assume it was
+    /// laziness.
+    fn tick(&mut self) -> bool {
+        false
+    }
 
     /// Draw the panel's contents. `area` is already inside the frame and its
     /// padding.
