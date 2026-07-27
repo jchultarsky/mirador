@@ -60,6 +60,14 @@ pub enum Outcome {
     },
 }
 
+/// Rows of the list shown at once.
+///
+/// The list is drawn inside a dialog rather than a panel, so this is a fixed
+/// window rather than something the layout decides — and it has to be a
+/// constant both `handle_key` and `render` can see, because the first has to
+/// know how far it may scroll and the second has to draw the same window.
+const LIST_ROWS: usize = 10;
+
 /// An open prompt.
 #[derive(Debug)]
 pub struct Prompt {
@@ -70,6 +78,9 @@ pub struct Prompt {
     completion: Completion,
     /// Which row of the filtered list is selected, if any.
     selected: usize,
+    /// The first row on screen. Without it the cursor walked off the bottom of
+    /// the window and kept going, invisibly.
+    offset: usize,
 }
 
 impl Prompt {
@@ -87,6 +98,7 @@ impl Prompt {
             error: None,
             completion,
             selected: 0,
+            offset: 0,
         }
     }
 
@@ -133,10 +145,32 @@ impl Prompt {
             KeyCode::Esc => Outcome::Cancelled,
             KeyCode::Down => {
                 self.selected = (self.selected + 1).min(listed.len().saturating_sub(1));
+                self.scroll_into_view();
                 Outcome::Editing
             }
             KeyCode::Up => {
                 self.selected = self.selected.saturating_sub(1);
+                self.scroll_into_view();
+                Outcome::Editing
+            }
+            KeyCode::PageDown => {
+                self.selected = (self.selected + LIST_ROWS).min(listed.len().saturating_sub(1));
+                self.scroll_into_view();
+                Outcome::Editing
+            }
+            KeyCode::PageUp => {
+                self.selected = self.selected.saturating_sub(LIST_ROWS);
+                self.scroll_into_view();
+                Outcome::Editing
+            }
+            KeyCode::Home if !listed.is_empty() => {
+                self.selected = 0;
+                self.scroll_into_view();
+                Outcome::Editing
+            }
+            KeyCode::End if !listed.is_empty() => {
+                self.selected = listed.len() - 1;
+                self.scroll_into_view();
                 Outcome::Editing
             }
             KeyCode::Enter => match listed.get(self.selected) {
@@ -155,10 +189,27 @@ impl Prompt {
             _ => {
                 self.field.handle_key(key);
                 // Typing narrows the list under the cursor, so a selection two
-                // rows down would otherwise land on something unrelated.
+                // rows down would otherwise land on something unrelated — or
+                // past the end of what is left.
                 self.selected = 0;
+                self.offset = 0;
                 Outcome::Editing
             }
+        }
+    }
+
+    /// Keep the selected row inside the window that is drawn.
+    ///
+    /// Only moves the window when the selection would otherwise leave it, so
+    /// the list stays put while the cursor travels across it and scrolls by one
+    /// at the edges. Recomputing the window from the selection each time would
+    /// be stateless and simpler, and would also jump the whole list whenever
+    /// you crossed a page boundary going back up.
+    fn scroll_into_view(&mut self) {
+        if self.selected < self.offset {
+            self.offset = self.selected;
+        } else if self.selected >= self.offset + LIST_ROWS {
+            self.offset = self.selected + 1 - LIST_ROWS;
         }
     }
 
@@ -224,7 +275,7 @@ impl Prompt {
     /// the agenda meant a long path scrolled inside about forty columns.
     pub fn render(&self, frame: &mut ratatui::Frame, screen: Rect, theme: &Theme) {
         let listed = self.matches();
-        let rows = u16::try_from(listed.len().min(10)).unwrap_or(0);
+        let rows = u16::try_from(listed.len().min(LIST_ROWS)).unwrap_or(0);
 
         let width = screen.width.clamp(20, 64);
         let height = 3 + rows + crate::frame::FRAME_HEIGHT;
@@ -246,7 +297,16 @@ impl Prompt {
             .max()
             .unwrap_or(0)
             .min(18);
-        for (index, place) in listed.iter().take(usize::from(rows)).enumerate() {
+        // `enumerate` before `skip`, so `index` is the row's place in the whole
+        // list and can be compared against `selected`. Enumerating after
+        // skipping restarts the count at zero and puts the highlight on the top
+        // visible row whatever is actually selected.
+        for (index, place) in listed
+            .iter()
+            .enumerate()
+            .skip(self.offset)
+            .take(usize::from(rows))
+        {
             let here = index == self.selected;
             lines.push(Line::from(vec![
                 Span::styled(
@@ -274,6 +334,13 @@ impl Prompt {
             Some(error) => Line::from(Span::styled(
                 crate::grid::truncate(error, inner),
                 Style::default().fg(theme.error),
+            )),
+            None if listed.len() > LIST_ROWS => Line::from(Span::styled(
+                crate::grid::truncate(
+                    &format!("{} of {} · {}", rows, listed.len(), self.help),
+                    inner,
+                ),
+                Style::default().fg(theme.muted),
             )),
             None => Line::from(Span::styled(
                 crate::grid::truncate(self.help, inner),
@@ -418,6 +485,46 @@ mod tests {
             press(&mut p, KeyCode::Enter),
             Outcome::Submitted("Antarctica/Troll".into())
         );
+    }
+
+    /// The list draws a fixed window of rows. Moving the selection past the
+    /// bottom of it used to keep moving an invisible cursor: the highlight
+    /// vanished and the row that Enter would take was anybody's guess.
+    #[test]
+    fn the_window_follows_the_selection_off_the_bottom_and_back() {
+        // The real table, not the four-entry fixture: with fewer places than
+        // LIST_ROWS nothing ever scrolls and this test cannot fail. It did not,
+        // the first time it was written.
+        let real = crate::zones::PLACES;
+        assert!(real.len() > LIST_ROWS, "there is something to scroll");
+        let mut p = Prompt::new("ZONE", "help", "", Completion::Places(real));
+
+        for _ in 0..real.len() {
+            press(&mut p, KeyCode::Down);
+        }
+        assert!(
+            p.selected >= p.offset && p.selected < p.offset + LIST_ROWS,
+            "selected {} left the window at {}",
+            p.selected,
+            p.offset
+        );
+
+        assert!(p.offset > 0, "the window actually moved");
+
+        for _ in 0..real.len() {
+            press(&mut p, KeyCode::Up);
+        }
+        assert_eq!(p.selected, 0, "back to the first");
+        assert_eq!(p.offset, 0, "and the window came back with it");
+    }
+
+    /// The window only moves when it has to, so the cursor travels across a
+    /// stationary list rather than dragging it along one row at a time.
+    #[test]
+    fn the_window_stays_put_while_the_selection_is_inside_it() {
+        let mut p = prompt("");
+        press(&mut p, KeyCode::Down);
+        assert_eq!(p.offset, 0, "second row is already visible");
     }
 
     #[test]

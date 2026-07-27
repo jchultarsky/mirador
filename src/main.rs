@@ -45,8 +45,10 @@ use ratatui::crossterm::execute;
 use crate::app::App;
 use crate::config::Config;
 
-const HELP: &str = "\
-mirador — a personal information dashboard for your terminal
+const HELP: &str = concat!(
+    "mirador ",
+    env!("CARGO_PKG_VERSION"),
+    " — a personal information dashboard for your terminal
 
 USAGE:
     mirador [OPTIONS]
@@ -62,12 +64,16 @@ OPTIONS:
 KEYS:
     Tab / Shift+Tab        Move focus between panels
     1 - 9                  Jump straight to a panel
-    ?                      Show all key bindings
+    w                      Choose which panels are shown
+    m                      Rearrange the panels
+    Ctrl+arrows            Resize the focused panel
+    ?                      Show all key bindings, and the version
     q / Ctrl+C             Quit
 
 On first run mirador writes a commented config file you can edit. Run
 `mirador --config-path` to find it.
-";
+"
+);
 
 /// Parsed command line.
 // A flags struct is exactly the case where several bools are the clearest

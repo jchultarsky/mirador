@@ -28,6 +28,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the whole terminal now, after every panel — which is also what stopped
   the new city list coming out interleaved with the task list.
 
+## [Unreleased]
+
+### Added
+
+- **The version is shown in the `?` overlay**, right-aligned in its border the
+  way every panel shows a counter. `?` is where you go to find out what the
+  thing does, so it is where you look for what version it is.
+
+- The command-line `--help` now leads with the version, and lists `w`, `m` and
+  `Ctrl+arrows`, which it had never been told about.
+
+### Fixed
+
+- **The city list scrolls.** It draws ten rows, and moving the selection past
+  the bottom kept moving a cursor nobody could see — the highlight vanished and
+  the row `Enter` would take was anybody's guess. The window follows the
+  selection now, `PageUp`/`PageDown`/`Home`/`End` work, and the help line says
+  how much of the list is on screen so ten of a hundred and forty-three does not
+  read as all of it.
+
 ## [0.11.0] - 2026-07-27
 
 ### Added

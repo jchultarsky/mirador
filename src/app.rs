@@ -1565,7 +1565,22 @@ impl App {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("├", Style::default().fg(theme.border_focused)),
-            ]));
+            ]))
+            // Right-aligned in the border, the way every panel shows its
+            // counter — `?` is where someone goes to find out what the thing
+            // does, so it is also where they will look for what version it is,
+            // and the border costs no rows to say so.
+            .title_top(
+                Line::from(vec![
+                    Span::styled("┤", Style::default().fg(theme.border_focused)),
+                    Span::styled(
+                        concat!("v", env!("CARGO_PKG_VERSION")),
+                        Style::default().fg(theme.muted),
+                    ),
+                    Span::styled("├", Style::default().fg(theme.border_focused)),
+                ])
+                .right_aligned(),
+            );
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
 
