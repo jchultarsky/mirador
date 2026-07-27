@@ -116,8 +116,9 @@ config/      mod.rs: paths, loading, validation; widgets.rs: one settings
              struct per panel; layout.rs: the grid
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
-prompt.rs    the one-line question a panel asks for a path, place or zone
-zones.rs     world clocks as a data file, the watchlist trick again
+prompt.rs    the one-line question a panel asks for a path, place or zone,
+             with an optional list to choose from
+zones.rs     world clocks as a data file, plus the city→zone table
 migrate.rs   textual in-place upgrade of configs written by older versions
 layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 store.rs     write_atomic — every file mirador owns goes through it
@@ -439,6 +440,18 @@ age rather than implying it is current.
 **The first read of a calendar is not news.** `AgendaPanel::known` is `None`
 until the first successful read, so a startup does not announce every event in
 your `.ics`. A log that opens with forty entries is a log nobody reads twice.
+
+## A panel dialog is drawn by the shell, not the panel
+
+`Panel::overlay` returns the open prompt and `App::render` draws it after every
+panel, beside the help overlay and the picker. This is not tidiness: panels are
+drawn in order, so anything a panel paints outside its own rectangle is painted
+over by the panels after it. The zone picker was first written to draw itself
+and came out interleaved with the task list, because the clock is panel one and
+nine panels are drawn on top of it.
+
+The corollary is that a panel's `render` must stay inside the rectangle it is
+given. Nothing enforces it; the failure looks like a corrupt terminal.
 
 ## Recently settled, so it is not re-litigated
 

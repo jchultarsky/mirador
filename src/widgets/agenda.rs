@@ -186,7 +186,10 @@ impl AgendaPanel {
             return;
         };
         match prompt.handle_key(key) {
-            crate::prompt::Outcome::Editing => {}
+            // `Chose` cannot arise: this prompt offers no list. It is grouped
+            // with `Editing` rather than given its own empty arm because an
+            // arm that does nothing invites someone to make it do something.
+            crate::prompt::Outcome::Editing | crate::prompt::Outcome::Chose { .. } => {}
             crate::prompt::Outcome::Cancelled => self.asking = None,
             crate::prompt::Outcome::Submitted(answer) => {
                 let path = crate::prompt::expand_tilde(&answer);
@@ -479,6 +482,10 @@ impl Panel for AgendaPanel {
         std::mem::take(&mut self.pending)
     }
 
+    fn overlay(&self) -> Option<&crate::prompt::Prompt> {
+        self.asking.as_ref()
+    }
+
     fn captures_input(&self) -> bool {
         self.asking.is_some()
     }
@@ -538,9 +545,6 @@ impl Panel for AgendaPanel {
             return;
         }
 
-        // Kept before the area is divided up, so the prompt can be drawn over
-        // the whole panel at the end.
-        let whole = area;
         let state = self.snapshot();
         let now = Zoned::now();
 
@@ -573,12 +577,6 @@ impl Panel for AgendaPanel {
 
         if notice_area.height > 0 {
             frame.render_widget(Paragraph::new(notices), notice_area);
-        }
-
-        // Last, and across the whole panel rather than the list: a dialog drawn
-        // before the list and the notices would be painted over by both.
-        if let Some(prompt) = &self.asking {
-            prompt.render(frame, whole, theme);
         }
     }
 

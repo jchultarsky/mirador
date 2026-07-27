@@ -1323,6 +1323,15 @@ impl App {
             );
         }
 
+        // Panel dialogs, before the shell's own overlays and after every
+        // panel: drawn any earlier and the panels following the one that owns
+        // the dialog paint straight over it.
+        for slot in &self.slots {
+            if let Some(prompt) = slot.panel.overlay() {
+                prompt.render(frame, area, &self.config.theme);
+            }
+        }
+
         if self.show_help {
             self.render_help(frame, area);
         }

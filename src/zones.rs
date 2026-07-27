@@ -15,74 +15,601 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ClockZone;
 
-/// Timezone names offered for completion.
+/// Cities offered when adding a clock, and the zone each one is in.
 ///
-/// Deliberately a short list of the ones people actually type rather than the
-/// six hundred in the IANA database. Completion exists so you do not have to
-/// remember whether it is `Asia/Calcutta` or `Asia/Kolkata`; it is not a
-/// browser, and a list this size fits in the binary for nothing.
+/// Many cities to one zone, deliberately — that is the entire point. The IANA
+/// identifier names *a* city in the zone, and it is very often not the one the
+/// reader has in mind: Seattle is `America/Los_Angeles`, Bengaluru is
+/// `Asia/Kolkata`, Boston is `America/New_York`. Asking someone to know that
+/// before they can add a clock is asking the wrong question.
 ///
-/// Anything else still works — the name is handed to jiff, which knows the
-/// whole database. This only decides what `Tab` can finish for you.
-pub const COMMON: &[&str] = &[
-    "Africa/Cairo",
-    "Africa/Johannesburg",
-    "Africa/Lagos",
-    "Africa/Nairobi",
-    "America/Argentina/Buenos_Aires",
-    "America/Bogota",
-    "America/Chicago",
-    "America/Denver",
-    "America/Halifax",
-    "America/Los_Angeles",
-    "America/Mexico_City",
-    "America/New_York",
-    "America/Phoenix",
-    "America/Sao_Paulo",
-    "America/Toronto",
-    "America/Vancouver",
-    "Asia/Bangkok",
-    "Asia/Dubai",
-    "Asia/Hong_Kong",
-    "Asia/Jakarta",
-    "Asia/Jerusalem",
-    "Asia/Kolkata",
-    "Asia/Manila",
-    "Asia/Seoul",
-    "Asia/Shanghai",
-    "Asia/Singapore",
-    "Asia/Taipei",
-    "Asia/Tokyo",
-    "Australia/Brisbane",
-    "Australia/Melbourne",
-    "Australia/Perth",
-    "Australia/Sydney",
-    "Europe/Amsterdam",
-    "Europe/Athens",
-    "Europe/Berlin",
-    "Europe/Brussels",
-    "Europe/Bucharest",
-    "Europe/Copenhagen",
-    "Europe/Dublin",
-    "Europe/Helsinki",
-    "Europe/Istanbul",
-    "Europe/Lisbon",
-    "Europe/London",
-    "Europe/Madrid",
-    "Europe/Moscow",
-    "Europe/Oslo",
-    "Europe/Paris",
-    "Europe/Prague",
-    "Europe/Rome",
-    "Europe/Stockholm",
-    "Europe/Vienna",
-    "Europe/Warsaw",
-    "Europe/Zurich",
-    "Pacific/Auckland",
-    "Pacific/Honolulu",
-    "UTC",
-    "local",
+/// Curated rather than generated. The tz database has around six hundred zones
+/// and no city labels beyond the identifiers themselves, so generating this
+/// would reproduce exactly the problem it exists to solve.
+///
+/// Anything not here still works: the prompt falls back to whatever was typed,
+/// and jiff knows the whole database.
+pub const PLACES: &[Place] = &[
+    Place {
+        city: "Auckland",
+        tz: "Pacific/Auckland",
+    },
+    Place {
+        city: "Wellington",
+        tz: "Pacific/Auckland",
+    },
+    Place {
+        city: "Sydney",
+        tz: "Australia/Sydney",
+    },
+    Place {
+        city: "Canberra",
+        tz: "Australia/Sydney",
+    },
+    Place {
+        city: "Melbourne",
+        tz: "Australia/Melbourne",
+    },
+    Place {
+        city: "Brisbane",
+        tz: "Australia/Brisbane",
+    },
+    Place {
+        city: "Perth",
+        tz: "Australia/Perth",
+    },
+    Place {
+        city: "Adelaide",
+        tz: "Australia/Adelaide",
+    },
+    Place {
+        city: "Tokyo",
+        tz: "Asia/Tokyo",
+    },
+    Place {
+        city: "Osaka",
+        tz: "Asia/Tokyo",
+    },
+    Place {
+        city: "Seoul",
+        tz: "Asia/Seoul",
+    },
+    Place {
+        city: "Taipei",
+        tz: "Asia/Taipei",
+    },
+    Place {
+        city: "Shanghai",
+        tz: "Asia/Shanghai",
+    },
+    Place {
+        city: "Beijing",
+        tz: "Asia/Shanghai",
+    },
+    Place {
+        city: "Shenzhen",
+        tz: "Asia/Shanghai",
+    },
+    Place {
+        city: "Hong Kong",
+        tz: "Asia/Hong_Kong",
+    },
+    Place {
+        city: "Singapore",
+        tz: "Asia/Singapore",
+    },
+    Place {
+        city: "Manila",
+        tz: "Asia/Manila",
+    },
+    Place {
+        city: "Jakarta",
+        tz: "Asia/Jakarta",
+    },
+    Place {
+        city: "Bangkok",
+        tz: "Asia/Bangkok",
+    },
+    Place {
+        city: "Hanoi",
+        tz: "Asia/Bangkok",
+    },
+    Place {
+        city: "Ho Chi Minh City",
+        tz: "Asia/Ho_Chi_Minh",
+    },
+    Place {
+        city: "Kuala Lumpur",
+        tz: "Asia/Kuala_Lumpur",
+    },
+    Place {
+        city: "Yangon",
+        tz: "Asia/Yangon",
+    },
+    Place {
+        city: "Dhaka",
+        tz: "Asia/Dhaka",
+    },
+    Place {
+        city: "Kathmandu",
+        tz: "Asia/Kathmandu",
+    },
+    Place {
+        city: "Mumbai",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Delhi",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Bengaluru",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Chennai",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Hyderabad",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Kolkata",
+        tz: "Asia/Kolkata",
+    },
+    Place {
+        city: "Karachi",
+        tz: "Asia/Karachi",
+    },
+    Place {
+        city: "Lahore",
+        tz: "Asia/Karachi",
+    },
+    Place {
+        city: "Islamabad",
+        tz: "Asia/Karachi",
+    },
+    Place {
+        city: "Tashkent",
+        tz: "Asia/Tashkent",
+    },
+    Place {
+        city: "Almaty",
+        tz: "Asia/Almaty",
+    },
+    Place {
+        city: "Dubai",
+        tz: "Asia/Dubai",
+    },
+    Place {
+        city: "Abu Dhabi",
+        tz: "Asia/Dubai",
+    },
+    Place {
+        city: "Muscat",
+        tz: "Asia/Dubai",
+    },
+    Place {
+        city: "Tehran",
+        tz: "Asia/Tehran",
+    },
+    Place {
+        city: "Baku",
+        tz: "Asia/Baku",
+    },
+    Place {
+        city: "Tbilisi",
+        tz: "Asia/Tbilisi",
+    },
+    Place {
+        city: "Yerevan",
+        tz: "Asia/Yerevan",
+    },
+    Place {
+        city: "Riyadh",
+        tz: "Asia/Riyadh",
+    },
+    Place {
+        city: "Doha",
+        tz: "Asia/Qatar",
+    },
+    Place {
+        city: "Kuwait City",
+        tz: "Asia/Kuwait",
+    },
+    Place {
+        city: "Baghdad",
+        tz: "Asia/Baghdad",
+    },
+    Place {
+        city: "Jerusalem",
+        tz: "Asia/Jerusalem",
+    },
+    Place {
+        city: "Tel Aviv",
+        tz: "Asia/Jerusalem",
+    },
+    Place {
+        city: "Amman",
+        tz: "Asia/Amman",
+    },
+    Place {
+        city: "Beirut",
+        tz: "Asia/Beirut",
+    },
+    Place {
+        city: "Nicosia",
+        tz: "Asia/Nicosia",
+    },
+    Place {
+        city: "Istanbul",
+        tz: "Europe/Istanbul",
+    },
+    Place {
+        city: "Ankara",
+        tz: "Europe/Istanbul",
+    },
+    Place {
+        city: "Moscow",
+        tz: "Europe/Moscow",
+    },
+    Place {
+        city: "Saint Petersburg",
+        tz: "Europe/Moscow",
+    },
+    Place {
+        city: "Kyiv",
+        tz: "Europe/Kyiv",
+    },
+    Place {
+        city: "Minsk",
+        tz: "Europe/Minsk",
+    },
+    Place {
+        city: "Athens",
+        tz: "Europe/Athens",
+    },
+    Place {
+        city: "Bucharest",
+        tz: "Europe/Bucharest",
+    },
+    Place {
+        city: "Sofia",
+        tz: "Europe/Sofia",
+    },
+    Place {
+        city: "Helsinki",
+        tz: "Europe/Helsinki",
+    },
+    Place {
+        city: "Tallinn",
+        tz: "Europe/Tallinn",
+    },
+    Place {
+        city: "Riga",
+        tz: "Europe/Riga",
+    },
+    Place {
+        city: "Vilnius",
+        tz: "Europe/Vilnius",
+    },
+    Place {
+        city: "Cairo",
+        tz: "Africa/Cairo",
+    },
+    Place {
+        city: "Johannesburg",
+        tz: "Africa/Johannesburg",
+    },
+    Place {
+        city: "Cape Town",
+        tz: "Africa/Johannesburg",
+    },
+    Place {
+        city: "Nairobi",
+        tz: "Africa/Nairobi",
+    },
+    Place {
+        city: "Addis Ababa",
+        tz: "Africa/Addis_Ababa",
+    },
+    Place {
+        city: "Lagos",
+        tz: "Africa/Lagos",
+    },
+    Place {
+        city: "Accra",
+        tz: "Africa/Accra",
+    },
+    Place {
+        city: "Casablanca",
+        tz: "Africa/Casablanca",
+    },
+    Place {
+        city: "Berlin",
+        tz: "Europe/Berlin",
+    },
+    Place {
+        city: "Munich",
+        tz: "Europe/Berlin",
+    },
+    Place {
+        city: "Frankfurt",
+        tz: "Europe/Berlin",
+    },
+    Place {
+        city: "Hamburg",
+        tz: "Europe/Berlin",
+    },
+    Place {
+        city: "Paris",
+        tz: "Europe/Paris",
+    },
+    Place {
+        city: "Madrid",
+        tz: "Europe/Madrid",
+    },
+    Place {
+        city: "Barcelona",
+        tz: "Europe/Madrid",
+    },
+    Place {
+        city: "Rome",
+        tz: "Europe/Rome",
+    },
+    Place {
+        city: "Milan",
+        tz: "Europe/Rome",
+    },
+    Place {
+        city: "Amsterdam",
+        tz: "Europe/Amsterdam",
+    },
+    Place {
+        city: "Brussels",
+        tz: "Europe/Brussels",
+    },
+    Place {
+        city: "Vienna",
+        tz: "Europe/Vienna",
+    },
+    Place {
+        city: "Zurich",
+        tz: "Europe/Zurich",
+    },
+    Place {
+        city: "Geneva",
+        tz: "Europe/Zurich",
+    },
+    Place {
+        city: "Prague",
+        tz: "Europe/Prague",
+    },
+    Place {
+        city: "Warsaw",
+        tz: "Europe/Warsaw",
+    },
+    Place {
+        city: "Budapest",
+        tz: "Europe/Budapest",
+    },
+    Place {
+        city: "Stockholm",
+        tz: "Europe/Stockholm",
+    },
+    Place {
+        city: "Oslo",
+        tz: "Europe/Oslo",
+    },
+    Place {
+        city: "Copenhagen",
+        tz: "Europe/Copenhagen",
+    },
+    Place {
+        city: "London",
+        tz: "Europe/London",
+    },
+    Place {
+        city: "Edinburgh",
+        tz: "Europe/London",
+    },
+    Place {
+        city: "Manchester",
+        tz: "Europe/London",
+    },
+    Place {
+        city: "Dublin",
+        tz: "Europe/Dublin",
+    },
+    Place {
+        city: "Lisbon",
+        tz: "Europe/Lisbon",
+    },
+    Place {
+        city: "Porto",
+        tz: "Europe/Lisbon",
+    },
+    Place {
+        city: "Reykjavik",
+        tz: "Atlantic/Reykjavik",
+    },
+    Place {
+        city: "Sao Paulo",
+        tz: "America/Sao_Paulo",
+    },
+    Place {
+        city: "Rio de Janeiro",
+        tz: "America/Sao_Paulo",
+    },
+    Place {
+        city: "Buenos Aires",
+        tz: "America/Argentina/Buenos_Aires",
+    },
+    Place {
+        city: "Montevideo",
+        tz: "America/Montevideo",
+    },
+    Place {
+        city: "Santiago",
+        tz: "America/Santiago",
+    },
+    Place {
+        city: "Lima",
+        tz: "America/Lima",
+    },
+    Place {
+        city: "Bogota",
+        tz: "America/Bogota",
+    },
+    Place {
+        city: "Caracas",
+        tz: "America/Caracas",
+    },
+    Place {
+        city: "Halifax",
+        tz: "America/Halifax",
+    },
+    Place {
+        city: "New York",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Boston",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Washington DC",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Atlanta",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Miami",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Philadelphia",
+        tz: "America/New_York",
+    },
+    Place {
+        city: "Toronto",
+        tz: "America/Toronto",
+    },
+    Place {
+        city: "Montreal",
+        tz: "America/Toronto",
+    },
+    Place {
+        city: "Ottawa",
+        tz: "America/Toronto",
+    },
+    Place {
+        city: "Detroit",
+        tz: "America/Detroit",
+    },
+    Place {
+        city: "Chicago",
+        tz: "America/Chicago",
+    },
+    Place {
+        city: "Dallas",
+        tz: "America/Chicago",
+    },
+    Place {
+        city: "Houston",
+        tz: "America/Chicago",
+    },
+    Place {
+        city: "Austin",
+        tz: "America/Chicago",
+    },
+    Place {
+        city: "Minneapolis",
+        tz: "America/Chicago",
+    },
+    Place {
+        city: "Mexico City",
+        tz: "America/Mexico_City",
+    },
+    Place {
+        city: "Winnipeg",
+        tz: "America/Winnipeg",
+    },
+    Place {
+        city: "Denver",
+        tz: "America/Denver",
+    },
+    Place {
+        city: "Salt Lake City",
+        tz: "America/Denver",
+    },
+    Place {
+        city: "Calgary",
+        tz: "America/Edmonton",
+    },
+    Place {
+        city: "Edmonton",
+        tz: "America/Edmonton",
+    },
+    Place {
+        city: "Phoenix",
+        tz: "America/Phoenix",
+    },
+    Place {
+        city: "Los Angeles",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "San Francisco",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "Seattle",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "Portland",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "San Diego",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "Las Vegas",
+        tz: "America/Los_Angeles",
+    },
+    Place {
+        city: "Vancouver",
+        tz: "America/Vancouver",
+    },
+    Place {
+        city: "Anchorage",
+        tz: "America/Anchorage",
+    },
+    Place {
+        city: "Honolulu",
+        tz: "Pacific/Honolulu",
+    },
+    Place {
+        city: "UTC",
+        tz: "UTC",
+    },
+    Place {
+        city: "Local time",
+        tz: "local",
+    },
 ];
+
+/// A city and the zone it keeps time in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Place {
+    pub city: &'static str,
+    pub tz: &'static str,
+}
 
 /// The clocks on screen, in order.
 #[derive(Debug)]
@@ -243,17 +770,20 @@ mod tests {
         assert_eq!(zones.zones().len(), 2);
     }
 
-    /// Every name offered for completion has to be one jiff will actually
-    /// accept, or `Tab` would help you type something that is then rejected.
+    /// Every zone in the picker has to be one jiff will actually accept.
+    /// Choosing a city from a list and being told the zone is unknown would be
+    /// the list's fault, and there is nothing the reader could do about it.
     #[test]
     fn every_offered_timezone_resolves() {
-        for name in COMMON {
-            if *name == "local" {
+        for place in PLACES {
+            if place.tz == "local" {
                 continue;
             }
             assert!(
-                jiff::tz::TimeZone::get(name).is_ok(),
-                "`{name}` is offered for completion but does not resolve"
+                jiff::tz::TimeZone::get(place.tz).is_ok(),
+                "`{}` is offered for {} but does not resolve",
+                place.tz,
+                place.city
             );
         }
     }

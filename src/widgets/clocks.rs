@@ -156,6 +156,18 @@ impl ClocksPanel {
         match prompt.handle_key(key) {
             crate::prompt::Outcome::Editing => {}
             crate::prompt::Outcome::Cancelled => self.asking = None,
+            // Picked from the list: the city the reader recognised becomes
+            // the clock's label, which is the whole reason the outcome carries
+            // both. Nothing needs validating — the list only holds zones that
+            // resolve, and a test holds it to that.
+            crate::prompt::Outcome::Chose { label, value } => {
+                if self.zones.add(label, value) {
+                    self.asking = None;
+                    self.reload();
+                } else if let Some(prompt) = self.asking.as_mut() {
+                    prompt.reject("that clock is already on the panel");
+                }
+            }
             crate::prompt::Outcome::Submitted(answer) => {
                 // `Label = Zone` if you want to name it, otherwise just the
                 // zone and the city out of it becomes the label.
@@ -284,6 +296,10 @@ impl Panel for ClocksPanel {
         moved
     }
 
+    fn overlay(&self) -> Option<&crate::prompt::Prompt> {
+        self.asking.as_ref()
+    }
+
     fn captures_input(&self) -> bool {
         self.asking.is_some()
     }
@@ -303,9 +319,9 @@ impl Panel for ClocksPanel {
             KeyCode::Char('a') => {
                 self.asking = Some(crate::prompt::Prompt::new(
                     "ADD A CLOCK",
-                    "Zone, or Label = Zone · Tab completes · Enter adds",
+                    "Type to narrow · ↑↓ to choose · Enter adds · Esc cancels",
                     "",
-                    crate::prompt::Completion::Names(crate::zones::COMMON),
+                    crate::prompt::Completion::Places(crate::zones::PLACES),
                 ));
             }
             KeyCode::Char('d') => {
@@ -338,9 +354,6 @@ impl Panel for ClocksPanel {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        // Kept before the area is carved up, so the prompt can be drawn across
-        // the whole panel at the end.
-        let whole = area;
 
         let now = jiff::Timestamp::now();
         let primary_zone = match &self.primary.zone {
@@ -551,10 +564,6 @@ impl Panel for ClocksPanel {
                 Rect::new(area.x, area.y + area.height - 1, area.width, 1),
             );
         }
-
-        if let Some(prompt) = &self.asking {
-            prompt.render(frame, whole, theme);
-        }
     }
 }
 
@@ -664,7 +673,9 @@ mod tests {
         assert_eq!(labels(&panel), before, "and nothing was added");
     }
 
-    /// `Label = Zone` names the clock; a bare zone takes the city out of it.
+    /// Picking from the list names the clock after the city you recognised,
+    /// and the `Label = Zone` form still works for anyone typing a zone the
+    /// list does not carry.
     #[test]
     fn a_clock_can_be_added_with_or_without_a_label() {
         let (mut panel, _guard) = panel_from_named(
@@ -676,18 +687,22 @@ mod tests {
         );
 
         press(&mut panel, KeyCode::Char('a'));
-        for c in "Asia/Kolkata".chars() {
+        for c in "Bengaluru".chars() {
             panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
         }
         press(&mut panel, KeyCode::Enter);
-        assert_eq!(labels(&panel), ["Kolkata"], "named after its city");
+        assert_eq!(
+            labels(&panel),
+            ["Bengaluru"],
+            "the city you picked, not the one in the identifier"
+        );
 
         press(&mut panel, KeyCode::Char('a'));
         for c in "HQ = Europe/Berlin".chars() {
             panel.handle_key(KeyEvent::from(KeyCode::Char(c)));
         }
         press(&mut panel, KeyCode::Enter);
-        assert_eq!(labels(&panel), ["Kolkata", "HQ"], "or named by you");
+        assert_eq!(labels(&panel), ["Bengaluru", "HQ"], "or named by you");
     }
 
     #[test]

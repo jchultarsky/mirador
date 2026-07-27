@@ -179,6 +179,23 @@ pub trait Panel {
         Vec::new()
     }
 
+    /// A dialog this panel wants drawn over the whole screen.
+    ///
+    /// Returned rather than drawn in [`render`] because the shell draws panels
+    /// in order, so anything a panel paints outside its own rectangle is
+    /// immediately painted over by the panels after it. The first version of
+    /// the zone picker did exactly that and came out interleaved with the task
+    /// list. The shell draws these last, alongside the help overlay and the
+    /// panel picker, which are screen-wide for the same reason.
+    ///
+    /// A panel with a dialog open also returns `true` from
+    /// [`captures_input`](Panel::captures_input), so at most one is ever open.
+    ///
+    /// [`render`]: Panel::render
+    fn overlay(&self) -> Option<&crate::prompt::Prompt> {
+        None
+    }
+
     /// Draw the panel's contents. `area` is already inside the frame and its
     /// padding.
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>);
