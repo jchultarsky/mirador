@@ -71,6 +71,11 @@ pub struct Config {
 /// Global behaviour.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+// Four independent on/off settings with nothing in common but their type. A
+// flags struct is the clearest representation of that; there is no state
+// machine hiding here, and grouping them into an enum would invent a
+// relationship the settings do not have.
+#[allow(clippy::struct_excessive_bools)]
 pub struct General {
     /// Frame budget in milliseconds. Lower is smoother and burns more CPU.
     pub tick_rate_ms: u64,
@@ -85,12 +90,24 @@ pub struct General {
     /// dashboard needs the terminal's override modifier (Shift in most, Option
     /// in macOS Terminal and iTerm2). Set to `false` to keep selection.
     pub mouse: bool,
+    /// Ask crates.io, once a day, whether a newer mirador exists.
+    ///
+    /// **Off, and staying off unless you turn it on.** The README promises that
+    /// mirador does not phone home; an update check is a request that tells a
+    /// third party your IP address and that you run this program, on a schedule
+    /// you did not pick. Small, and still the thing that promise was about.
+    ///
+    /// `NO_UPDATE_CHECK` or `DO_NOT_TRACK` in the environment override this
+    /// even when it is true — on a managed machine the person who set those may
+    /// not be the person who wrote the config.
+    pub check_for_updates: bool,
 }
 
 impl Default for General {
     fn default() -> Self {
         Self {
             tick_rate_ms: 250,
+            check_for_updates: false,
             show_borders: true,
             show_status_bar: true,
             mouse: true,
@@ -265,6 +282,11 @@ impl Config {
     /// Where remembered UI preferences live. Not configurable: it is mirador's
     /// own bookkeeping rather than something you curate, and a config key
     /// pointing at it would invite exactly the confusion this file avoids.
+    /// Where the update check caches its answer, beside the state file.
+    pub fn update_cache_path() -> Result<PathBuf> {
+        Ok(crate::update::default_path(&Self::default_data_dir()?))
+    }
+
     pub fn state_path() -> Result<PathBuf> {
         Ok(crate::state::default_path(&Self::default_data_dir()?))
     }

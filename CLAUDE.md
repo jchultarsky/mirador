@@ -118,6 +118,7 @@ migrate.rs   textual in-place upgrade of configs written by older versions
 layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 store.rs     write_atomic — every file mirador owns goes through it
 state.rs     UI-changed preferences, remembered across restarts
+update.rs    the opt-in update check — off unless the config turns it on
 task.rs      task model + TOML store
 note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
@@ -198,7 +199,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 194 of them, including the ones mirador
+    trip through `toml` discards all 207 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
