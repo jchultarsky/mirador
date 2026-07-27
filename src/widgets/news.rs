@@ -79,6 +79,15 @@ pub struct NewsPanel {
     showing_link: Option<String>,
     /// Stories drawn last frame, for clamping the selection.
     drawn: usize,
+    /// The stories as of the last time the fetch thread published.
+    ///
+    /// Cached rather than read through the mutex on every draw. Stories change
+    /// once an hour and a draw happens about once a second, so cloning them per
+    /// frame was sixty allocations for the same sixty headlines — the same
+    /// mistake the agenda's alert made, found in the same review.
+    shown: Vec<Story>,
+    fetched: Option<Instant>,
+    failing: Option<String>,
 }
 
 impl Drop for NewsPanel {
@@ -137,6 +146,9 @@ impl NewsPanel {
             selected: ListState::default(),
             showing_link: None,
             drawn: 0,
+            shown: Vec::new(),
+            fetched: None,
+            failing: None,
         }
     }
 
@@ -193,6 +205,14 @@ impl Panel for NewsPanel {
         let now = self.generation.load(Ordering::Acquire);
         let moved = now != self.seen;
         self.seen = now;
+        // The one moment the stories can have changed, so the one moment worth
+        // copying them out from under the lock.
+        if moved {
+            let state = self.snapshot();
+            self.shown = state.stories;
+            self.fetched = state.fetched;
+            self.failing = state.error;
+        }
         moved
     }
 
@@ -207,7 +227,7 @@ impl Panel for NewsPanel {
                 }
             }
             KeyCode::Char('o') => {
-                let stories = self.snapshot().stories;
+                let stories = &self.shown;
                 // Shown, not opened. Launching a browser means talking to the
                 // platform — `open`, `xdg-open`, `start` — which is the same
                 // decision as playing a sound file and gets the same answer.
@@ -250,7 +270,6 @@ impl Panel for NewsPanel {
             return;
         }
 
-        let state = self.snapshot();
         let width = usize::from(area.width);
 
         // One row at the foot for the age, or the link, or a failure.
@@ -264,8 +283,8 @@ impl Panel for NewsPanel {
             ..area
         };
 
-        if state.stories.is_empty() {
-            let message = match &state.error {
+        if self.shown.is_empty() {
+            let message = match &self.failing {
                 Some(why) => vec![
                     Line::from(Span::styled(
                         "Cannot read the feeds",
@@ -278,7 +297,7 @@ impl Panel for NewsPanel {
                         Style::default().fg(theme.muted),
                     )),
                 ],
-                None if state.fetched.is_some() => vec![Line::from(Span::styled(
+                None if self.fetched.is_some() => vec![Line::from(Span::styled(
                     "No stories.",
                     Style::default().fg(theme.muted),
                 ))],
@@ -297,8 +316,8 @@ impl Panel for NewsPanel {
         // between every story would be more furniture than content at this
         // width, and the panel is meant to read like a page.
         let mut items: Vec<ListItem> = Vec::new();
-        let last = state.stories.len().saturating_sub(1);
-        for (index, story) in state.stories.iter().enumerate() {
+        let last = self.shown.len().saturating_sub(1);
+        for (index, story) in self.shown.iter().enumerate() {
             let mut lines = vec![Line::from(masthead(story, theme))];
             for line in crate::grid::wrap(&story.title, width) {
                 lines.push(Line::from(Span::styled(
@@ -319,7 +338,7 @@ impl Panel for NewsPanel {
         self.drawn = items.len();
         frame.render_stateful_widget(List::new(items), body, &mut self.selected);
 
-        let foot = match (&self.showing_link, &state.error) {
+        let foot = match (&self.showing_link, &self.failing) {
             (Some(link), _) => Span::styled(
                 crate::grid::truncate(link, width),
                 Style::default().fg(theme.label),
@@ -327,15 +346,13 @@ impl Panel for NewsPanel {
             (None, Some(_)) => Span::styled(
                 format!(
                     "{} — refresh failing",
-                    state
-                        .fetched
+                    self.fetched
                         .map_or_else(|| "never read".to_string(), |at| describe_age(at.elapsed()))
                 ),
                 Style::default().fg(theme.warning),
             ),
             (None, None) => Span::styled(
-                state
-                    .fetched
+                self.fetched
                     .map_or_else(String::new, |at| describe_age(at.elapsed())),
                 Style::default().fg(theme.muted),
             ),

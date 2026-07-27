@@ -1383,6 +1383,12 @@ impl App {
         // In arrange mode the bar belongs to the mode. The global keys are not
         // reachable anyway — the arrows have been claimed — so listing them
         // would be listing keys that do nothing.
+        //
+        // This also hides an alert for as long as the mode is open, which is a
+        // decision rather than an oversight. Arrange mode is a gesture measured
+        // in seconds and the legend is what makes it usable; an alert that
+        // waits until `Enter` or `Esc` has lost nothing, because the thing it
+        // names has already happened either way.
         if self.arranging.is_some() {
             let mut spans = vec![Span::styled(
                 " ARRANGE",

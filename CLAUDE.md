@@ -548,6 +548,19 @@ change the user had watched happen.
 deliberate: each picker change is one keystroke to undo, an arrangement is not.
 The mode's legend names both keys, so there is nothing to guess.
 
+## Feature freeze
+
+**New features are frozen ahead of 1.0.0.** Bug fixes, documentation and tests
+only. Anything that adds a panel, a key or a config value waits — the point of
+the freeze is to find out what the last round actually broke, and adding to it
+defeats that.
+
+Adversarial review found one hang and two per-frame allocation faults in code
+written the same day, all of them in paths the tests exercised and the tests did
+not catch. That is the argument for the freeze, not an argument against the
+tests: the hang needed a two-cell glyph in a one-cell column, and nothing was
+going to guess that from reading.
+
 ## Open work
 
 Nothing. All three gaps named in the original product analysis are built — the

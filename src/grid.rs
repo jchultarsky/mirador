@@ -66,16 +66,6 @@ fn char_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
-/// Rows that `text` occupies once word-wrapped to `width` cells.
-///
-/// Needed wherever something is sized to fit its own contents — a scroll
-/// clamp, or a dialog that must not be shorter than the text inside it. The
-/// unwrapped line count is not a substitute: it is right until a line is
-/// longer than the box, and then it is short by exactly the amount that
-/// matters.
-///
-/// Matches `Paragraph::new(text).wrap(Wrap { trim: false })`, whose own
-/// `line_count` is private. An empty line still occupies a row.
 /// Break `text` into lines no wider than `width` display cells.
 ///
 /// The companion to [`wrapped_height`], which counts the same rows without
@@ -109,13 +99,24 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
             // A single word longer than the line breaks inside itself, rather
             // than running off the edge.
             while used > width {
-                let keep: String = current
+                let mut keep: String = current
                     .chars()
                     .scan(0usize, |taken, c| {
                         *taken += display_width(&c.to_string());
                         (*taken <= width).then_some(c)
                     })
                     .collect();
+                // Always take at least one character. A glyph wider than the
+                // whole line — any CJK character or emoji in a one-cell column
+                // — otherwise fits nowhere, so nothing is taken, nothing is
+                // consumed, and this loops for ever. That is a hang, not a
+                // slow path: the dashboard freezes and has to be killed.
+                //
+                // The line then exceeds `width` by a cell, which is the honest
+                // outcome. A terminal cannot draw half a wide glyph either.
+                if keep.is_empty() {
+                    keep.extend(current.chars().next());
+                }
                 let rest = current[keep.len()..].to_string();
                 out.push(keep);
                 current = rest;
@@ -133,6 +134,16 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Rows that `text` occupies once word-wrapped to `width` cells.
+///
+/// Needed wherever something is sized to fit its own contents — a scroll
+/// clamp, or a dialog that must not be shorter than the text inside it. The
+/// unwrapped line count is not a substitute: it is right until a line is
+/// longer than the box, and then it is short by exactly the amount that
+/// matters.
+///
+/// Matches `Paragraph::new(text).wrap(Wrap { trim: false })`, whose own
+/// `line_count` is private. An empty line still occupies a row.
 pub fn wrapped_height(text: &str, width: u16) -> u16 {
     if width == 0 {
         return 0;
@@ -441,6 +452,32 @@ mod tests {
         }
     }
 
+    /// A glyph wider than the whole line fits nowhere, so "take as many
+    /// characters as fit" takes none, consumes nothing, and loops for ever.
+    /// That is a hang — the dashboard freezes and has to be killed — and it is
+    /// reachable by any CJK or emoji headline in a narrow panel.
+    #[test]
+    fn a_glyph_wider_than_the_line_does_not_hang() {
+        for text in [
+            "\u{1F31E}\u{1F31E}",
+            "\u{4E2D}\u{6587}\u{6807}\u{9898}",
+            "a\u{1F31E}b",
+        ] {
+            for width in 1..4usize {
+                let out = wrap(text, width);
+                assert!(
+                    out.len() <= text.chars().count() + 1,
+                    "`{text}` at {width} produced {} lines",
+                    out.len()
+                );
+                // Every character survives; the line may exceed the width by a
+                // cell, because a terminal cannot draw half a wide glyph.
+                let joined: String = out.concat();
+                assert_eq!(joined, text, "at {width}");
+            }
+        }
+    }
+
     #[test]
     fn no_wrapped_line_is_wider_than_asked_for() {
         let text = "Wildfire now nine miles away from the French city of Bordeaux";
@@ -451,6 +488,20 @@ mod tests {
                     "`{line}` is wider than {width}"
                 );
             }
+        }
+    }
+
+    /// The one exception, and it is deliberate: a single glyph that cannot fit
+    /// is emitted anyway rather than dropped or looped on. It overruns by a
+    /// cell, which a terminal handles and an infinite loop does not.
+    #[test]
+    fn only_an_unfittable_glyph_may_overrun_and_only_by_itself() {
+        let out = wrap("\u{1F31E}\u{1F31E}", 1);
+        for line in &out {
+            assert!(
+                line.chars().count() <= 1,
+                "an overrunning line holds one glyph and no more: `{line}`"
+            );
         }
     }
 
