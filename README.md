@@ -23,6 +23,16 @@ are the examples mirador seeds for you. The pomodoro panel has focus, which is
 why its frame is lit and its key hints are in its bottom border; every other
 panel is dimmed. Every screen in this README is a real capture, not a mock-up.*
 
+![A recording of mirador in use: focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and a pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+
+*Thirty seconds of it in use, at 150x42. Focus moves with `Tab`; a task is typed
+in and lands in the list, which goes from four open to five. `w` opens the panel
+picker, switches one off, and the grid closes over the gap; `?` lists every
+binding for the focused panel and scrolls when there are more than fit. The
+weather, the prices and the graphs are whatever was true while it recorded —
+`docs/record-demo.sh` drives a real build under tmux and nothing in it is
+staged.*
+
 ## Why
 
 Most terminal dashboards are built to be *watched* — a system monitor you open
