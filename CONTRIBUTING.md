@@ -56,7 +56,9 @@ cargo run -- --config /tmp/mirador.toml
 
 ## Adding a widget
 
-The `Panel` trait in `src/panel.rs` is the extension seam. To add a widget:
+The `Panel` trait in `src/panel.rs` is the seam. It is in-tree — mirador has no
+library target and `widgets::build` dispatches on a fixed match — so adding a
+widget means a pull request rather than a separate crate. Five places to touch:
 
 1. Create `src/widgets/<name>.rs` and implement `Panel`.
 2. Add a config struct to `src/config/widgets.rs` and a field on `Config` in

@@ -1,6 +1,19 @@
-//! The [`Panel`] trait: the extension seam every dashboard widget implements.
+//! The [`Panel`] trait: the seam every dashboard widget goes through.
 //!
-//! A panel owns its own state and refresh cadence. The application shell is
+//! **This is an in-tree seam, not a plugin API.** mirador is a binary crate
+//! with no library target, so nothing outside it can name this trait; and even
+//! if it could, `widgets::build` dispatches on a fixed `match` over
+//! `WIDGET_NAMES` and each widget's settings are a field on `Config`. Adding a
+//! widget is a pull request, and `CONTRIBUTING.md` lists the five places to
+//! touch. A real plugin story needs three things this does not have: a runtime
+//! registry instead of that `match`, per-widget config carried as an
+//! unparsed `toml::Value` so a widget can own its own schema, and a library
+//! target with a deliberate public surface. Adding only the last of those
+//! would make the trait nameable without making it usable, which is worse than
+//! the honest version.
+//!
+//! What the seam does buy, in-tree, is real: a panel owns its own state and
+//! refresh cadence. The application shell is
 //! responsible only for layout, focus, frames and dispatching ticks and key
 //! events; it knows nothing about what any individual panel displays.
 //!
