@@ -3,6 +3,23 @@
 //! A panel owns its own state and refresh cadence. The application shell is
 //! responsible only for layout, focus, frames and dispatching ticks and key
 //! events; it knows nothing about what any individual panel displays.
+//!
+//! # Why the description is six methods and not one
+//!
+//! `title`, `counter`, `bindings`, `max_width`, `max_height` and
+//! `refresh_interval` are all "describe yourself", and folding them into one
+//! `describe() -> PanelInfo` would take the trait from thirteen methods to
+//! eight. It would also be slower and less useful, because the six are asked
+//! for at different times and at very different rates: `max_width` and
+//! `max_height` during layout, `refresh_interval` on the tick, `bindings` in
+//! three separate places, and `title` and `counter` on **every frame** — the
+//! last two from the shell's render loop, where nothing guards them.
+//!
+//! A single `describe()` would compute all six whenever any one was wanted,
+//! and return an owned struct carrying a `String` title and an
+//! `Option<String>` counter — so the cheapest question would allocate twice,
+//! sixty times a second, per panel. The trait is wide because the shell's
+//! questions are genuinely separate.
 
 use std::time::Duration;
 
@@ -119,6 +136,21 @@ pub trait Panel {
     /// When true, the panel is in a text-entry or modal state and the app
     /// suppresses *all* global bindings, including quit, so that typing a `q`
     /// into a form does not exit the dashboard.
+    ///
+    /// This looks like it should be a variant of [`KeyOutcome`] — a panel that
+    /// swallowed the key could say so on the way out, and the trait would lose
+    /// a method. It cannot be, because two of the three places the shell asks
+    /// have no key outcome to read:
+    ///
+    /// - The resize keys are claimed by the shell *before* the panel is
+    ///   offered anything, so `Ctrl+Left` does not scroll the calendar. A panel
+    ///   mid-form still has to veto that, and it has not been called yet.
+    /// - A mouse click must not pull focus out of a half-typed task. There is
+    ///   no key event anywhere in that path.
+    ///
+    /// The third is the one that looks foldable and is not: the veto applies
+    /// when the panel returned [`KeyOutcome::Ignored`]. A form ignores `q`
+    /// because it is not one of its keys, and `q` must still not quit.
     fn captures_input(&self) -> bool {
         false
     }

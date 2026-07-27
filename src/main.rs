@@ -13,6 +13,7 @@ mod layout_edit;
 mod migrate;
 mod note;
 mod panel;
+mod picker;
 mod poll;
 mod quote;
 mod samples;
