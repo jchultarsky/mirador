@@ -361,13 +361,24 @@ offset *relative to that zone*, which is the number you actually want when
 scheduling across one. The calendar prints month grids in the shape `cal`
 does, with today marked.
 
-`a` adds a clock and `d` removes the selected one. Type a timezone —
-`Europe/Lisbon` — and `Tab` completes it as far as the candidates agree; the
-city becomes the label. Write `HQ = Europe/Berlin` to name it yourself. Like
-the watchlist, the live list is a data file (`zones.toml`) rather than config,
-which is what lets the panel own it; `[clocks].zones` seeds your first run. The
-large clock is not removable, because a clock panel with nothing to draw large
-is not a clock panel.
+`a` adds a clock and `d` removes the selected one. Adding one opens a list of
+cities; type to narrow it, `↑↓` to choose, `Enter` to add.
+
+**Search by the city you mean, not the one in the identifier.** Seattle keeps
+time in `America/Los_Angeles`, Bengaluru in `Asia/Kolkata`, Boston in
+`America/New_York` — and nobody should have to know that before they can add a
+clock. Typing matches the city *or* the identifier, anywhere in either, so
+`seattle`, `los_angeles` and `america/` all find the same zone. The city you
+picked becomes the clock's label, and the identifier is shown beside it so what
+ends up in your config is never a surprise.
+
+Anything not on the list still works: type a zone it does not carry and it is
+taken as written, with `HQ = Europe/Berlin` naming it yourself.
+
+Like the watchlist, the live list is a data file (`zones.toml`) rather than
+config, which is what lets the panel own it; `[clocks].zones` seeds your first
+run. The large clock is not removable, because a clock panel with nothing to
+draw large is not a clock panel.
 
 ```
 ╭┤1 Calendar├───────────────────╮

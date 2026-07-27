@@ -271,7 +271,10 @@ impl WeatherPanel {
             return;
         };
         match prompt.handle_key(key) {
-            crate::prompt::Outcome::Editing => {}
+            // `Chose` cannot arise: this prompt offers no list. It is grouped
+            // with `Editing` rather than given its own empty arm because an
+            // arm that does nothing invites someone to make it do something.
+            crate::prompt::Outcome::Editing | crate::prompt::Outcome::Chose { .. } => {}
             crate::prompt::Outcome::Cancelled => self.asking = None,
             crate::prompt::Outcome::Submitted(answer) => {
                 if answer.is_empty() {
@@ -820,6 +823,10 @@ impl Panel for WeatherPanel {
         moved
     }
 
+    fn overlay(&self) -> Option<&crate::prompt::Prompt> {
+        self.asking.as_ref()
+    }
+
     fn captures_input(&self) -> bool {
         self.asking.is_some()
     }
@@ -940,12 +947,6 @@ impl Panel for WeatherPanel {
 
         if rows[2].height > 0 {
             render_forecast(frame, rows[2], theme, &data);
-        }
-
-        // Over everything, and last: a dialog drawn earlier would be painted
-        // over by the forecast beneath it.
-        if let Some(prompt) = &self.asking {
-            prompt.render(frame, area, theme);
         }
     }
 }

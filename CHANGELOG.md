@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Adding a clock offers a list of cities instead of asking for an identifier.**
+  Type to narrow it, `↑↓` to choose. Matching runs over the city *and* the
+  identifier, anywhere in either, so `seattle` finds `America/Los_Angeles` —
+  which is the whole point: the identifier names *a* city in the zone and it is
+  very often not the one you have in mind. Bengaluru is `Asia/Kolkata`, Boston
+  is `America/New_York`.
+
+  The city you picked becomes the clock's label, and the identifier is shown
+  beside it so what lands in `zones.toml` is never a surprise. A zone the list
+  does not carry is still taken as typed.
+
+### Fixed
+
+- **A panel's prompt is no longer drawn inside that panel.** The agenda's file
+  prompt was as narrow as the agenda, which for a long path meant reading a
+  scrolled fragment through about forty columns. Prompts are drawn by the shell
+  over the whole terminal now, after every panel — which is also what stopped
+  the new city list coming out interleaved with the task list.
+
 ## [0.11.0] - 2026-07-27
 
 ### Added
