@@ -471,6 +471,12 @@ with a hole in it — the hours mirador was not running and observed nothing —
 and it cannot mark that hole. Same discipline as weather showing a reading's
 age rather than implying it is current.
 
+**The day turning is recorded by the shell, not by a panel.** `App` holds the
+date for this and no widget owns it. The todo panel notices a rollover too, but
+a dashboard whose day-divider vanishes when you switch off the task list would
+be strange — and it is the one source that always fires, which is what keeps the
+panel from looking broken on a setup with no calendar and nothing falling due.
+
 **The first read of a calendar is not news.** `AgendaPanel::known` is `None`
 until the first successful read, so a startup does not announce every event in
 your `.ics`. A log that opens with forty entries is a log nobody reads twice.
