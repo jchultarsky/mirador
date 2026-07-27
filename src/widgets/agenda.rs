@@ -98,6 +98,15 @@ pub struct AgendaPanel {
     list_area: Option<Rect>,
     /// The `f` dialog, while it is open.
     asking: Option<crate::prompt::Prompt>,
+    /// What the calendar held at the last read, so a new entry can be spotted.
+    ///
+    /// `None` until the first successful read. That is what stops the whole
+    /// calendar being announced at startup: on a first read there is nothing to
+    /// have changed *from*, and a log opening with forty entries is a log
+    /// nobody reads twice.
+    known: Option<std::collections::HashSet<String>>,
+    /// Events waiting to be drained by the watch log.
+    pending: Vec<crate::watch::Event>,
 }
 
 impl Drop for AgendaPanel {
@@ -158,6 +167,8 @@ impl AgendaPanel {
             status: None,
             list_area: None,
             asking: None,
+            known: None,
+            pending: Vec::new(),
         }
     }
 
@@ -190,6 +201,45 @@ impl AgendaPanel {
                 self.status = Some("reloading…".into());
             }
         }
+    }
+
+    /// Record anything in the calendar that was not there at the last read.
+    ///
+    /// This is the clearest case the watch log has: an entry you did not add,
+    /// which appeared because somebody else put it in a calendar you sync. It
+    /// is worth knowing whether or not you were looking at this panel, which is
+    /// the whole test for whether something belongs in the log.
+    fn note_new_entries(&mut self) {
+        let state = self.snapshot();
+        // A failed read publishes no events; treating that as "everything was
+        // cancelled" and then "everything is new" would fill the log with a
+        // network blip.
+        if state.error.is_some() {
+            return;
+        }
+
+        let current: std::collections::HashSet<String> = state
+            .events
+            .iter()
+            .map(|event| format!("{}@{}", event.summary, event.start.timestamp()))
+            .collect();
+
+        if let Some(known) = self.known.take() {
+            for event in &state.events {
+                let key = format!("{}@{}", event.summary, event.start.timestamp());
+                if !known.contains(&key) {
+                    self.pending.push(crate::watch::Event::new(
+                        "agenda",
+                        format!(
+                            "{} appeared in your calendar, {}",
+                            event.summary,
+                            event.start.strftime("%a %d %b at %H:%M")
+                        ),
+                    ));
+                }
+            }
+        }
+        self.known = Some(current);
     }
 
     /// Point the panel at a different calendar and read it now.
@@ -419,7 +469,14 @@ impl Panel for AgendaPanel {
         let now = self.generation.load(Ordering::Acquire);
         let moved = now != self.seen;
         self.seen = now;
+        if moved {
+            self.note_new_entries();
+        }
         moved
+    }
+
+    fn events(&mut self) -> Vec<crate::watch::Event> {
+        std::mem::take(&mut self.pending)
     }
 
     fn captures_input(&self) -> bool {

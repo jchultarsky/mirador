@@ -240,6 +240,8 @@ pub struct TodoPanel {
     /// back into the row it landed on. `None` until the first draw, and while
     /// the list is empty — there is no row to hit in either case.
     list_area: Option<Rect>,
+    /// Events waiting to be drained by the watch log.
+    pending: Vec<crate::watch::Event>,
 }
 
 impl TodoPanel {
@@ -263,6 +265,7 @@ impl TodoPanel {
             status: None,
             today,
             list_area: None,
+            pending: Vec::new(),
         };
         panel.refresh_view();
         Ok(panel)
@@ -903,11 +906,41 @@ impl Panel for TodoPanel {
         if today == self.today {
             return false;
         }
+
+        // A task that went overdue because the day turned is the clearest
+        // example of something that happened *to* the reader: nobody did it,
+        // and it is true whether or not they were looking at this panel.
+        //
+        // Deliberately only on the rollover. Editing a due date into the past
+        // also makes a task overdue, and that is the reader's own doing — they
+        // were there, and telling them about it would be the log repeating
+        // their own keystrokes back at them.
+        for task in self.store.tasks() {
+            if task.done {
+                continue;
+            }
+            let was = matches!(
+                task.due_state(self.today),
+                crate::task::DueState::Overdue(_)
+            );
+            let now = matches!(task.due_state(today), crate::task::DueState::Overdue(_));
+            if !was && now {
+                self.pending.push(crate::watch::Event::new(
+                    "tasks",
+                    format!("{} went overdue", task.title),
+                ));
+            }
+        }
+
         self.today = today;
         // Overdue rows are coloured by date, so a day boundary restyles the
         // list even when no task moved.
         self.refresh_view();
         true
+    }
+
+    fn events(&mut self) -> Vec<crate::watch::Event> {
+        std::mem::take(&mut self.pending)
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {

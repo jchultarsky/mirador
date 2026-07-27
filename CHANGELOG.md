@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The watch log** — a placeable panel recording what happened while you were
+  not looking. It fills the third instrument the design thesis named
+  (*"chronometer, weather glass, watch log"*) and that nothing had ever
+  occupied.
+
+  Almost nothing qualifies for it, which is the point. The clock, the readings,
+  the prices and the graphs change continuously and none of it is news; your
+  notes and tasks change because you changed them. An entry is something that
+  happened *to* you rather than because of you, and that you would want to know
+  even if you never looked at the panel it came from. Out of the box that is two
+  things: an event appearing in your `.ics` that you did not add, and a task
+  crossing into overdue because the day turned.
+
+  **No counter, no unread state, no effect on any other panel.** Unread message
+  counts were considered for this dashboard and rejected as a doomscroll hook;
+  read closely, that objection is about the *badge* — a number that accumulates
+  and demands you zero it. This is a record you consult, not an inbox that
+  consults you, and nothing in it can be dismissed, because an entry you can
+  dismiss is an entry you are expected to dismiss.
+
+  A rule line marks where you were last seen. mirador now asks your terminal to
+  report window focus, which is the only honest signal for "the reader is here";
+  it falls back to your last keypress, and draws no line at all when neither has
+  fired, because a line in the wrong place makes a claim that a missing one does
+  not.
+
+  The log lives in memory and says when it started watching. One written to disk
+  would return after a restart with a gap it could not mark.
+
 ## [0.10.0] - 2026-07-27
 
 ### Added

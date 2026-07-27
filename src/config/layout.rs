@@ -38,7 +38,15 @@ impl Default for Layout {
         Self {
             rows: vec![
                 row(34, &[("clocks", 26), ("calendar", 34), ("weather", 40)]),
-                row(42, &[("todo", 40), ("agenda", 32), ("notes", 28)]),
+                row(
+                    42,
+                    &[
+                        ("todo", 30),
+                        ("agenda", 26),
+                        ("notes", 22),
+                        ("watchlog", 22),
+                    ],
+                ),
                 row(
                     24,
                     &[

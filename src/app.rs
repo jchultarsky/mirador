@@ -271,6 +271,13 @@ pub struct App {
     /// keypress, exactly like the widget hint: a dashboard you leave open all
     /// day must not nag, and a notice that will not go away is a nag.
     show_update_hint: bool,
+    /// What has happened since mirador started.
+    ///
+    /// Lives here rather than in the watch log panel because the panel may not
+    /// be placed, may be toggled off and on, and is rebuilt whenever the layout
+    /// changes. Events would be lost every time, and a log that forgets when
+    /// you rearrange the dashboard is not a log.
+    watch: crate::watch::WatchLog,
     /// The panel picker, while it is open.
     picker: Option<crate::picker::Picker>,
     /// The layout as it stood when arrange mode opened, kept so that `Esc` can
@@ -339,6 +346,7 @@ impl App {
             update: crate::update::Found::default(),
             show_update_hint: true,
             unused_widgets,
+            watch: crate::watch::WatchLog::default(),
             picker: None,
             arranging: None,
             config_path: None,
@@ -544,11 +552,21 @@ impl App {
                     // Resize re-runs layout against the new frame size, which
                     // is the next draw's job — but that draw has to happen.
                     Event::Resize(_, _) => dirty = true,
+                    // The closest thing to "the reader is looking" that a
+                    // terminal will tell us. Not every terminal sends it and
+                    // tmux forwards it only with `focus-events on`, so it is
+                    // an improvement where available rather than the mechanism
+                    // — the keypress below carries it everywhere else.
+                    // Both, not just one: gaining focus means they are here
+                    // now, and losing it means they were here until this
+                    // moment. Either way the line belongs at this point.
+                    Event::FocusGained | Event::FocusLost => self.watch.mark_seen(),
                     _ => {}
                 }
             }
 
             dirty |= self.tick_panels();
+            dirty |= self.collect_events();
 
             // Resizes are batched rather than written per keystroke —
             // `Ctrl+arrow` auto-repeats, and rewriting the config on every
@@ -632,6 +650,22 @@ impl App {
         }
     }
 
+    /// Drain what the panels have noticed into the log.
+    ///
+    /// Returns whether anything was recorded, so the dashboard redraws: a new
+    /// entry is a visible change if the watch log is on screen, and cheaper to
+    /// report unconditionally than to ask whether it is placed.
+    fn collect_events(&mut self) -> bool {
+        let mut recorded = false;
+        for slot in &mut self.slots {
+            for event in slot.panel.events() {
+                self.watch.push(event);
+                recorded = true;
+            }
+        }
+        recorded
+    }
+
     /// Tick any panel whose refresh interval has elapsed.
     ///
     /// Returns whether any panel ticked, and so whether the screen may now be
@@ -677,6 +711,10 @@ impl App {
         // been ignored; either way it has had its turn.
         self.show_widget_hint = false;
         self.show_update_hint = false;
+        // A keypress is weaker evidence than a focus event — the moments this
+        // most wants to be right are the glances that touch nothing — but it is
+        // the only evidence available on a terminal that does not report focus.
+        self.watch.mark_seen();
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -1280,6 +1318,7 @@ impl App {
                     theme: &theme,
                     gradients: &self.gradients,
                     focused,
+                    watch: &self.watch,
                 },
             );
         }
@@ -2219,7 +2258,11 @@ mod tests {
             (0..width).map(|x| buf[(x, 5)].symbol()).collect()
         };
 
-        let wide = row_text(&mut app, 160);
+        // Wide enough for the global keys *and* a hint naming every widget
+        // this layout leaves out — which grows by a word every time a widget is
+        // added, so this figure is a floor rather than a round number. It was
+        // 160 until the watch log made the list one name longer than that.
+        let wide = row_text(&mut app, 200);
         assert!(wide.contains("unused"), "wide enough for both: `{wide}`");
 
         let narrow = row_text(&mut app, 44);

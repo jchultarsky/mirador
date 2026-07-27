@@ -62,11 +62,14 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 42, panels = [
-    { widget = "todo",     width = 40 },
+    { widget = "todo",     width = 30 },
     # What is next, from [agenda].file. Says how to point it at your .ics
     # until you do.
-    { widget = "agenda",   width = 32 },
-    { widget = "notes",    width = 28 },
+    { widget = "agenda",   width = 26 },
+    { widget = "notes",    width = 22 },
+    # What happened while you were not looking. Empty most of the time, which
+    # is the point.
+    { widget = "watchlog", width = 22 },
   ] },
   { height = 24, panels = [
     # The timer draws block numerals when it has the width for them and falls
