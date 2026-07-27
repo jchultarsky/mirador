@@ -528,11 +528,7 @@ impl Config {
         };
 
         if !path.exists() {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("creating config directory {}", parent.display()))?;
-            }
-            std::fs::write(&path, DEFAULT_CONFIG)
+            crate::store::write_atomic(&path, DEFAULT_CONFIG)
                 .with_context(|| format!("writing default config to {}", path.display()))?;
         }
 

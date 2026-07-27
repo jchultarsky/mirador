@@ -22,6 +22,37 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use crate::theme::Theme;
 
+/// Columns a frame costs a panel: a border and a padding column on each side.
+///
+/// This belongs here rather than in each widget, because it is a property of
+/// how [`draw`] builds its `Block` — see the `Borders::ALL` and
+/// `Padding::horizontal(1)` below — not of any panel. Five widgets each defined
+/// their own copy of this and the next constant to work out `max_width` and
+/// `max_height`, which meant changing the padding in one place here would have
+/// silently desynchronised ten figures elsewhere.
+pub const FRAME_WIDTH: u16 = 4;
+
+/// Rows a frame costs a panel: the two borders.
+///
+/// The interior padding is horizontal only, so it does not enter a height.
+pub const FRAME_HEIGHT: u16 = 2;
+
+/// A rectangle of the given size, centred inside `area`.
+///
+/// Clamped to `area` first, so a dialog larger than the terminal is trimmed
+/// rather than being placed outside it — a `Rect` that starts past the right
+/// edge is not drawn at all, which reads as a dialog that failed to open.
+pub fn centred(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
 /// A key binding, as declared by a panel.
 ///
 /// One declaration feeds the border hint, the status bar and the help overlay,

@@ -14,7 +14,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 
 use crate::config::ClocksConfig;
-use crate::frame::Binding;
+use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
 use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
@@ -28,13 +28,6 @@ const MAX_CLOCK_SCALE: u16 = 3;
 
 /// Rows the numerals occupy at that scale: glyphs are five rows tall at 1.
 const BIG_CLOCK_ROWS: u16 = 5 * MAX_CLOCK_SCALE;
-
-/// Rows the frame costs: the two borders. The interior padding is horizontal,
-/// so it does not enter a height figure.
-const FRAME_HEIGHT: u16 = 2;
-
-/// Columns the frame costs: a border and a padding column on each side.
-const FRAME_WIDTH: u16 = 4;
 
 /// Columns of the secondary zone list.
 const COLUMNS: &[Column] = &[

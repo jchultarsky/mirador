@@ -26,7 +26,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use crate::config::StocksConfig;
-use crate::frame::Binding;
+use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 use crate::quote::{Quote, QuoteSource, Watchlist, source_for, sparkline};
@@ -49,12 +49,6 @@ const SPARK_WIDTH: u16 = 12;
 
 /// Columns the `▸ ` selection marker occupies to the left of the grid.
 const SELECTION_MARKER: u16 = 2;
-
-/// Columns the frame costs: a border and a padding column on each side.
-const FRAME_WIDTH: u16 = 4;
-
-/// Rows the frame costs. The interior padding is horizontal only.
-const FRAME_HEIGHT: u16 = 2;
 
 /// Width the four fixed columns and the gutters between all five occupy.
 const FIXED_COLUMNS: u16 = 8 + 10 + 9 + 8 + 4;
@@ -252,20 +246,13 @@ impl StocksPanel {
     }
 
     fn select_down(&mut self, n: usize) {
-        let Some(last) = self.watchlist.symbols().len().checked_sub(1) else {
-            return;
-        };
-        let current = self.list_state.selected().unwrap_or(0);
-        self.list_state
-            .select(Some(current.saturating_add(n).min(last)));
+        let len = self.watchlist.symbols().len();
+        crate::selection::down(&mut self.list_state, n, len);
     }
 
     fn select_up(&mut self, n: usize) {
-        if self.watchlist.symbols().is_empty() {
-            return;
-        }
-        let current = self.list_state.selected().unwrap_or(0);
-        self.list_state.select(Some(current.saturating_sub(n)));
+        let len = self.watchlist.symbols().len();
+        crate::selection::up(&mut self.list_state, n, len);
     }
 
     /// Tell the fetch thread what to poll, and ask it to start now.
@@ -547,25 +534,15 @@ fn fetch_loop(
             std::thread::sleep(stagger);
         }
 
-        // Sleep in slices so `r` and a watchlist change are picked up promptly
-        // without needing a channel or a condvar.
-        let mut waited = Duration::ZERO;
-        while waited < interval {
-            if stop.load(Ordering::Relaxed) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(250));
-            waited += Duration::from_millis(250);
-            let asked = {
-                let mut guard = match request.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                std::mem::replace(&mut guard.refresh, false)
+        let woke = crate::poll::wait(interval, stop, || {
+            let mut guard = match request.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
             };
-            if asked {
-                break;
-            }
+            std::mem::replace(&mut guard.refresh, false)
+        });
+        if woke == crate::poll::Wake::Stop {
+            return;
         }
     }
 }
@@ -655,13 +632,11 @@ impl Panel for StocksPanel {
                 let Some(area) = self.list_area else {
                     return KeyOutcome::Ignored;
                 };
-                if !area.contains(Position::new(event.column, event.row)) {
+                let at = Position::new(event.column, event.row);
+                let len = self.watchlist.symbols().len();
+                let Some(index) = crate::selection::row_at(&self.list_state, area, at, len) else {
                     return KeyOutcome::Ignored;
-                }
-                let index = self.list_state.offset() + usize::from(event.row - area.y);
-                if index >= self.watchlist.symbols().len() {
-                    return KeyOutcome::Ignored;
-                }
+                };
                 self.status = None;
                 self.list_state.select(Some(index));
             }

@@ -224,7 +224,10 @@ pub fn migrate_file(path: &Path) -> Result<Report> {
     let backup = path.with_extension("toml.bak");
     std::fs::copy(path, &backup)
         .with_context(|| format!("backing up {} to {}", path.display(), backup.display()))?;
-    std::fs::write(path, migrated)
+    // Atomic even though the backup exists: a truncated config with a `.bak`
+    // beside it still means an editor session lost, and the user has to know to
+    // look for the backup.
+    crate::store::write_atomic(path, &migrated)
         .with_context(|| format!("writing migrated config to {}", path.display()))?;
 
     Ok(Report {

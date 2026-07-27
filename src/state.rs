@@ -132,14 +132,8 @@ impl UiState {
         toml::from_str(&raw).unwrap_or_default()
     }
 
-    /// Write atomically, the same temp-file-and-rename the task store uses, so
-    /// an interrupted save cannot leave a truncated file behind.
+    /// Write atomically; see [`crate::store::write_atomic`].
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating data directory {}", parent.display()))?;
-        }
-
         let body = toml::to_string_pretty(self).context("serialising ui state")?;
         let contents = format!(
             "# mirador remembers preferences you changed from the keyboard here.\n\
@@ -147,11 +141,7 @@ impl UiState {
              # Safe to delete: everything falls back to your config.\n\n{body}"
         );
 
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &contents).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, path)
-            .with_context(|| format!("replacing {} with {}", path.display(), tmp.display()))?;
-        Ok(())
+        crate::store::write_atomic(path, &contents)
     }
 }
 

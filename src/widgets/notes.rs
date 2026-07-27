@@ -720,14 +720,11 @@ impl Panel for NotesPanel {
                 let Some(area) = self.list_area else {
                     return KeyOutcome::Ignored;
                 };
-                if !area.contains(at) {
+                let Some(index) =
+                    crate::selection::row_at(&self.list_state, area, at, self.view.len())
+                else {
                     return KeyOutcome::Ignored;
-                }
-                let row = usize::from(event.row - area.y);
-                let index = self.list_state.offset() + row;
-                if index >= self.view.len() {
-                    return KeyOutcome::Ignored;
-                }
+                };
                 self.status = None;
                 self.select_to(index);
             }

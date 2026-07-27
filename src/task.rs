@@ -405,18 +405,11 @@ impl TaskStore {
         tags
     }
 
-    /// Write to disk atomically if there are pending changes.
-    ///
-    /// The temp file is created in the same directory as the target so the
-    /// rename stays on one filesystem and is therefore atomic.
+    /// Write to disk if there are pending changes. See [`crate::store`] for
+    /// what "atomically" costs and buys.
     pub fn save(&mut self) -> Result<()> {
         if !self.dirty {
             return Ok(());
-        }
-
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating data directory {}", parent.display()))?;
         }
 
         let file = TaskFile {
@@ -429,10 +422,7 @@ impl TaskStore {
              (high|medium|low|none), tags, done, completed, created.\n\n{body}"
         );
 
-        let tmp = self.path.with_extension("toml.tmp");
-        std::fs::write(&tmp, &contents).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("replacing {} with {}", self.path.display(), tmp.display()))?;
+        crate::store::write_atomic(&self.path, &contents)?;
 
         self.dirty = false;
         Ok(())
@@ -442,10 +432,7 @@ impl TaskStore {
     /// propagating it. The panel renders that message, so a read-only disk
     /// shows up in the UI instead of vanishing.
     pub fn save_reporting(&mut self) {
-        match self.save() {
-            Ok(()) => self.last_error = None,
-            Err(e) => self.last_error = Some(format!("{e:#}")),
-        }
+        crate::store::report(self.save(), &mut self.last_error);
     }
 }
 

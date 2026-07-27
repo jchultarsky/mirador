@@ -18,6 +18,7 @@ use crate::chart::BrailleGraph;
 use crate::config::NetworkConfig;
 use crate::frame::Binding;
 use crate::panel::{Panel, RenderContext};
+use crate::samples::push_bounded;
 
 /// The network panel.
 pub struct NetworkPanel {
@@ -123,14 +124,9 @@ impl NetworkPanel {
         push_bounded(&mut self.tx_history, self.tx_rate, capacity);
     }
 
-    /// How many samples to retain.
-    ///
-    /// `[network].history` is a floor, not a ceiling. The graph packs two
-    /// samples per cell and fills from the right, so N samples cover only N/2
-    /// cells; on a wider panel the graph stopped short of its own left edge and
-    /// left dead space behind it.
+    /// How many samples to retain; see [`crate::samples::capacity`].
     fn capacity(&self) -> usize {
-        self.config.history.max(1).max(self.graph_cells * 2)
+        crate::samples::capacity(self.config.history, self.graph_cells)
     }
 
     /// A shared ceiling for both charts so rx and tx stay visually comparable.
@@ -143,18 +139,6 @@ impl NetworkPanel {
             .unwrap_or(1)
             .max(1)
     }
-}
-
-/// Append to a bounded ring buffer.
-///
-/// Trims in a loop rather than dropping one sample: the capacity shrinks when
-/// the panel is narrowed, and one pop per tick would leave the buffer oversized
-/// for as many ticks as the window lost cells.
-fn push_bounded(buffer: &mut VecDeque<u64>, value: u64, capacity: usize) {
-    while buffer.len() >= capacity {
-        buffer.pop_front();
-    }
-    buffer.push_back(value);
 }
 
 /// Recognise loopback interfaces across platforms.
