@@ -44,8 +44,9 @@ first keypress, because a dashboard that nags is a dashboard you close.
 
 **Your data stays in files you own.** Tasks, notes and the watchlist are plain
 TOML you can hand-edit, keep in git, or delete. No database, no sync service,
-no account, no API key, no telemetry, and nothing phones home — including the
-updater, which runs only when you run it.
+no account, no API key, no telemetry, and nothing phones home unless you ask it
+to — including the updater, which runs only when you run it, and an update check
+that is off until you turn it on.
 
 **It is a real task list, not a checklist.** Due dates, priorities, notes, tags,
 filtering and full editing without leaving the dashboard. That is the panel most
@@ -55,6 +56,31 @@ The two network panels use free key-less endpoints:
 [Open-Meteo](https://open-meteo.com) for weather, and Yahoo's public chart
 endpoint for prices — see [Market data](#market-data) for what the second one
 means for you.
+
+## How this was built
+
+**mirador is written with heavy AI assistance.** The implementation, the tests
+and most of this documentation were written by Claude (Anthropic), working from
+my direction and review. The product decisions — what to build, what to leave
+out, what the thing is for — are mine.
+
+This is stated plainly because anyone evaluating the code deserves to know how
+it was made, and because some communities reasonably want to know before they
+adopt or recommend something. It is not a claim about quality in either
+direction: judge it the way you would judge any other code.
+
+What that means in practice, if you want to weigh it:
+
+- Every change lands through CI that runs the test suite on macOS, Linux and
+  Windows, plus `clippy` with `-D warnings`, `rustdoc` with `-D warnings`,
+  a minimum-supported-Rust-version check, `cargo publish --dry-run` and
+  `cargo-deny` for advisories, licences and sources.
+- Behavioural claims in the commit history are measured rather than asserted,
+  and several fixes were verified by reverting them to confirm the new test
+  actually failed. Two tests in this repository were found to be pinning the
+  bug they existed to catch.
+- `CLAUDE.md` records the design decisions and the reasoning behind them,
+  including the ones that were reversed and why.
 
 ## Install
 
@@ -98,8 +124,12 @@ mirador-update
 ```
 
 It asks GitHub what the newest release is and installs it if that is newer than
-what you have. It runs **only when you run it** — mirador itself never checks
-for updates, never phones home, and does not know this program exists. If you
+what you have. It runs **only when you run it** — mirador itself never phones
+home and does not know this program exists, unless you set
+`[general].check_for_updates = true`, which asks crates.io once a day whether a
+newer version exists and says so once in the status bar. That setting is off by
+default, sends no identifier, caches its answer, fails silently, and is
+overridden by `NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` in your environment. If you
 installed with `cargo install` or from source, upgrade the same way you
 installed; the updater is only for the two installers above.
 

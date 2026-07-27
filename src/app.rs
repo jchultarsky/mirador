@@ -259,6 +259,14 @@ pub struct App {
     /// of any kind: a dashboard you leave open all day must not nag, and a
     /// notice that will not go away is a nag.
     show_widget_hint: bool,
+    /// A newer version, if the opt-in check found one. Empty otherwise, and
+    /// empty always when the check is off — `App` never starts it, so no test
+    /// and no `--print-config` run can reach the network.
+    update: crate::update::Found,
+    /// Whether the update notice is still on screen. Retired by the first
+    /// keypress, exactly like the widget hint: a dashboard you leave open all
+    /// day must not nag, and a notice that will not go away is a nag.
+    show_update_hint: bool,
     /// The panel picker, while it is open.
     picker: Option<crate::picker::Picker>,
     /// The config file, so layout changes can be written back to it. `None` in
@@ -310,6 +318,8 @@ impl App {
             help_viewport: 0,
             should_quit: false,
             show_widget_hint: !unused_widgets.is_empty(),
+            update: crate::update::Found::default(),
+            show_update_hint: true,
             unused_widgets,
             picker: None,
             config_path: None,
@@ -647,6 +657,7 @@ impl App {
         // Any key at all retires the startup hint. It has been read or it has
         // been ignored; either way it has had its turn.
         self.show_widget_hint = false;
+        self.show_update_hint = false;
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -960,7 +971,8 @@ impl App {
         // A deliberate click or scroll retires the startup hint, as a key does.
         // Pointer motion deliberately does not: the mouse crossing the window
         // on its way somewhere else is not the user reading anything.
-        let had_hint = std::mem::take(&mut self.show_widget_hint);
+        let had_hint =
+            std::mem::take(&mut self.show_widget_hint) | std::mem::take(&mut self.show_update_hint);
 
         // The help overlay swallows the next input, whatever it is — the same
         // rule keys follow.
@@ -1194,7 +1206,7 @@ impl App {
         // The hint rides on the right of the bar it shares with the global
         // keys, and gives way to them when the terminal is too narrow: knowing
         // how to quit matters more than knowing what you are not using.
-        if let Some(hint) = self.widget_hint() {
+        if let Some(hint) = self.update_hint().or_else(|| self.widget_hint()) {
             let used: usize = spans
                 .iter()
                 .map(|s| crate::grid::display_width(&s.content))
@@ -1215,6 +1227,32 @@ impl App {
     }
 
     /// The one-line startup notice about widgets this layout does not place.
+    /// Watch `found` for a newer version from now on.
+    ///
+    /// Separate from [`App::new`] for the same reason the state path is: tests
+    /// build apps constantly, and none of them should be able to start a
+    /// network request by accident.
+    pub fn watch_for_updates(&mut self, found: crate::update::Found) {
+        self.update = found;
+    }
+
+    /// The update notice, if there is one and it has not been dismissed.
+    ///
+    /// Takes precedence over the unused-widget hint when both apply: this one
+    /// is rarer, is actionable now, and stops being true the moment you act on
+    /// it, where the widget hint is the same every launch until you change your
+    /// layout.
+    fn update_hint(&self) -> Option<String> {
+        if !self.show_update_hint {
+            return None;
+        }
+        let latest = match self.update.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }?;
+        Some(format!("mirador {latest} is out   mirador-update "))
+    }
+
     fn widget_hint(&self) -> Option<String> {
         if !self.show_widget_hint || self.unused_widgets.is_empty() {
             return None;
@@ -1628,6 +1666,53 @@ mod tests {
             .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
             .collect();
         assert_eq!(distinct.len(), app.slots.len(), "a panel was reused twice");
+    }
+
+    #[test]
+    fn no_update_notice_until_something_finds_a_version() {
+        // `App` never starts a check itself. A dashboard built in a test — or
+        // by `--print-config` — must not be able to reach the network.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        assert_eq!(app.update_hint(), None);
+
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
+        let hint = app.update_hint().expect("a found version should show");
+        assert!(hint.contains("9.9.9"), "got `{hint}`");
+        assert!(
+            hint.contains("mirador-update"),
+            "the notice must say what to do about it: `{hint}`"
+        );
+    }
+
+    #[test]
+    fn the_update_notice_retires_on_the_first_keypress() {
+        // Same rule as the widget hint. A dashboard left open all day must not
+        // keep telling you something you have already read.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
+        assert!(app.update_hint().is_some());
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.update_hint(), None, "the notice outlived a keypress");
+    }
+
+    #[test]
+    fn an_update_notice_displaces_the_widget_hint_rather_than_sharing_the_row() {
+        // Both want the right-hand end of the status bar. The update notice is
+        // rarer and stops being true once acted on, so it wins; the widget hint
+        // is unchanged every launch until the layout changes.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        assert!(app.widget_hint().is_some(), "this layout omits widgets");
+
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
+        let shown = app.update_hint().or_else(|| app.widget_hint()).unwrap();
+        assert!(shown.contains("9.9.9"), "the widget hint won: `{shown}`");
     }
 
     #[test]

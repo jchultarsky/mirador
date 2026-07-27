@@ -28,6 +28,21 @@ show_status_bar = true
 # Terminal and iTerm2. Set to false to keep ordinary text selection.
 mouse = true
 
+# Ask crates.io, at most once a day, whether a newer mirador exists, and say so
+# once in the status bar if it does.
+#
+# Off, and it stays off until you change this line. Everything else in mirador
+# talks to the network only because a panel you placed needs data; this would
+# talk on its own behalf, telling a third party your IP address and that you
+# run this program, on a schedule you did not pick. That is small, and it is
+# still the thing "nothing phones home" was promising.
+#
+# When it is on: no identifier is sent, the answer is cached in
+# update-check.toml beside your tasks, a failure is silent, and the notice
+# disappears on your first keypress. NO_UPDATE_CHECK=1 or DO_NOT_TRACK=1 in the
+# environment overrides this even when it is true.
+check_for_updates = false
+
 # ---------------------------------------------------------------------------
 # Layout
 #

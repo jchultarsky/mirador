@@ -25,6 +25,7 @@ mod task;
 mod textarea;
 mod textfield;
 mod theme;
+mod update;
 mod widgets;
 
 use std::path::PathBuf;
@@ -177,7 +178,15 @@ fn run() -> Result<()> {
     config.apply_state(&saved);
 
     let mouse = config.general.mouse;
+    // Started before the terminal is taken over, and off unless the config says
+    // otherwise. Returns immediately either way — the request, if there is one,
+    // is on its own thread and the dashboard never waits for it.
+    let updates = crate::update::spawn(
+        config.general.check_for_updates,
+        Config::update_cache_path().ok(),
+    );
     let mut app = App::new(config)?;
+    app.watch_for_updates(updates);
     app.write_layout_to(config_path);
     if let Some(path) = state_path {
         app.remember_preferences_at(path, saved, baseline);

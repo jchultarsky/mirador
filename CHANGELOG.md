@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **An optional update check.** `[general].check_for_updates = true` asks
+  crates.io, at most once a day, whether a newer mirador exists, and says so
+  once in the status bar if it does.
+
+  **Off by default and staying that way.** Everything else in mirador reaches
+  the network only because a panel you placed needs data; this would reach it on
+  its own behalf, telling a third party your IP address and that you run this
+  program on a schedule you did not pick. Small, and still the thing "nothing
+  phones home" was promising — so it is yours to turn on.
+
+  When on: no identifier is sent, the answer is cached in `update-check.toml`
+  beside your tasks so a day of restarts costs one request, a failure is silent,
+  and the notice retires on your first keypress. `NO_UPDATE_CHECK=1` or
+  `DO_NOT_TRACK=1` in the environment overrides the config.
+
+- **The README now says how mirador is built.** It is written with heavy AI
+  assistance, and anyone weighing up the code deserves to know that without
+  having to infer it from the commit history.
+
 ## [0.7.1] - 2026-07-27
 
 ### Fixed
@@ -649,6 +672,7 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.7.1...HEAD
 [0.7.1]: https://github.com/jchultarsky/mirador/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jchultarsky/mirador/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jchultarsky/mirador/compare/v0.5.2...v0.6.0
