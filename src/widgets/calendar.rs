@@ -243,7 +243,7 @@ fn month_block(
 /// Returns `(columns, rows)`, each at least one so there is always something to
 /// draw; ratatui clips a block that genuinely does not fit.
 fn grid_shape(area: Rect, months_across: usize) -> (usize, usize) {
-    let fits_across = usize::from((area.width + GAP) / (MONTH_WIDTH + GAP)).max(1);
+    let fits_across = usize::from((area.width.saturating_add(GAP)) / (MONTH_WIDTH + GAP)).max(1);
     let columns = fits_across.min(months_across.max(1));
     let fits_down = usize::from(area.height / MONTH_HEIGHT).max(1);
     let rows = fits_down.min(MAX_MONTHS.div_ceil(columns).max(1));

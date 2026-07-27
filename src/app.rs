@@ -58,6 +58,13 @@ fn plain_text(lines: &[Line<'_>]) -> String {
         .join("\n")
 }
 
+/// How long a run of resize keystrokes must be quiet before the layout is
+/// written back.
+///
+/// Long enough to sit out key auto-repeat, short enough that closing the window
+/// a moment later still keeps the change.
+const RESIZE_SETTLE: Duration = Duration::from_millis(750);
+
 /// Smallest weight a panel or row may be squeezed to.
 const MIN_WEIGHT: u16 = 1;
 
@@ -252,6 +259,8 @@ pub struct App {
     /// The config file, so layout changes can be written back to it. `None` in
     /// tests, which is what keeps them off a real user's config.
     config_path: Option<PathBuf>,
+    /// When the last `Ctrl+arrow` landed, if one is still unwritten.
+    last_resize: Option<Instant>,
     /// Whether the layout has been changed since it was last written.
     layout_dirty: bool,
     /// Why the last layout write failed, if it did. Shown in the picker: a
@@ -299,6 +308,7 @@ impl App {
             unused_widgets,
             picker: None,
             config_path: None,
+            last_resize: None,
             layout_dirty: false,
             layout_error: None,
             state_path: None,
@@ -399,6 +409,27 @@ impl App {
             }
 
             dirty |= self.tick_panels();
+
+            // Resizes are batched rather than written per keystroke —
+            // `Ctrl+arrow` auto-repeats, and rewriting the config on every
+            // repeat would be absurd — but they are not batched all the way to
+            // exit any more. Closing the terminal window is a normal way to
+            // stop a dashboard you leave open all day, and it never reaches the
+            // code below: the process is signalled and the pending resize is
+            // gone. This settles once the repeats stop, which is the earliest
+            // moment the write is not wasted.
+            //
+            // Deliberately not a signal handler. The only thing at risk is this
+            // one write, `SIGKILL` cannot be caught anyway, and the terminal
+            // does not need restoring when the terminal is what went away.
+            if self.layout_dirty
+                && self
+                    .last_resize
+                    .is_some_and(|at| at.elapsed() >= RESIZE_SETTLE)
+            {
+                self.write_layout();
+                self.last_resize = None;
+            }
         }
 
         for slot in &mut self.slots {
@@ -407,8 +438,6 @@ impl App {
         // Once more on the way out, in case the last thing changed was not a
         // key — and because Ctrl+C reaches here too.
         self.persist_preferences();
-        // Resizes batch to here rather than writing per keystroke: Ctrl+arrow
-        // repeats, and a config rewritten on every repeat would be absurd.
         self.write_layout();
         Ok(())
     }
@@ -570,6 +599,9 @@ impl App {
             // marking those dirty would write the config on shutdown after a
             // session that changed nothing.
             self.layout_dirty |= resized;
+            if resized {
+                self.last_resize = Some(Instant::now());
+            }
             // Swallowed either way: a resize that hit the minimum is still a
             // resize key, and must not fall through to a panel binding.
             return;

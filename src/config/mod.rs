@@ -21,6 +21,12 @@ use serde::Deserialize;
 
 use crate::theme::Theme;
 
+/// The longest poll interval any panel will accept, in minutes.
+///
+/// Past any legitimate setting and comfortably inside the `u64` arithmetic that
+/// turns it into a `Duration`.
+const A_YEAR_IN_MINUTES: u64 = 365 * 24 * 60;
+
 /// The default config written on first run.
 pub const DEFAULT_CONFIG: &str = include_str!("../../assets/default_config.toml");
 
@@ -189,6 +195,32 @@ impl Config {
                  interval before the long break."
             );
         }
+
+        // Poll intervals are multiplied out to seconds and then to a `Duration`,
+        // and both `.max(1)` guards only the low end. An absurd value from a
+        // hand-edited config overflows the multiply in release, wraps to a tiny
+        // interval, and turns a polite once-every-thirty-minutes fetch into a
+        // tight loop against somebody else's free API — the one failure mode
+        // that costs a stranger rather than the user.
+        //
+        // A year is well past any legitimate setting and comfortably inside the
+        // arithmetic.
+        if self.weather.refresh_minutes > A_YEAR_IN_MINUTES {
+            anyhow::bail!(
+                "`[weather].refresh_minutes` is {}; the maximum is {A_YEAR_IN_MINUTES} \
+                 (one year). Leave it out to use the default of 30.",
+                self.weather.refresh_minutes
+            );
+        }
+        if self.stocks.refresh_secs > A_YEAR_IN_MINUTES * 60 {
+            anyhow::bail!(
+                "`[stocks].refresh_secs` is {}; the maximum is {} (one year). \
+                 Leave it out to use the default of 120.",
+                self.stocks.refresh_secs,
+                A_YEAR_IN_MINUTES * 60
+            );
+        }
+
         Ok(())
     }
 
@@ -463,6 +495,29 @@ mod tests {
                 "`{key}` did not name its replacement: {message}"
             );
         }
+    }
+
+    #[test]
+    fn an_absurd_poll_interval_is_rejected_rather_than_wrapping() {
+        // `refresh_minutes * 60` and `* 60 * 2` are unchecked `u64` multiplies.
+        // A value near `u64::MAX` wraps in release into a tiny interval, which
+        // is a tight loop against a free API someone else pays for.
+        let config: Config =
+            toml::from_str(&format!("[weather]\nrefresh_minutes = {}", u64::MAX)).expect("parses");
+        let err = config.validate().expect_err("must be rejected");
+        assert!(
+            format!("{err:#}").contains("refresh_minutes"),
+            "the error must name the key: {err:#}"
+        );
+
+        let config: Config =
+            toml::from_str(&format!("[stocks]\nrefresh_secs = {}", u64::MAX)).expect("parses");
+        assert!(config.validate().is_err());
+
+        // The defaults, and a generous manual setting, still pass.
+        assert!(Config::default().validate().is_ok());
+        let config: Config = toml::from_str("[weather]\nrefresh_minutes = 1440").expect("parses");
+        assert!(config.validate().is_ok(), "a day is a legitimate setting");
     }
 
     #[test]

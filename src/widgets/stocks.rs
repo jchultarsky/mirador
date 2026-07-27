@@ -44,6 +44,13 @@ const BINDINGS: &[Binding] = &[
     Binding::extra("o", "show file path"),
 ];
 
+/// The shortest gap between two rounds of polling, however it was asked for.
+///
+/// Not a tuning knob. The quote sources are free and unauthenticated and gate
+/// on IP reputation, so exceeding this costs everyone behind the same address,
+/// not just the user who held the key down.
+const MIN_SECONDS_BETWEEN_POLLS: u64 = 60;
+
 /// Widest the intraday sparkline is drawn.
 const SPARK_WIDTH: u16 = 12;
 
@@ -189,7 +196,7 @@ impl StocksPanel {
         let shared_generation = Arc::clone(&generation);
         // Never faster than a minute: the sources are free and unauthenticated,
         // and hammering them is how an IP gets blocked for everyone behind it.
-        let interval = Duration::from_secs(config.refresh_secs.max(60));
+        let interval = Duration::from_secs(config.refresh_secs.max(MIN_SECONDS_BETWEEN_POLLS));
         let stagger = Duration::from_millis(config.stagger_ms.clamp(100, 10_000));
 
         std::thread::Builder::new()
@@ -528,7 +535,26 @@ fn fetch_loop(
     interval: Duration,
     stagger: Duration,
 ) {
+    // The floor is enforced here rather than only in the interval, because `r`
+    // and a watchlist edit both break the wait early — so a held `r` re-polled
+    // every symbol as fast as the requests completed, against a source
+    // `quote.rs` documents as gating on IP reputation, and under a comment in
+    // `CLAUDE.md` claiming the limit was "enforced in code, not just
+    // documented". It was not.
+    //
+    // A wake that arrives too soon waits out the remainder instead of being
+    // dropped: the user asked for a refresh and should get one, just not now.
+    let floor = Duration::from_secs(MIN_SECONDS_BETWEEN_POLLS);
+    let mut last_poll: Option<Instant> = None;
+
     while !stop.load(Ordering::Relaxed) {
+        if let Some(at) = last_poll
+            && let Some(remaining) = floor.checked_sub(at.elapsed())
+            && crate::poll::wait(remaining, stop, || false) == crate::poll::Wake::Stop
+        {
+            return;
+        }
+
         let symbols = {
             let guard = match request.lock() {
                 Ok(g) => g,
@@ -537,6 +563,7 @@ fn fetch_loop(
             guard.symbols.clone()
         };
 
+        last_poll = Some(Instant::now());
         for symbol in &symbols {
             let result = source.fetch(symbol);
             update(board, generation, symbol, result);
@@ -1031,6 +1058,76 @@ mod tests {
         assert!(
             text.contains("429"),
             "the reason must reach the user: `{text}`"
+        );
+    }
+
+    #[test]
+    fn holding_r_cannot_poll_faster_than_the_floor() {
+        use std::sync::atomic::AtomicUsize;
+
+        /// Counts calls and returns instantly, so the loop is bounded only by
+        /// its own rate limiting rather than by how long a request takes.
+        struct Counting(Arc<AtomicUsize>);
+        impl QuoteSource for Counting {
+            fn name(&self) -> &'static str {
+                "counting"
+            }
+            fn fetch(&self, symbol: &str) -> anyhow::Result<Quote> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(Quote {
+                    symbol: symbol.to_string(),
+                    price: 1.0,
+                    previous_close: 1.0,
+                    currency: None,
+                    series: vec![],
+                    delayed: false,
+                })
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let source = Counting(Arc::clone(&calls));
+        let board = Arc::new(Mutex::new(vec![("AAPL".to_string(), Cell::default())]));
+        let request = Arc::new(Mutex::new(Request {
+            symbols: vec!["AAPL".into()],
+            // Held down: every time the loop looks, a refresh is waiting.
+            refresh: true,
+        }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+
+        // Keep asking for a refresh for as long as the loop runs, and stop it
+        // after a couple of seconds.
+        let ticking = Arc::clone(&request);
+        let flag = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < until {
+                if let Ok(mut guard) = ticking.lock() {
+                    guard.refresh = true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            flag.store(true, Ordering::Relaxed);
+        });
+
+        fetch_loop(
+            &source,
+            &board,
+            &request,
+            &stop,
+            &generation,
+            Duration::from_millis(1),
+            Duration::ZERO,
+        );
+
+        // Two seconds against a 60-second floor: the first poll, and nothing
+        // else. Before, `r` broke the wait and the loop re-polled every symbol
+        // as fast as the requests came back.
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "the rate floor was bypassed by a held refresh key"
         );
     }
 
