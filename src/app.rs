@@ -447,20 +447,32 @@ impl App {
     ///
     /// Returns whether any panel ticked, and so whether the screen may now be
     /// out of date.
+    /// Tick every panel whose interval has elapsed, and report whether any of
+    /// them said something a viewer could see had changed.
+    ///
+    /// The distinction is the whole point, and getting it wrong is invisible in
+    /// a screenshot and enormous in a profile. This used to return "some
+    /// panel's timer fired", which the run loop OR'd straight into `dirty`.
+    /// Measured on the shipped nine-panel default at 400x100: **243 redraws a
+    /// minute**, and the same 243 whether `show_seconds` was on or off — so
+    /// with seconds off the dashboard repainted 243 times to show content that
+    /// changed once.
     fn tick_panels(&mut self) -> bool {
         let now = Instant::now();
-        let mut ticked = false;
+        let mut changed = false;
         for slot in &mut self.slots {
             let due = slot
                 .last_tick
                 .is_none_or(|last| now.duration_since(last) >= slot.panel.refresh_interval());
             if due {
-                slot.panel.tick();
+                // Not `changed |= slot.panel.tick()`: `|=` short-circuits once
+                // the accumulator is true, and a panel that stops being ticked
+                // stops updating. The operand order is load-bearing.
+                changed = slot.panel.tick() || changed;
                 slot.last_tick = Some(now);
-                ticked = true;
             }
         }
-        ticked
+        changed
     }
 
     /// True when the focused panel is in a text-entry or modal state and global
@@ -1851,6 +1863,49 @@ mod tests {
         );
         assert_eq!(rects[1].x, rects[0].x + rects[0].width);
         assert_eq!(rects[0].width + rects[1].width, 60);
+    }
+
+    #[test]
+    fn a_settled_dashboard_stops_asking_to_be_redrawn() {
+        // The property this whole change exists for: with nothing moving,
+        // ticking must eventually report no change. Before, every panel whose
+        // timer fired counted as one, so the dashboard never went quiet and
+        // repainted at the fastest panel's cadence for ever.
+        //
+        // Panels that legitimately change on a timer are left out: the clock
+        // (its second or minute turns), pomodoro while running, and cpu and
+        // network (a fresh sample is a new number). What is left must settle.
+        let mut app = App::new(config_with(&["todo", "notes", "calendar"])).unwrap();
+
+        // The first tick may report a change; nothing has been drawn yet.
+        app.tick_panels();
+
+        for round in 0..5 {
+            // Force every panel due, so this cannot pass by ticking nothing.
+            for slot in &mut app.slots {
+                slot.last_tick = None;
+            }
+            assert!(
+                !app.tick_panels(),
+                "round {round}: a dashboard with nothing moving asked for a repaint"
+            );
+        }
+    }
+
+    #[test]
+    fn a_due_panel_is_ticked_even_when_an_earlier_one_already_reported_a_change() {
+        // `changed |= panel.tick()` would short-circuit and skip the call, and
+        // a panel that stops being ticked stops updating — a bug that would
+        // show up only when some *other* panel happened to change first.
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        for slot in &mut app.slots {
+            slot.last_tick = None;
+        }
+        app.tick_panels();
+        assert!(
+            app.slots.iter().all(|slot| slot.last_tick.is_some()),
+            "a due panel was skipped"
+        );
     }
 
     #[test]

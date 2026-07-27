@@ -14,7 +14,7 @@
 //! that lives in a data file rather than in the config, which is what lets the
 //! panel edit it — mirador deliberately never rewrites its config.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -140,6 +140,13 @@ pub struct StocksPanel {
     /// when nothing has failed — a fetch thread that quietly stopped and a
     /// laptop resumed from sleep both look like success from here.
     stale_after: Duration,
+    /// Bumped by the fetch thread every time it writes a quote or an error.
+    ///
+    /// See `WeatherPanel::generation`: the board is a last-value-wins slot
+    /// behind a mutex, so nothing else tells the panel whether it moved.
+    generation: Arc<AtomicU64>,
+    /// The generation the last frame drew.
+    seen: u64,
     /// Set to ask the fetch thread to finish.
     ///
     /// Without it the thread outlives the panel: the picker rebuilds every
@@ -175,9 +182,11 @@ impl StocksPanel {
         }));
 
         let stop = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
         let shared_board = Arc::clone(&board);
         let shared_request = Arc::clone(&request);
         let shared_stop = Arc::clone(&stop);
+        let shared_generation = Arc::clone(&generation);
         // Never faster than a minute: the sources are free and unauthenticated,
         // and hammering them is how an IP gets blocked for everyone behind it.
         let interval = Duration::from_secs(config.refresh_secs.max(60));
@@ -191,6 +200,7 @@ impl StocksPanel {
                     &shared_board,
                     &shared_request,
                     &shared_stop,
+                    &shared_generation,
                     interval,
                     stagger,
                 );
@@ -210,6 +220,8 @@ impl StocksPanel {
             // Twice the interval, matching the weather panel: one missed cycle
             // is a blip, two is a pattern.
             stale_after: interval * 2,
+            generation,
+            seen: 0,
             stop,
         };
         panel.reselect();
@@ -512,6 +524,7 @@ fn fetch_loop(
     board: &Arc<Mutex<Board>>,
     request: &Arc<Mutex<Request>>,
     stop: &Arc<AtomicBool>,
+    generation: &Arc<AtomicU64>,
     interval: Duration,
     stagger: Duration,
 ) {
@@ -526,7 +539,7 @@ fn fetch_loop(
 
         for symbol in &symbols {
             let result = source.fetch(symbol);
-            update(board, symbol, result);
+            update(board, generation, symbol, result);
             if stop.load(Ordering::Relaxed) {
                 return;
             }
@@ -552,21 +565,34 @@ fn fetch_loop(
 ///
 /// Merge rather than replace: a failure records the reason and leaves whatever
 /// price was already there, so the row keeps a real number with its age on it.
-fn update(board: &Arc<Mutex<Board>>, symbol: &str, result: anyhow::Result<Quote>) {
-    let mut guard = match board.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let Some(slot) = guard.iter_mut().find(|(s, _)| s == symbol) else {
-        return;
-    };
-    match result {
-        Ok(quote) => {
-            slot.1.quote = Some((quote, Instant::now()));
-            slot.1.error = None;
+fn update(
+    board: &Arc<Mutex<Board>>,
+    generation: &Arc<AtomicU64>,
+    symbol: &str,
+    result: anyhow::Result<Quote>,
+) {
+    {
+        let mut guard = match board.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(slot) = guard.iter_mut().find(|(s, _)| s == symbol) {
+            match result {
+                Ok(quote) => {
+                    slot.1.quote = Some((quote, Instant::now()));
+                    slot.1.error = None;
+                }
+                Err(e) => slot.1.error = Some(format!("{e:#}")),
+            }
         }
-        Err(e) => slot.1.error = Some(format!("{e:#}")),
     }
+
+    // After the write and after the lock, with `Release`, so a panel that sees
+    // the new number is guaranteed to see the board behind it. Bumped even for
+    // an error and even for a symbol that has since been removed: "the panel
+    // now shows a reason it did not show before" is a visible change, and one
+    // extra repaint a minute is not worth a second branch.
+    generation.fetch_add(1, Ordering::Release);
 }
 
 impl Panel for StocksPanel {
@@ -581,6 +607,15 @@ impl Panel for StocksPanel {
         }
         let n = self.watchlist.symbols().len();
         (n > 0).then(|| n.to_string())
+    }
+
+    fn tick(&mut self) -> bool {
+        // See `WeatherPanel::tick`: a fetch landing is the only thing that
+        // changes this panel without a keypress.
+        let now = self.generation.load(Ordering::Acquire);
+        let moved = now != self.seen;
+        self.seen = now;
+        moved
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -1015,8 +1050,13 @@ mod tests {
         };
 
         let board = Arc::new(Mutex::new(vec![("AAPL".to_string(), Cell::default())]));
-        update(&board, "AAPL", Ok(quote));
-        update(&board, "AAPL", Err(anyhow::anyhow!("HTTP 429")));
+        update(&board, &Arc::new(AtomicU64::new(0)), "AAPL", Ok(quote));
+        update(
+            &board,
+            &Arc::new(AtomicU64::new(0)),
+            "AAPL",
+            Err(anyhow::anyhow!("HTTP 429")),
+        );
 
         let snapshot = board.lock().unwrap().clone();
         let cell = &snapshot[0].1;

@@ -684,8 +684,13 @@ impl Panel for NotesPanel {
         std::time::Duration::from_mins(1)
     }
 
-    fn tick(&mut self) {
-        self.today = jiff::Zoned::now().date();
+    fn tick(&mut self) -> bool {
+        // Only the date matters here, and only when it changes: `today` decides
+        // whether a note is labelled "today" or by its date.
+        let today = jiff::Zoned::now().date();
+        let moved = today != self.today;
+        self.today = today;
+        moved
     }
 
     fn captures_input(&self) -> bool {

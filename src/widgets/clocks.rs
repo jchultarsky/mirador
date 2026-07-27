@@ -52,6 +52,13 @@ pub struct ClocksPanel {
     /// Everything else, rendered as a labelled list.
     secondary: Vec<Clock>,
     show_seconds: bool,
+    /// The instant the last frame showed, in whichever unit is on screen.
+    ///
+    /// This panel is why the whole dashboard used to repaint four times a
+    /// second: it asked for a 250ms tick and had no `tick` at all, so every one
+    /// of them counted as a change. With `show_seconds = false` the visible
+    /// content moves once a minute and idle CPU was identical either way.
+    last_shown: Option<i64>,
 }
 
 impl ClocksPanel {
@@ -87,6 +94,7 @@ impl ClocksPanel {
             primary,
             secondary: clocks,
             show_seconds,
+            last_shown: None,
         }
     }
 }
@@ -173,7 +181,28 @@ impl Panel for ClocksPanel {
     }
 
     fn refresh_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(250)
+        // Often enough to land on the boundary promptly, and no more often than
+        // the smallest unit on screen needs.
+        if self.show_seconds {
+            std::time::Duration::from_millis(250)
+        } else {
+            std::time::Duration::from_secs(1)
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        // Every zone's minute turns on the same instant — UTC offsets are whole
+        // minutes, including the 30- and 45-minute ones — so one comparison
+        // covers the big clock, the zone list and the date line together.
+        let second = jiff::Timestamp::now().as_second();
+        let unit = if self.show_seconds {
+            second
+        } else {
+            second / 60
+        };
+        let moved = self.last_shown != Some(unit);
+        self.last_shown = Some(unit);
+        moved
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {

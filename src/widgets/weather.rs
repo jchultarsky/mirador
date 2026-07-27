@@ -10,7 +10,7 @@
 //! Each row is labelled with the hour it applies to, which the previous daily
 //! layout left the reader to infer.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -167,6 +167,15 @@ pub struct WeatherPanel {
     imperial: bool,
     /// Set to ask the fetch thread to finish; see `StocksPanel::stop`.
     stop: Arc<AtomicBool>,
+    /// Bumped by the fetch thread every time it writes to `state`.
+    ///
+    /// A mutex tells you nothing about whether the value behind it moved, and
+    /// this is a last-value-wins slot rather than a channel, so there is no
+    /// other way for the panel to know. Without it the panel had no `tick` and
+    /// no way to report a change, which is the same problem the clock had.
+    generation: Arc<AtomicU64>,
+    /// The generation the last frame drew.
+    seen: u64,
 }
 
 impl Drop for WeatherPanel {
@@ -205,13 +214,23 @@ impl WeatherPanel {
         let state = Arc::new(Mutex::new(State::default()));
         let refresh = Arc::new(Mutex::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
         let shared = Arc::clone(&state);
         let shared_refresh = Arc::clone(&refresh);
         let shared_stop = Arc::clone(&stop);
+        let shared_generation = Arc::clone(&generation);
 
         std::thread::Builder::new()
             .name("mirador-weather".into())
-            .spawn(move || fetch_loop(&config, &shared, &shared_refresh, &shared_stop))
+            .spawn(move || {
+                fetch_loop(
+                    &config,
+                    &shared,
+                    &shared_refresh,
+                    &shared_stop,
+                    &shared_generation,
+                );
+            })
             .expect("spawning the weather thread");
 
         Self {
@@ -221,6 +240,8 @@ impl WeatherPanel {
             stale_after,
             imperial,
             stop,
+            generation,
+            seen: 0,
         }
     }
 
@@ -271,6 +292,7 @@ fn fetch_loop(
     state: &Arc<Mutex<State>>,
     refresh: &Arc<Mutex<bool>>,
     stop: &Arc<AtomicBool>,
+    generation: &Arc<AtomicU64>,
 ) {
     let interval = Duration::from_secs(config.refresh_minutes.max(1) * 60);
     poll(
@@ -278,6 +300,7 @@ fn fetch_loop(
         state,
         refresh,
         stop,
+        generation,
         interval,
         &resolve_location,
         &fetch_weather,
@@ -294,11 +317,13 @@ fn fetch_loop(
 type Resolver<'a> = &'a dyn Fn(&WeatherConfig) -> Result<Located>;
 type Fetcher<'a> = &'a dyn Fn(&WeatherConfig, &Located) -> Result<WeatherData>;
 
+#[allow(clippy::too_many_arguments)]
 fn poll(
     config: &WeatherConfig,
     state: &Arc<Mutex<State>>,
     refresh: &Arc<Mutex<bool>>,
     stop: &Arc<AtomicBool>,
+    generation: &Arc<AtomicU64>,
     interval: Duration,
     resolve_location: Resolver<'_>,
     fetch_weather: Fetcher<'_>,
@@ -318,13 +343,13 @@ fn poll(
         if located.is_none() {
             match resolve_location(config) {
                 Ok(place) => located = Some(place),
-                Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
+                Err(e) => update(state, generation, |s| s.error = Some(format!("{e:#}"))),
             }
         }
 
         if let Some(place) = &located {
             match fetch_weather(config, place) {
-                Ok(data) => update(state, |s| {
+                Ok(data) => update(state, generation, |s| {
                     s.data = Some(Box::new(data));
                     s.fetched = Some(Instant::now());
                     s.error = None;
@@ -332,7 +357,7 @@ fn poll(
                 // The reading and its timestamp are deliberately left alone, so
                 // a blip shows the last good data with its age rather than
                 // nothing.
-                Err(e) => update(state, |s| s.error = Some(format!("{e:#}"))),
+                Err(e) => update(state, generation, |s| s.error = Some(format!("{e:#}"))),
             }
         }
 
@@ -346,11 +371,16 @@ fn poll(
     }
 }
 
-fn update(state: &Arc<Mutex<State>>, f: impl FnOnce(&mut State)) {
+/// Apply a change to the shared state and mark it as new.
+///
+/// The generation is bumped *after* the write and with `Release`, so a panel
+/// that sees the new number is guaranteed to see the data behind it.
+fn update(state: &Arc<Mutex<State>>, generation: &Arc<AtomicU64>, f: impl FnOnce(&mut State)) {
     match state.lock() {
         Ok(mut guard) => f(&mut guard),
         Err(poisoned) => f(&mut poisoned.into_inner()),
     }
+    generation.fetch_add(1, Ordering::Release);
 }
 
 /// A place with coordinates.
@@ -689,6 +719,18 @@ impl Panel for WeatherPanel {
         Duration::from_secs(2)
     }
 
+    fn tick(&mut self) -> bool {
+        // A fetch that landed since the last frame is the only thing that can
+        // change this panel without a keypress. Reading a counter is cheaper
+        // than taking the mutex, and far cheaper than repainting the dashboard
+        // every two seconds to find nothing new — which is what happened while
+        // this panel had no `tick` at all.
+        let now = self.generation.load(Ordering::Acquire);
+        let moved = now != self.seen;
+        self.seen = now;
+        moved
+    }
+
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
         use ratatui::crossterm::event::KeyCode;
         match key.code {
@@ -965,6 +1007,8 @@ mod tests {
             stale_after: Duration::from_hours(1),
             imperial,
             stop: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            seen: 0,
         }
     }
 
@@ -1079,11 +1123,13 @@ mod tests {
         // whole refresh interval because one request timed out loses more than
         // it protects.
         let state = Arc::new(Mutex::new(State::default()));
-        update(&state, |s| {
+        update(&state, &Arc::new(AtomicU64::new(0)), |s| {
             s.data = Some(Box::new(sample_data(true)));
             s.fetched = Some(Instant::now());
         });
-        update(&state, |s| s.error = Some("network request failed".into()));
+        update(&state, &Arc::new(AtomicU64::new(0)), |s| {
+            s.error = Some("network request failed".into());
+        });
 
         let snapshot = state.lock().unwrap().clone();
         assert!(snapshot.data.is_some(), "the reading must survive");
@@ -1093,8 +1139,10 @@ mod tests {
     #[test]
     fn a_successful_refresh_clears_a_previous_error() {
         let state = Arc::new(Mutex::new(State::default()));
-        update(&state, |s| s.error = Some("boom".into()));
-        update(&state, |s| {
+        update(&state, &Arc::new(AtomicU64::new(0)), |s| {
+            s.error = Some("boom".into());
+        });
+        update(&state, &Arc::new(AtomicU64::new(0)), |s| {
             s.data = Some(Box::new(sample_data(true)));
             s.fetched = Some(Instant::now());
             s.error = None;
@@ -1137,7 +1185,7 @@ mod tests {
     #[test]
     fn the_counter_shows_the_age_once_stale_and_the_observation_time_otherwise() {
         let panel = panel_showing(true);
-        update(&panel.state, |s| {
+        update(&panel.state, &Arc::new(AtomicU64::new(0)), |s| {
             s.data = Some(Box::new(sample_data(true)));
             s.fetched = Some(Instant::now());
         });
@@ -1145,7 +1193,9 @@ mod tests {
 
         // "at 13:00" is only alarming if you happen to know the time now, so
         // the age replaces it outright rather than sitting beside it.
-        update(&panel.state, |s| s.error = Some("timed out".into()));
+        update(&panel.state, &Arc::new(AtomicU64::new(0)), |s| {
+            s.error = Some("timed out".into());
+        });
         assert_eq!(panel.counter(), Some("0m old".to_string()));
     }
 
@@ -1154,7 +1204,9 @@ mod tests {
         let panel = panel_showing(true);
         assert_eq!(panel.counter(), Some("loading".to_string()));
 
-        update(&panel.state, |s| s.error = Some("no such host".into()));
+        update(&panel.state, &Arc::new(AtomicU64::new(0)), |s| {
+            s.error = Some("no such host".into());
+        });
         assert_eq!(
             panel.counter(),
             Some("offline".to_string()),
@@ -1493,6 +1545,7 @@ mod tests {
         fetch: Fetcher<'_>,
         passes: usize,
     ) {
+        let generation = Arc::new(AtomicU64::new(0));
         let seen = std::cell::Cell::new(0usize);
         let counted_resolve = |c: &WeatherConfig| {
             seen.set(seen.get() + 1);
@@ -1508,6 +1561,7 @@ mod tests {
             state,
             refresh,
             stop,
+            &generation,
             interval,
             &counted_resolve,
             fetch,

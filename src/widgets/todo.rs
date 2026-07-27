@@ -866,12 +866,19 @@ impl Panel for TodoPanel {
         std::time::Duration::from_mins(1)
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self) -> bool {
+        // This already compared; the answer was simply thrown away, so the
+        // dashboard repainted every second to learn that the date had not
+        // changed.
         let today = jiff::Zoned::now().date();
-        if today != self.today {
-            self.today = today;
-            self.refresh_view();
+        if today == self.today {
+            return false;
         }
+        self.today = today;
+        // Overdue rows are coloured by date, so a day boundary restyles the
+        // list even when no task moved.
+        self.refresh_view();
+        true
     }
 
     fn remember(&self, state: &mut crate::state::UiState) {
