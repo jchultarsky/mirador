@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The agenda cloned its whole event list three more times per frame.** Once in
+  `render`, once in `counter` — which the frame renderer calls on *every* frame
+  with nothing guarding it — and twice more in key handlers that cloned the list
+  only to read its length. Measured against a calendar of three hundred daily
+  meetings: **210,000 event clones in thirty idle seconds**, now zero. A
+  recurring rule expands, so the list is far longer than the file looks.
+
+- **A `.ics` larger than 10MB is refused rather than read.** The network side
+  was bounded and the local side was not, and reading a calendar costs more than
+  its size — unfolding makes a `Vec<String>` of it and recurrence expands it
+  again.
+
 - **Editing a config on Windows no longer rewrites every line in it.** Both
   places that rewrite a file you wrote by hand — the layout editor and the
   config migrator — reassembled it from `str::lines()`, which strips the `\r`

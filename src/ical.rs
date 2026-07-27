@@ -682,6 +682,64 @@ mod tests {
         parse(&wrap(body), &tz(), &from, &to)
     }
 
+    /// A calendar is untrusted input, and the review that produced this test
+    /// found its one hang at exactly that boundary in another module. These
+    /// are the shapes a hostile or merely broken `.ics` takes.
+    ///
+    /// Asserts bounds rather than elapsed time: a timing assertion is a flaky
+    /// test on a loaded CI runner, and what actually matters is that the work
+    /// is *bounded*, not that a particular machine finished it quickly.
+    #[test]
+    fn pathological_calendars_stay_bounded() {
+        let tz = TimeZone::UTC;
+        let from = "2026-07-01T00:00:00Z[UTC]".parse::<Zoned>().expect("from");
+        let until = "2026-07-08T00:00:00Z[UTC]".parse::<Zoned>().expect("until");
+
+        // A rule that would run past the heat death of the universe. The window
+        // clips it; `COUNT` is not permitted to decide how much work happens.
+        let forever = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART:20260701T090000Z\n\
+                       SUMMARY:X\nRRULE:FREQ=DAILY;COUNT=999999999\nEND:VEVENT\n\
+                       END:VCALENDAR\n";
+        let out = parse(forever, &tz, &from, &until);
+        assert!(
+            out.events.len() <= 8,
+            "a week-long window cannot hold {} daily events",
+            out.events.len()
+        );
+
+        // Fifty thousand folded continuations: one very long summary, not fifty
+        // thousand events, and no quadratic rebuild.
+        let mut folded =
+            String::from("BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART:20260701T090000Z\nSUMMARY:start");
+        for _ in 0..50_000 {
+            folded.push_str("\n more");
+        }
+        folded.push_str("\nEND:VEVENT\nEND:VCALENDAR\n");
+        let out = parse(&folded, &tz, &from, &until);
+        assert_eq!(out.events.len(), 1, "one event, however folded");
+
+        // Deeply nested components. A VALARM is not an event and nesting is not
+        // recursion here, so neither the stack nor the event list grows.
+        let mut nested =
+            String::from("BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART:20260701T090000Z\nSUMMARY:N\n");
+        for _ in 0..20_000 {
+            nested.push_str("BEGIN:VALARM\n");
+        }
+        for _ in 0..20_000 {
+            nested.push_str("END:VALARM\n");
+        }
+        nested.push_str("END:VEVENT\nEND:VCALENDAR\n");
+        let out = parse(&nested, &tz, &from, &until);
+        assert_eq!(out.events.len(), 1, "nesting does not multiply events");
+
+        // Truncated mid-event, which is what a half-written sync leaves behind.
+        let truncated = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nDTSTART:2026070";
+        let _ = parse(truncated, &tz, &from, &until);
+
+        // Not a calendar at all.
+        let _ = parse("\u{0}\u{1}\u{2}not a calendar", &tz, &from, &until);
+    }
+
     #[test]
     fn a_folded_line_is_rejoined_at_the_character_after_the_space() {
         // The failure mode is silent: every summary over ~75 characters gets
