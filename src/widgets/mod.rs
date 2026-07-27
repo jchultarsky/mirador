@@ -81,7 +81,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.stocks_path()?,
         )?),
         "calendar" => Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
-        "watchlog" => Box::new(watchlog::WatchLogPanel::new()),
+        "watchlog" => Box::new(watchlog::WatchLogPanel::new(config)),
         "news" => Box::new(news::NewsPanel::new(&config.news)),
         "agenda" => Box::new(agenda::AgendaPanel::new(
             &config.agenda,

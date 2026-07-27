@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you. Headlines only — feed summaries are article prose belonging to whoever
   wrote them.
 
+- **An empty watch log says what it is watching.** It had no refresh key —
+  nothing there is polled, the panels report to it — and "Nothing has happened"
+  on its own gave a reader no way to tell working from dead. It now names the
+  two things it watches, and says plainly when no calendar is configured that
+  only one of them can happen.
+
 - **The default layout is four rows**, with news and the watch log sharing a
   reading row. Both want width for prose rather than columns of numbers, and
   squeezing them in beside the lists left neither readable.
