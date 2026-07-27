@@ -469,6 +469,50 @@ where one that misses a repeat costs you a glance at the real thing.
 An entry the parser cannot read is counted at the bottom of the panel rather
 than dropped silently, so a half-read calendar does not just look empty.
 
+### News
+
+Headlines from RSS feeds you choose.
+
+```
+╭┤7 News├──────────────────────────────────────────────╮
+│ NASA · 1h old                                        │
+│ Astronaut Chris Williams to discuss station mission  │
+│                                                      │
+│ PHYS.ORG · 22m old                                   │
+│ What Australian lakes showed us about Martian        │
+│ hydrology                                            │
+│                                                      │
+│ ARS TECHNICA · 45m old                               │
+│ 5th Circuit blocks Texas law requiring websites to   │
+│ filter "harmful" speech                              │
+╰───────── r refresh · o show link ────────────────────╯
+```
+
+**A window, not a feed.** It shows however many stories fit and no more. There
+is no scrolling, no count, no unread state, and nothing to dismiss — you glance
+at it the way you glance at the weather. That is deliberate and it is the same
+reasoning that keeps unread-message counts off this dashboard: a number that
+accumulates is a number demanding you zero it.
+
+Stories are interleaved rather than sorted purely by date, so the top of the
+panel holds the newest from *each* feed. Sorting by date alone hands the whole
+window to whichever outlet publishes most often, which is fresh but is not a
+window on the world.
+
+`o` shows the selected story's link so you can copy it. It does not open a
+browser — that means talking to the platform, which is the same decision as
+playing a sound file and gets the same answer.
+
+The shipped feeds are science, space and technology only. Choosing outlets for
+general or political news is an editorial act this project has no business
+making on your behalf; add your own in `[news.feeds]`. A topic *is* a feed —
+RSS has no topic parameter, so subscribing to a science feed is how you ask for
+science.
+
+Only the headline, link and date are read. Feed summaries are article prose
+belonging to whoever wrote them. Refresh is hourly, and an hour is also the
+floor.
+
 ### Watch log
 
 What happened while you were not looking.

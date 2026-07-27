@@ -45,8 +45,8 @@ mod widgets;
 pub use layout::{Layout, LayoutPanel, LayoutRow};
 #[allow(unused_imports)]
 pub use widgets::{
-    AgendaConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig, NetworkConfig, NotesConfig,
-    PomodoroConfig, StocksConfig, TodoConfig, WeatherConfig,
+    AgendaConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig, NetworkConfig, NewsConfig,
+    NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -70,6 +70,7 @@ pub struct Config {
     pub stocks: StocksConfig,
     pub agenda: AgendaConfig,
     pub calendar: CalendarConfig,
+    pub news: NewsConfig,
     pub pomodoro: PomodoroConfig,
     pub cpu: CpuConfig,
     pub network: NetworkConfig,
@@ -493,7 +494,10 @@ mod tests {
     #[test]
     fn empty_config_falls_back_to_defaults() {
         let config: Config = toml::from_str("").expect("an empty config is valid");
-        assert_eq!(config.layout.rows.len(), 3);
+        // Four since the news and watch log panels took a row of their own;
+        // the figure is here to catch a default that silently loses rows, not
+        // because three was ever special.
+        assert_eq!(config.layout.rows.len(), 4);
         assert!(config.validate().is_ok());
     }
 

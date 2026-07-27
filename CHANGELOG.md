@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A news panel.** Headlines from RSS feeds you choose, refreshed hourly.
+
+  **A window, not a feed:** however many stories fit and no more, with no
+  scrolling, no count, no unread state and nothing to dismiss. News is the
+  doomscroll surface this dashboard has been avoiding, and that commitment is
+  what makes it something you glance at rather than something you work through.
+
+  Stories are interleaved across feeds so the top of the panel holds the newest
+  from *each* — date order alone hands the whole window to whichever outlet
+  publishes most often.
+
+  `o` shows a story's link so you can copy it; no browser is launched. The
+  shipped feeds are science, space and technology only, because choosing
+  outlets for general news is an editorial act this project should not make for
+  you. Headlines only — feed summaries are article prose belonging to whoever
+  wrote them.
+
+- **The default layout is four rows**, with news and the watch log sharing a
+  reading row. Both want width for prose rather than columns of numbers, and
+  squeezing them in beside the lists left neither readable.
+
 ## [0.12.0] - 2026-07-27
 
 ### Added

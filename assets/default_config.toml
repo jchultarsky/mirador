@@ -54,32 +54,36 @@ check_for_updates = false
 # ---------------------------------------------------------------------------
 [layout]
 rows = [
-  { height = 34, panels = [
+  { height = 26, panels = [
     { widget = "clocks",   width = 26 },
     # Wide enough for two months side by side on a normal terminal; it falls
     # back to one when the window is narrow.
     { widget = "calendar", width = 34 },
     { widget = "weather",  width = 40 },
   ] },
-  { height = 42, panels = [
-    { widget = "todo",     width = 30 },
+  { height = 32, panels = [
+    { widget = "todo",     width = 34 },
     # What is next, from [agenda].file. Says how to point it at your .ics
     # until you do.
-    { widget = "agenda",   width = 26 },
-    { widget = "notes",    width = 22 },
+    { widget = "agenda",   width = 30 },
+    { widget = "notes",    width = 36 },
+  ] },
+  # The reading row. Both of these want width for prose rather than columns of
+  # numbers, so they get a row to themselves rather than being squeezed in
+  # beside the lists.
+  { height = 24, panels = [
+    { widget = "news",     width = 55 },
     # What happened while you were not looking. Empty most of the time, which
     # is the point.
-    { widget = "watchlog", width = 22 },
+    { widget = "watchlog", width = 45 },
   ] },
-  { height = 24, panels = [
+  { height = 18, panels = [
     # The timer draws block numerals when it has the width for them and falls
-    # back to plain text when it does not. It leads this row because it is the
-    # one panel here with a width it genuinely needs; the graphs beside it
-    # scale to whatever is left.
-    { widget = "pomodoro", width = 28 },
-    { widget = "stocks",   width = 32 },
-    { widget = "cpu",      width = 18 },
-    { widget = "network",  width = 22 },
+    # back to plain text when it does not.
+    { widget = "pomodoro", width = 24 },
+    { widget = "stocks",   width = 28 },
+    { widget = "cpu",      width = 22 },
+    { widget = "network",  width = 26 },
   ] },
 ]
 
@@ -292,6 +296,43 @@ week_starts = "sunday"   # sunday | monday
 days          = 7        # how far ahead to look
 show_location = true     # show the location when the row has room for both
 refresh_secs  = 60       # how often to re-read the file
+
+# ---------------------------------------------------------------------------
+# News
+#
+# Headlines from RSS feeds you choose. A topic *is* a feed here — RSS has no
+# topic parameter, so subscribing to a science feed is how you ask for science.
+# Add or remove entries freely; `name` is what shows above the headline.
+#
+# The panel is deliberately a window rather than a reader: it shows however
+# many stories fit and no more, there is no scrolling, no count, no unread
+# state and nothing to dismiss. You glance at it. If that sounds thin, it is
+# the same reasoning that keeps unread-message counts off this dashboard.
+#
+# The shipped feeds are science, space and technology only. Choosing outlets
+# for general or political news is an editorial act this project has no
+# business making on your behalf — add your own if you want them.
+#
+# Only the headline, the link and the date are read. Feed summaries are article
+# prose belonging to whoever wrote them.
+# ---------------------------------------------------------------------------
+[news]
+refresh_minutes = 60     # also the floor; news moves slower than a dashboard
+per_feed        = 4      # kept from each feed, so a chatty one cannot crowd
+                         # out a quiet one. Stories are then interleaved, so
+                         # the top of the panel holds one from each.
+
+[[news.feeds]]
+name = "NASA"
+url  = "https://www.nasa.gov/news-release/feed/"
+
+[[news.feeds]]
+name = "PHYS.ORG"
+url  = "https://phys.org/rss-feed/space-news/"
+
+[[news.feeds]]
+name = "ARS TECHNICA"
+url  = "https://feeds.arstechnica.com/arstechnica/index"
 
 # ---------------------------------------------------------------------------
 # Pomodoro

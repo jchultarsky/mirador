@@ -373,3 +373,53 @@ impl Default for NetworkConfig {
         }
     }
 }
+
+/// A news feed the user subscribes to.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct NewsFeed {
+    /// Shown above the headline, so `BBC WORLD` rather than the URL.
+    pub name: String,
+    pub url: String,
+}
+
+/// The news panel.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct NewsConfig {
+    /// Feeds to read, in order. A topic *is* a feed here: RSS has no topic
+    /// parameter, so subscribing to a science feed is how you ask for science.
+    pub feeds: Vec<NewsFeed>,
+    /// How often to re-read them. An hour is the floor as well as the default —
+    /// news does not move faster than a dashboard should, and hammering
+    /// somebody's feed from every mirador on earth would be rude.
+    pub refresh_minutes: u64,
+    /// Most stories to keep from any one feed, so a chatty outlet cannot crowd
+    /// out a quiet one.
+    pub per_feed: usize,
+}
+
+impl Default for NewsConfig {
+    fn default() -> Self {
+        let feed = |name: &str, url: &str| NewsFeed {
+            name: name.into(),
+            url: url.into(),
+        };
+        Self {
+            // Science, space and technology only. Choosing outlets for general
+            // or political news would be an editorial act this project has no
+            // business making on somebody else's behalf — and the config is
+            // commented so what you are subscribed to is never a mystery.
+            feeds: vec![
+                feed("NASA", "https://www.nasa.gov/news-release/feed/"),
+                feed("PHYS.ORG", "https://phys.org/rss-feed/space-news/"),
+                feed(
+                    "ARS TECHNICA",
+                    "https://feeds.arstechnica.com/arstechnica/index",
+                ),
+            ],
+            refresh_minutes: 60,
+            per_feed: 4,
+        }
+    }
+}
