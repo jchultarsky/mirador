@@ -6,9 +6,25 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only by default. Nothing in this workflow writes to the repository, and
+# a job that cannot write cannot be turned into one that does by a compromised
+# action.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  # Fail on a warning from the network rather than on the tenth retry.
+  CARGO_NET_RETRY: 3
+  # Nothing here is interactive.
+  CARGO_TERM_PROGRESS_WHEN: never
+
+# Deliberately *not* `RUSTFLAGS: -D warnings` at this level. `RUSTFLAGS` is
+# applied to every unit cargo compiles, dependencies included, so a new warning
+# in somebody else's crate would fail our build for something we cannot fix.
+# `cargo clippy -- -D warnings` passes its flags to the final crate only, which
+# is the behaviour we actually wanted, and it denies rustc's lints as well as
+# clippy's.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,73 +37,91 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Windows is here because mirador ships a Windows binary. It was absent
+        # while a startup panic that only fires on Windows sat in `main`.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned by commit, not by tag: a tag is a moving pointer the
+      # action's author can repoint at any time, and this workflow runs against
+      # the repository's own token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
+        with:
+          # Required once the action is pinned by SHA: it normally reads the
+          # toolchain from the ref it was called by, and a SHA does not say
+          # "stable".
+          toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
+      # `--locked` on every command: without it cargo will quietly update
+      # Cargo.lock to satisfy a resolution, so CI would be testing a dependency
+      # set that does not exist in the repository.
       - name: Build
-        run: cargo build --all-targets
+        run: cargo build --locked --all-targets
 
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
 
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
   msrv:
     name: minimum supported Rust version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Keep this pinned to the `rust-version` field in Cargo.toml.
       - name: Install Rust 1.95
-        uses: dtolnay/rust-toolchain@1.95.0
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
+        with:
+          toolchain: "1.95.0"
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       - name: Check
-        run: cargo check --all-targets
+        run: cargo check --locked --all-targets
 
   docs:
     name: docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
+        with:
+          toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       # Catches broken intra-doc links before they reach docs.rs.
       - name: Build documentation
-        run: cargo doc --no-deps --document-private-items
+        run: cargo doc --locked --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -95,15 +129,35 @@ jobs:
     name: package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
+        with:
+          toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
 
       # Verifies the crate is publishable and that `exclude` in Cargo.toml has
       # not accidentally dropped a file the build needs.
       - name: Verify the published package
-        run: cargo publish --dry-run
+        run: cargo publish --locked --dry-run
+
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Advisories, licences and sources — see deny.toml, which explains what
+      # each check is defending and why MPL-2.0 is on the allow list.
+      #
+      # This runs on every pull request rather than on a schedule, because an
+      # advisory published against a dependency is only actionable when someone
+      # is looking, and a nightly job on a spare-time project is a nightly email
+      # nobody reads.
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check

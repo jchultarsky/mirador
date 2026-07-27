@@ -77,6 +77,12 @@ checksum = "sha256"
 # the PowerShell installer verifies nothing at all — both are dist's behaviour,
 # not ours. See SECURITY.md for what is and is not checked.
 github-attestations = true
+# Embed the dependency list in the shipped binaries, so `cargo audit bin
+# mirador` can tell someone whether the binary they downloaded contains a
+# vulnerable crate. Without it, auditing a release means trusting that the tag
+# matches the source — which is exactly what an audit is supposed to establish
+# rather than assume.
+cargo-auditable = true
 # Ship the standalone updater alongside the shell and PowerShell installers, so
 # someone who installed without a package manager can run `mirador-update`
 # rather than going back to the releases page. It only ever runs when invoked.
