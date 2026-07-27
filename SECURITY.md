@@ -8,8 +8,8 @@ there are no backports. In practice that means whatever is on the
 
 | Version | Supported |
 | --- | --- |
-| 0.5.x | Yes |
-| < 0.5 | No — upgrade |
+| 0.6.x | Yes |
+| < 0.6 | No — upgrade |
 
 ## Reporting a vulnerability
 
