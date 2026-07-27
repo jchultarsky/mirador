@@ -683,6 +683,31 @@ In the add/edit form, `Tab` and `Shift+Tab` move between fields, `Enter` saves
 and `Esc` cancels. While a form is open, global keys are suppressed, so typing
 a `q` into a task title does not quit the dashboard.
 
+## When something needs you
+
+The status bar carries one line when something will get worse if you ignore it,
+and carries nothing otherwise:
+
+```
+ ⚠ Quarterly planning in 5m · Room 12
+ ⚠ Tasks could not be saved — read-only file system (os error 30)
+```
+
+**There is no all-clear.** An indicator saying everything is fine is a light you
+have to read in order to learn nothing, and reading it is work. Absence is the
+signal.
+
+**It names one thing, never a count**, and it clears itself when the thing
+resolves. Nothing to acknowledge, nothing to dismiss.
+
+The bar is deliberately strict about what qualifies: *will this get worse if
+nobody acts in the next few minutes*. A save that is failing, an event about to
+start, a layout change that did not persist. An overdue task does **not**
+qualify — it is notable, the task panel already shows it in red, and a signal lit
+for it would be lit permanently. A permanently lit warning is furniture you stop
+seeing inside a week, which is the same failure as an unread badge arrived at
+from the other direction.
+
 ## Due dates
 
 The due field accepts more than ISO dates:

@@ -670,6 +670,12 @@ impl Panel for StocksPanel {
         Duration::from_secs(1)
     }
 
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        self.watchlist.last_error.as_ref().map(|why| {
+            crate::panel::Alert::failing(format!("The watchlist could not be saved — {why}"))
+        })
+    }
+
     fn captures_input(&self) -> bool {
         !matches!(self.mode, Mode::List)
     }

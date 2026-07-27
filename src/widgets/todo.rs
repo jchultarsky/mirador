@@ -939,6 +939,15 @@ impl Panel for TodoPanel {
         true
     }
 
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        // A save that is failing is the clearest case there is: the work is on
+        // screen and not on disk, and every further edit widens the gap.
+        self.store
+            .last_error
+            .as_ref()
+            .map(|why| crate::panel::Alert::failing(format!("Tasks could not be saved — {why}")))
+    }
+
     fn events(&mut self) -> Vec<crate::watch::Event> {
         std::mem::take(&mut self.pending)
     }

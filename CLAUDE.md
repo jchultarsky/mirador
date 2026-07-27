@@ -405,6 +405,33 @@ exactly the default. Hence two things: `check_palette_ordering` refuses such a
 file by name, and the drift test is paired with one that asserts a standalone
 theme *sets every key*, which is the property that can actually fail.
 
+## The "is anything on fire" signal — built
+
+One line in the status bar naming the single most pressing thing, absent
+otherwise. `Panel::alert` is the present-tense sibling of `Panel::events`: same
+notion of notable, different tense, which is why they are separate hooks.
+
+**The threshold is "will this get worse if nobody acts in the next few
+minutes",** and holding that line is the whole feature. An overdue task does not
+qualify — notable, already red in its own panel, and identically overdue in an
+hour. A signal lit for it is lit permanently, and a permanently lit alarm is
+furniture: the unread-badge failure reached from the other direction. Eight of
+the twelve panels already show what is wrong in their own frames, so the gap
+this fills was aggregation, never detection.
+
+**No all-clear, ever.** An indicator saying everything is fine is a light you
+have to read to learn nothing. Absence is the signal; there is a test.
+
+**It takes the whole bar rather than sharing it.** Squeezing it in beside the
+key hints truncated the *reason*, which is the actionable half —
+`read-only file syste…`. The keys are behind `?`, and an alert is gone the
+moment its cause is.
+
+**`layout_error` was the one genuine silent failure in the program.** It was
+reported inside the `w` picker and nowhere else, so a rearrangement that failed
+to persist said nothing once the picker closed and was gone at the next launch.
+That is now an alert.
+
 ## The news panel — built
 
 The one that came closest to the feature this dashboard turned down. Unread
