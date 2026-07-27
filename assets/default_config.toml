@@ -132,6 +132,12 @@ end   = "#c7afd7"
 # ---------------------------------------------------------------------------
 # The FIRST zone is the large clock; the rest render as a labelled table
 # beneath it, showing their offset relative to that first zone.
+#
+# This list SEEDS your first run and is not read again. `a` adds a clock from
+# the panel and `d` removes the selected one, and the live list lives in
+# zones.toml beside your tasks — same arrangement as the watchlist, and for the
+# same reason: mirador never rewrites this file, so a list kept here could only
+# ever be changed in an editor. Edit zones.toml by hand if you prefer.
 [clocks]
 time_format = "%H:%M:%S"     # format for the secondary zone table
 date_format = "%A %d %B"     # shown under the large clock; empty hides it
@@ -152,7 +158,7 @@ zones = [
 # `longitude` explicitly to skip the lookup entirely.
 # ---------------------------------------------------------------------------
 [weather]
-location        = "Boston, Massachusetts"
+location        = "Boston, Massachusetts"   # `L` changes this from the panel
 # latitude      = 42.3601
 # longitude     = -71.0589
 units           = "imperial"   # "imperial" (F, mph) or "metric" (C, km/h)
@@ -262,7 +268,8 @@ week_starts = "sunday"   # sunday | monday
 # misses a repeat.
 # ---------------------------------------------------------------------------
 [agenda]
-# file        = "~/calendar.ics"
+# file        = "~/calendar.ics"   # `f` sets this from the panel, with Tab
+                                   # completing path segments as you type
 days          = 7        # how far ahead to look
 show_location = true     # show the location when the row has room for both
 refresh_secs  = 60       # how often to re-read the file

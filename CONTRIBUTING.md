@@ -76,6 +76,24 @@ Widgets must not block. If your widget needs network or disk I/O, do it on a
 background thread and poll the result in `tick`, as `weather.rs` does. A panel
 that blocks freezes the whole dashboard.
 
+If your widget needs a setting the user can change from the keyboard, two
+things already exist for it. A value that is free text — a path, a place, a
+name — gets a `Prompt` from `src/prompt.rs`: open it with the current value,
+validate the answer yourself, and call `reject` to keep the dialog open with
+the text still in it. Return the value from `Panel::remember` and it persists
+through `state.rs`, which records only what differs from the config so the
+setting can be un-set again.
+
+A *list* the user can add to and remove from is different, and does not belong
+in the config at all: mirador never rewrites that file, so a list kept there
+could only be changed in an editor. Give it a data file beside the tasks, the
+way `quote.rs` does for the watchlist and `zones.rs` for the world clocks, and
+let the config seed the first run only.
+
+While a prompt is open your panel must return `true` from
+`Panel::captures_input`, or the first `q` someone types into it will quit the
+dashboard.
+
 ## Code standards
 
 - `cargo clippy --all-targets -- -D warnings` must pass. The crate enables

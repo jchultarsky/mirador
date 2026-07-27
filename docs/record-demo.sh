@@ -198,6 +198,18 @@ key space 1.3                                    # a panel goes, the grid reflow
 key space 1.3                                    # and comes back
 key Escape 0.8
 
+# Arranging the dashboard. The panels themselves move, so this needs no
+# narration — but it does need a move whose result is legible at a glance,
+# which is why it is a whole panel changing rows rather than two neighbours
+# swapping. `Esc` at the end puts it back, so the rest of the recording shows
+# the layout the README describes rather than whatever this left behind.
+tmux send-keys -t "$SESSION" '4'; hold 0.6      # the task list, in row two
+tmux send-keys -t "$SESSION" 'm'; hold 1.2      # ARRANGE, and the legend
+key Right 0.9                                    # along its row
+key Up 1.2                                       # and up into the row above
+key Up 1.4                                       # past the edge: a new row
+key Escape 1.2                                   # and back to where it started
+
 # The help overlay before the timer, so the GIF ends on a running clock rather
 # than on a dialog. (This used to be a workaround: toggling a panel restarted
 # the weather and price fetches, and the overlay hid the few seconds of

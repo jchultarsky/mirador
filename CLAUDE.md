@@ -114,6 +114,9 @@ theme.rs     colours and gradient stops
 config/      mod.rs: paths, loading, validation; widgets.rs: one settings
              struct per panel; layout.rs: the grid
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
+arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
+prompt.rs    the one-line question a panel asks for a path, place or zone
+zones.rs     world clocks as a data file, the watchlist trick again
 migrate.rs   textual in-place upgrade of configs written by older versions
 layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 store.rs     write_atomic — every file mirador owns goes through it
@@ -199,7 +202,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 207 of them, including the ones mirador
+    trip through `toml` discards all 214 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -384,22 +387,49 @@ colour — the universal strategy is a separate low-colour theme picked on
 `COLORTERM`. Keep a compat shim for one release (TOML type distinguishes an
 inline `[theme]` table from a `theme = "name"` string).
 
+## Recently settled, so it is not re-litigated
+
+**The layout grid stays two levels** — `rows: Vec<Row{height, panels}>` — rather
+than becoming recursive splits. Nested splits would make `[layout]` unreadable
+and un-hand-editable, and would break the textual-edit approach the whole
+persistence story rests on. The known cost is that panels of unlike natural
+height in one row waste space; the mitigation is that arrange mode makes it
+easy to group like with like.
+
+**The default stays three rows.** Measured at 120x40 before deciding: nothing
+truncates, all ten panels are legible, and the blank space in the clock is
+inherent to a row sharing its height with weather rather than being waste to
+reclaim. Arrange mode can open and close rows, so the row count is a gesture
+now rather than a number shipped for everyone.
+
+**`layout_edit` has two paths and the split matters.** Numbers-only changes are
+still one-line edits, because rebuilding a row would reflow a hand-aligned
+block on every `Ctrl+arrow` repeat. Structural changes rebuild the row from
+captured panel entries — a panel's line *plus the comments above it*, looked up
+across the whole block so a moved panel takes its explanation with it. Before
+this, reordering within a row failed *silently*: the loop matched by name, saw
+both panels still present, emitted nothing, and the round-trip check refused a
+change the user had watched happen.
+
+**Esc cancels in arrange mode and commits in the picker.** Inconsistent, and
+deliberate: each picker change is one keystroke to undo, an arrangement is not.
+The mode's legend names both keys, so there is nothing to guess.
+
 ## Open work, in priority order
 
 Only things that are actually open. A "decided and built" entry in a list called
 open work is how the list stops being read.
 
-1. **Editing `[weather].location` from the panel.** Everything else the UI can
-   change is already remembered — units, task sort and completed-visibility,
-   clock seconds, pomodoro durations — through `state.rs`, which records where
-   the user moved from what the config seeded. Location is the one that needs
-   text entry in the panel rather than a toggle, so it is a UI question now
-   rather than a persistence one.
-2. **Named themes**, per the section above. The `[theme]` table is built; the
+1. **Named themes**, per the section above. The `[theme]` table is built; the
    `theme = "nord"` layer over it is not.
-3. **"What changed since I last looked" markers.**
-4. **A single "is anything on fire" signal.** Named as a gap alongside the other
+2. **"What changed since I last looked" markers.**
+3. **A single "is anything on fire" signal.** Named as a gap alongside the other
    two and then quietly dropped from this list; it is back.
+
+Editing `[weather].location` from the panel sat at the top of this list and is
+built — `prompt.rs`, reached with `L`. The same prompt does the agenda file
+(`f`) and adding a world clock (`a`), which is why it is one module and not
+three bespoke dialogs.
 
 The `.ics` agenda that sat at the top of this list is built — `ical.rs` and
 `widgets/agenda.rs`.

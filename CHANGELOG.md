@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Arrange mode.** Press `m`, then move the focused panel with the arrows.
+  `←`/`→` swap it with its neighbour; `↑`/`↓` move it between rows, landing it
+  under wherever it already was rather than at the same index. Push it past the
+  top or bottom edge and it takes a row of its own — which is how you get a
+  fourth row without opening an editor — and the last panel out of a row closes
+  that row. The real panels move as you press, `Enter` keeps it and `Esc` puts
+  everything back. A panel keeps the width you gave it, and the row weights
+  always add up to what they added up to before.
+
+- **`Ctrl+arrow` resize is discoverable.** It has worked since long before this
+  and only ever appeared in the `?` overlay. It is in the status bar now, and
+  arrange mode's legend names it.
+
+- **Panels can ask for a setting.** The agenda takes an `.ics` path with `f`,
+  the weather takes a location with `L`, and the clock adds a zone with `a` and
+  removes one with `d`. `Tab` completes — filesystem paths for the agenda,
+  timezone names for the clock — as far as every candidate agrees. Each panel
+  checks what it can before accepting: the agenda stats the file, the clock
+  resolves the zone, and a refusal keeps what you typed so one wrong character
+  does not cost you the whole path.
+
+  Weather location was the oldest item on the open-work list.
+
+- **World clocks are a data file.** `zones.toml` beside your tasks, the same
+  arrangement as the watchlist and for the same reason: mirador never rewrites
+  your config, so a list kept there could only be changed in an editor.
+  `[clocks].zones` seeds your first run and is not read again.
+
+### Fixed
+
+- **A narrow panel no longer eats the bracket that closes its title.** At around
+  100 columns the frame drew `╭┤9 CPU┤18 cores├╮` — the title and the counter
+  are separate border segments and the title was being clipped, taking its `├`
+  with it, which reads as a broken frame rather than a narrow one. The title is
+  shortened instead, and below about 14 columns it is dropped rather than drawn
+  as an empty `┤├`.
+
+- **Reordering panels in the config actually works.** `layout_edit` matched
+  panels by name and had no concept of order, so moving a panel along its row
+  produced no edit at all and the safety check then refused a change that had
+  visibly happened on screen. It could not open or close rows either. It can do
+  all three now, and a moved panel takes the comments written above it along
+  rather than leaving them to caption whatever slid into its place.
+
 ## [0.8.0] - 2026-07-27
 
 ### Added
