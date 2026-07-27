@@ -3,9 +3,10 @@
 # Record docs/demo.gif.
 #
 # Drives a real mirador under tmux, captures the screen at a fixed rate, and
-# writes an asciicast that `agg` turns into a GIF. Nothing here is staged: the
-# tasks and the note are the ones mirador seeds on a first run, and the weather
-# and prices are whatever the network returned while it was recording.
+# writes an asciicast that `agg` turns into a GIF. The tasks and the note are
+# the ones mirador seeds on a first run, and the weather, prices and graphs are
+# whatever was true while it recorded. The one staged thing is the calendar —
+# see the note beside it below, and the README caption, which says so too.
 #
 # Requires tmux and agg:
 #
@@ -21,11 +22,14 @@ OUT="${1:-$ROOT/docs/demo.gif}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mirador-demo.XXXXXX")"
 SESSION="mirador-demo-$$"
 
-# Wide and tall enough for the clock to draw its block numerals: the panel
-# degrades to plain text when its row is short, and the numerals are the one
-# thing in mirador nobody else's dashboard looks like.
-COLS=150
-ROWS=42
+# Wide enough for ten panels to be themselves rather than to survive. mirador
+# degrades gracefully — the clock drops its block numerals in a short row, the
+# forecast sheds columns, the watchlist drops its sparkline — and a recording
+# made in a cramped terminal shows every one of those fallbacks instead of the
+# thing being demonstrated. High-resolution screens are ordinary now; this is
+# what the dashboard is for.
+COLS=200
+ROWS=50
 FPS=5
 CAST="$WORK/demo.cast"
 
@@ -45,7 +49,37 @@ BIN="$ROOT/target/release/mirador"
 export HOME="$WORK/home"
 mkdir -p "$HOME"
 
-tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" "$BIN"
+# The one thing here that *is* staged, and it is called out in the README
+# caption as well: a sample calendar. mirador seeds tasks and notes itself, but
+# it deliberately never invents a calendar — an empty one would be a lie about
+# your day — so a recording with nothing configured would show the agenda panel
+# explaining how to point it at a file. True, and a poor demonstration of what
+# the panel is for.
+#
+# Dates are relative to the day of the recording, so the GIF does not age into
+# showing a week in the past.
+CONFIG="$WORK/config.toml"
+CAL="$WORK/sample.ics"
+TODAY=$(date +%Y%m%d)
+IN_THREE=$(date -v+3d +%Y%m%d 2>/dev/null || date -d '+3 days' +%Y%m%d)
+{
+  echo "BEGIN:VCALENDAR"
+  echo "VERSION:2.0"
+  printf 'BEGIN:VEVENT\nDTSTART:%sT131500\nDTEND:%sT133000\nSUMMARY:Standup\nLOCATION:Zoom\nRRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\nEND:VEVENT\n' "$TODAY" "$TODAY"
+  printf 'BEGIN:VEVENT\nDTSTART:%sT160000\nDURATION:PT1H\nSUMMARY:Quarterly planning\nLOCATION:Room 12\nEND:VEVENT\n' "$TODAY"
+  printf 'BEGIN:VEVENT\nDTSTART;VALUE=DATE:%s\nSUMMARY:Public holiday\nEND:VEVENT\n' "$IN_THREE"
+  echo "END:VCALENDAR"
+} > "$CAL"
+
+"$BIN" --print-config > "$CONFIG"
+python3 - "$CONFIG" "$CAL" <<'CONFIGURE'
+import pathlib, sys
+config, calendar = pathlib.Path(sys.argv[1]), sys.argv[2]
+text = config.read_text().replace('# file        = "~/calendar.ics"', f'file        = "{calendar}"')
+config.write_text(text)
+CONFIGURE
+
+tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" "$BIN --config $CONFIG"
 
 # asciicast v2: a header line, then [absolute_time, "o", data] per frame.
 python3 - "$CAST" "$COLS" "$ROWS" <<'PY'
@@ -106,17 +140,33 @@ type_text() {
 # what the panel is for. This is real load, not a fake series — it spins up
 # during the settle so the history has a hump in it by the time recording
 # starts, and has decayed by the end.
-LOAD_PIDS=()
-for _ in 1 2 3 4 5 6; do
-  (end=$((SECONDS + 9)); while [ $SECONDS -lt $end ]; do :; done) &
-  LOAD_PIDS+=($!)
-done
-curl -s -o /dev/null https://github.com 2>/dev/null || true
+# Long enough for the graphs to have a past. `[cpu]` and `[network]` sample
+# every two seconds and pack two samples per cell, so a chart roughly 25 cells
+# wide needs about a hundred seconds before it is a shape rather than a stub —
+# and a dashboard whose graphs have just started looks like a dashboard that
+# has just crashed.
+#
+# The load is real and comes in bursts, so the trace has peaks and troughs
+# instead of a flat ceiling.
+SETTLE=105
+(
+  end=$((SECONDS + SETTLE))
+  while [ $SECONDS -lt $end ]; do
+    for _ in 1 2 3 4 5 6; do
+      (spin=$((SECONDS + 4)); while [ $SECONDS -lt $spin ]; do :; done) &
+    done
+    wait
+    # Something for the network graph to draw, and a gap so the trace dips.
+    curl -s -o /dev/null https://github.com 2>/dev/null || true
+    sleep 6
+  done
+) &
+LOAD_PID=$!
 
-# Let the panels settle: the weather and price fetches are on their own
-# threads, and an empty forecast is not what the dashboard looks like.
-sleep 11
-wait "${LOAD_PIDS[@]}" 2>/dev/null || true
+# The weather and price fetches are on their own threads, and an empty forecast
+# is not what the dashboard looks like either.
+sleep "$SETTLE"
+wait "$LOAD_PID" 2>/dev/null || true
 
 # The clock starts *after* the settle, so the recording opens on the dashboard
 # rather than on six seconds of empty terminal. A GIF is judged on its first

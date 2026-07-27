@@ -47,20 +47,21 @@ rows = [
     { widget = "weather",  width = 40 },
   ] },
   { height = 42, panels = [
-    { widget = "todo",     width = 36 },
-    # What is next, from [agenda].file. Shows how to point it at your .ics
+    { widget = "todo",     width = 40 },
+    # What is next, from [agenda].file. Says how to point it at your .ics
     # until you do.
-    { widget = "agenda",   width = 28 },
-    { widget = "notes",    width = 22 },
-    # The timer draws block numerals when it has the width for them and falls
-    # back to plain text when it does not, so a narrow terminal loses the
-    # spectacle rather than the time.
-    { widget = "pomodoro", width = 14 },
+    { widget = "agenda",   width = 32 },
+    { widget = "notes",    width = 28 },
   ] },
   { height = 24, panels = [
-    { widget = "stocks",  width = 40 },
-    { widget = "cpu",     width = 30 },
-    { widget = "network", width = 30 },
+    # The timer draws block numerals when it has the width for them and falls
+    # back to plain text when it does not. It leads this row because it is the
+    # one panel here with a width it genuinely needs; the graphs beside it
+    # scale to whatever is left.
+    { widget = "pomodoro", width = 28 },
+    { widget = "stocks",   width = 32 },
+    { widget = "cpu",      width = 18 },
+    { widget = "network",  width = 22 },
   ] },
 ]
 

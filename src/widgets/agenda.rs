@@ -48,12 +48,26 @@ const BINDINGS: &[Binding] = &[
 /// and a location beside it.
 const USEFUL_WIDTH: u16 = 52;
 
+/// Why the panel has no events.
+///
+/// Separated because the two want opposite treatments. A panel nobody has
+/// pointed at a file is not broken — it is a panel nobody has set up, the same
+/// standing as an empty task list — and painting it red teaches the reader to
+/// ignore red.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Trouble {
+    /// `[agenda].file` names nothing that exists.
+    NoFile,
+    /// The file is there and reading it went wrong.
+    Unreadable(String),
+}
+
 /// What the reader thread has produced.
 #[derive(Debug, Default)]
 struct State {
     events: Vec<ical::Event>,
-    /// Why the last read failed, if it did.
-    error: Option<String>,
+    /// Why there is nothing to show, if there is nothing to show.
+    error: Option<Trouble>,
     /// Lines the parser could not make sense of, so a half-read calendar says
     /// so rather than looking merely empty.
     skipped: usize,
@@ -257,18 +271,27 @@ fn read_loop(
                         built_for: Some(today),
                     }
                 }
-                // Kept as text rather than a typed error: the message the OS
-                // gives ("No such file or directory") is the one that tells
-                // the user what to do.
+                // A missing file is the unconfigured case, not a failure.
+                // Anything else — a permission problem, a directory where a
+                // file should be — keeps the message the OS gave, which is the
+                // one that says what to do about it.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => State {
+                    error: Some(Trouble::NoFile),
+                    read_at: Some(Instant::now()),
+                    built_for: Some(today),
+                    ..State::default()
+                },
                 Err(e) => State {
-                    error: Some(format!("{e}")),
+                    error: Some(Trouble::Unreadable(format!("{e}"))),
                     read_at: Some(Instant::now()),
                     built_for: Some(today),
                     ..State::default()
                 },
             },
             _ => State {
-                error: Some("could not work out today's date".into()),
+                error: Some(Trouble::Unreadable(
+                    "could not work out today's date".into(),
+                )),
                 read_at: Some(Instant::now()),
                 built_for: Some(today),
                 ..State::default()
@@ -298,8 +321,10 @@ impl Panel for AgendaPanel {
 
     fn counter(&self) -> Option<String> {
         let state = self.snapshot();
-        if state.error.is_some() {
-            return Some("no file".into());
+        match state.error {
+            Some(Trouble::NoFile) => return Some("not set up".into()),
+            Some(Trouble::Unreadable(_)) => return Some("unreadable".into()),
+            None => {}
         }
         let today = state.built_for?;
         let n = state
@@ -432,33 +457,52 @@ impl AgendaPanel {
         now: &Zoned,
         theme: &crate::theme::Theme,
     ) {
-        if let Some(error) = &state.error {
-            let age = state.read_at.map(|at| describe_age(at.elapsed()));
-            let mut lines = vec![
-                Line::from(TextSpan::styled(
-                    "No calendar to read",
-                    Style::default()
-                        .fg(theme.error)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(TextSpan::styled(
-                    error.clone(),
-                    Style::default().fg(theme.muted),
-                )),
-                Line::from(""),
-                Line::from(TextSpan::styled(
-                    format!("Looking for {}", self.path.display()),
-                    Style::default().fg(theme.muted),
-                )),
-                Line::from(TextSpan::styled(
-                    "Point [agenda].file at an .ics you already have.",
-                    Style::default().fg(theme.muted),
-                )),
-            ];
-            if let Some(age) = age {
+        if let Some(trouble) = &state.error {
+            let muted = Style::default().fg(theme.muted);
+            let mut lines = match trouble {
+                // Not an error, and not red. This is a panel nobody has set up
+                // yet, which is an ordinary state — the same standing as an
+                // empty task list.
+                Trouble::NoFile => vec![
+                    Line::from(TextSpan::styled(
+                        "No agenda file",
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(TextSpan::styled("Nothing to show.", muted)),
+                    Line::from(""),
+                    Line::from(TextSpan::styled(
+                        "Set [agenda].file to an .ics you already",
+                        muted,
+                    )),
+                    Line::from(TextSpan::styled(
+                        "have — an export, or whatever your",
+                        muted,
+                    )),
+                    Line::from(TextSpan::styled("calendar syncs to.", muted)),
+                    Line::from(""),
+                    Line::from(TextSpan::styled(
+                        format!("Looked in {}", self.path.display()),
+                        muted,
+                    )),
+                ],
+                // This one *is* a fault: the file is there and something went
+                // wrong reading it.
+                Trouble::Unreadable(why) => vec![
+                    Line::from(TextSpan::styled(
+                        "Cannot read the agenda file",
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(TextSpan::styled(why.clone(), muted)),
+                    Line::from(""),
+                    Line::from(TextSpan::styled(self.path.display().to_string(), muted)),
+                ],
+            };
+            if let Some(age) = state.read_at.map(|at| describe_age(at.elapsed())) {
                 lines.push(Line::from(TextSpan::styled(
                     format!("checked {age}"),
-                    Style::default().fg(theme.muted),
+                    muted,
                 )));
             }
             frame.render_widget(Paragraph::new(lines), area);
