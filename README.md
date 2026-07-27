@@ -16,22 +16,20 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![The mirador dashboard: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, a running pomodoro timer, and a market watchlist beside live CPU and network graphs](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/screenshot.png)
+![All nine mirador panels on a wide terminal, in use: a block-numeral clock, four months of calendar, weather with an hourly forecast, the task list and notes, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
-*All nine panels on a wide terminal, on a first run — the tasks and the note
-are the examples mirador seeds for you. The pomodoro panel has focus, which is
-why its frame is lit and its key hints are in its bottom border; every other
-panel is dimmed. Every screen in this README is a real capture, not a mock-up.*
-
-![A recording of mirador in use: focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and a pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+*All nine panels on a wide terminal, on a first run — the tasks and the note are
+the examples mirador seeds for you. The lit frame is the focused panel, with its
+own keys in its bottom border; every other panel is dimmed, so exactly one thing
+is at full brightness.*
 
 *Thirty seconds of it in use, at 150x42. Focus moves with `Tab`; a task is typed
 in and lands in the list, which goes from four open to five. `w` opens the panel
 picker, switches one off, and the grid closes over the gap; `?` lists every
 binding for the focused panel and scrolls when there are more than fit. The
 weather, the prices and the graphs are whatever was true while it recorded —
-`docs/record-demo.sh` drives a real build under tmux and nothing in it is
-staged.*
+`docs/record-demo.sh` drives a real build under tmux, and nothing in this README
+is staged or a mock-up.*
 
 ## Why
 
@@ -427,7 +425,7 @@ changes, not merely because time passed.
 > These two panels are the one thing this README will not show you in a code
 > block. Braille is missing from several of the fonts GitHub falls back to, so
 > the glyphs render at a width the surrounding box characters do not share and
-> the panel tears itself apart. The screenshot at the top of this file shows
+> the panel tears itself apart. The recording at the top of this file shows
 > them as they actually look. It is a real terminal, which is the only place
 > the alignment is guaranteed.
 
