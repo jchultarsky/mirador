@@ -5,7 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-07-27
+
+### Added
+
+- **The version is shown in the `?` overlay**, right-aligned in its border the
+  way every panel shows a counter. `?` is where you go to find out what the
+  thing does, so it is where you look for what version it is.
+
+- The command-line `--help` now leads with the version, and lists `w`, `m` and
+  `Ctrl+arrows`, which it had never been told about.
 
 ### Changed
 
@@ -27,19 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scrolled fragment through about forty columns. Prompts are drawn by the shell
   over the whole terminal now, after every panel — which is also what stopped
   the new city list coming out interleaved with the task list.
-
-## [Unreleased]
-
-### Added
-
-- **The version is shown in the `?` overlay**, right-aligned in its border the
-  way every panel shows a counter. `?` is where you go to find out what the
-  thing does, so it is where you look for what version it is.
-
-- The command-line `--help` now leads with the version, and lists `w`, `m` and
-  `Ctrl+arrows`, which it had never been told about.
-
-### Fixed
 
 - **The city list scrolls.** It draws ten rows, and moving the selection past
   the bottom kept moving a cursor nobody could see — the highlight vanished and
@@ -847,7 +843,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/jchultarsky/mirador/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jchultarsky/mirador/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/jchultarsky/mirador/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/jchultarsky/mirador/compare/v0.9.0...v0.9.1
