@@ -57,19 +57,49 @@ much they could cost someone.
 - Panel rectangles are indexed consistently, so a layout entry that builds no
   panel cannot shift every later panel onto its neighbour's rectangle — which is
   what mouse clicks are matched against.
+- **A wide terminal no longer parks the whole row on one panel.** Past the point
+  where a row's panels have all reached their useful maximum, the surplus was
+  handed to whichever panel happened to be uncapped last. At 400 columns that
+  gave the clock 302 of them — about 145 of which were blank, since its numerals
+  stop growing at 158 — while the weather panel beside it sat at 51. The excess
+  is now shared across the row.
+- **The network panel's `SESSION` totals are the session.** They were the
+  machine's since-boot counters, so on a laptop up three weeks the panel read
+  128 GB within a minute of launch.
+- **Holding `r` on the watchlist can no longer outrun the one-minute floor.**
+  The limit was applied to the polling interval, and `r` bypassed the wait
+  entirely — 8 requests in 2 seconds against a source that blocks by IP address.
+- An absurd `refresh_minutes` or `refresh_secs` is rejected instead of wrapping
+  into a tight loop against a free API.
+- Panel width changes made with `Ctrl+arrow` are saved shortly after you stop,
+  rather than only on a clean exit — closing the terminal window used to lose
+  them.
+
+### Changed
+
+- **mirador redraws when something changes, rather than when a timer fires.**
+  Measured on the default layout at 400x100: **243 redraws a minute before, 62
+  after** — and before, the number was the same whether `show_seconds` was on or
+  off, so turning seconds off changed what was on screen and not what the
+  program ran. Battery life on a dashboard you leave open all day is the point.
+- Every file mirador writes — including your config — now goes through one
+  atomic write that flushes to the disk before replacing the original. The
+  config was previously overwritten in place.
+- The README leads with what mirador is for rather than with a feature
+  comparison, and says plainly what using Yahoo's undocumented chart endpoint
+  does and does not mean for you.
 
 ### Security
 
-- **Every release artifact now carries a GitHub build provenance attestation**,
-  so a download can be proved to have come from this repository's workflow:
-  `gh attestation verify --repo jchultarsky/mirador <file>`.
-- **Documented what the one-line installers actually verify**, which is less
-  than the README claimed: the shell installer checks the archive's sha256, the
-  PowerShell installer checks nothing, and neither checks the updater binary.
-  See [SECURITY.md](SECURITY.md#verifying-a-download).
-- Private vulnerability reporting is enabled, which the security policy already
-  pointed people at. `main` now requires the full CI suite to pass and refuses
-  force-pushes and deletion.
+- Release artifacts carry GitHub build provenance attestations, and the shipped
+  binaries embed their dependency list so `cargo audit bin` can check them.
+- `main` requires all eight CI jobs, including Windows and a `cargo-deny` supply
+  chain check. CI actions are pinned by commit rather than by tag.
+- Documented honestly what the one-line installers verify — the shell one checks
+  the archive's sha256, the PowerShell one checks nothing, and neither checks
+  the updater. See [SECURITY.md](SECURITY.md#verifying-a-download).
+- Private vulnerability reporting is enabled, which the security policy had been
+  pointing people at while it was switched off.
 
 ## [0.4.0] - 2026-07-26
 
