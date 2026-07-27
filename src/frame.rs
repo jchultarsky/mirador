@@ -162,6 +162,27 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
         theme.border
     });
 
+    // The title and the counter are two separate `title_top` calls, one
+    // left-aligned and one right. When they collide ratatui clips the
+    // left-aligned one, and what it clips off is the closing `├` — so
+    // `╭┤9 CPU├───┤18 cores├╮` degrades to `╭┤9 CPU┤18 cores├╮`, which reads as
+    // a broken frame rather than a narrow one. Budget for the counter and
+    // shorten the title's *text* instead, which is the part that can afford it.
+    let available = usize::from(area.width).saturating_sub(2);
+    let wanted = spec
+        .counter
+        .as_ref()
+        .map_or(0, |counter| crate::grid::display_width(counter) + 2);
+    // A counter with no room even on its own is dropped rather than drawn
+    // across the corner.
+    let counter_width = if wanted <= available { wanted } else { 0 };
+
+    let index_width = usize::from(spec.index <= 9) * 2;
+    // The title's own `┤` and `├`, plus one `─` so the two segments never sit
+    // flush against each other.
+    let title_budget = available.saturating_sub(counter_width + index_width + 3);
+    let title = crate::grid::truncate(spec.title, title_budget);
+
     // The jump key rides in the title, so panel switching is discoverable
     // without spending a legend row on it.
     let mut title_spans = vec![Span::styled("┤", border_style)];
@@ -175,7 +196,7 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
         title_spans.push(Span::styled(" ", border_style));
     }
     title_spans.push(Span::styled(
-        spec.title.to_string(),
+        title,
         if spec.focused {
             Style::default()
                 .fg(theme.title)
@@ -190,10 +211,16 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(border_style)
-        .padding(Padding::horizontal(1))
-        .title_top(Line::from(title_spans));
+        .padding(Padding::horizontal(1));
 
-    if let Some(counter) = &spec.counter {
+    // A panel too narrow for even one character of its name goes without one.
+    // An empty `┤├` is not a smaller title, it is a mark on the border that
+    // means nothing.
+    if title_budget > 0 {
+        block = block.title_top(Line::from(title_spans));
+    }
+
+    if let Some(counter) = spec.counter.as_ref().filter(|_| counter_width > 0) {
         // Right-aligned in the top border, the way a list's "N of M" sits in
         // btop and lazygit — status without a row of its own.
         block = block.title_top(
@@ -264,6 +291,60 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    /// The top border of a panel, as drawn.
+    fn top_border(width: u16, title: &str, counter: Option<&str>) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("backend");
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    Rect::new(0, 0, width, 3),
+                    &Theme::default(),
+                    &FrameSpec {
+                        title,
+                        counter: counter.map(str::to_string),
+                        focused: false,
+                        bindings: &[],
+                        index: 9,
+                    },
+                );
+            })
+            .expect("draws");
+        let buffer = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>()
+    }
+
+    /// A narrow panel used to render `╭┤9 CPU┤18 cores├╮`: the title and the
+    /// counter are separate `title_top` calls, and ratatui clipped the
+    /// left-aligned one, eating the `├` that closes it. Every other segment on
+    /// every other border has both brackets, so one that does not reads as a
+    /// broken frame rather than a narrow one.
+    #[test]
+    fn a_title_too_wide_for_its_border_is_shortened_not_left_unclosed() {
+        for width in 12..40u16 {
+            let border = top_border(width, "Weather — Boston, Massachusetts", Some("at 03:45"));
+            assert_eq!(
+                border.matches('├').count(),
+                border.matches('┤').count(),
+                "every segment opens and closes, at width {width}: {border}"
+            );
+        }
+    }
+
+    /// The whole border still has to fit, and a title long enough to push the
+    /// counter off the end would be the same bug wearing a different hat.
+    #[test]
+    fn the_counter_survives_a_title_that_wants_the_whole_border() {
+        let border = top_border(30, "An Extremely Long Panel Name Indeed", Some("12 open"));
+        assert!(
+            border.contains("12 open"),
+            "the counter is not squeezed out: {border}"
+        );
+        assert!(border.contains('…'), "the title says it was cut: {border}");
+    }
 
     fn bindings() -> Vec<Binding> {
         vec![

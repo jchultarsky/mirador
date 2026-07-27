@@ -7,9 +7,24 @@
 //! nobody is looking at.
 //!
 //! Rewriting is **textual**, for the reason [`crate::migrate`] gives at length
-//! and does not need repeating here. Lines are edited, inserted and deleted in
-//! place; everything else — spacing, ordering, comments, even a comment
-//! *inside* the layout block — is left exactly as the user left it.
+//! and does not need repeating here. Everything else — spacing, ordering,
+//! comments, even a comment *inside* the layout block — is left exactly as the
+//! user left it.
+//!
+//! There are two ways that happens, and which one runs matters. When only the
+//! numbers moved — the common case, every `Ctrl+arrow` — the digits are
+//! replaced on their own line and nothing else is touched, so a block someone
+//! aligned by hand stays aligned. When the *structure* moved, no per-line edit
+//! can say it: a panel changing places with its neighbour leaves both still
+//! present with the same widths, and the old version of this module emitted
+//! nothing at all for it. So a row whose membership or order changed has its
+//! panels rebuilt from their captured entries instead.
+//!
+//! An entry is a panel's line *plus the comment lines directly above it*, and
+//! entries are looked up across the whole block rather than within one row.
+//! That is what lets a panel dragged to the other side of the dashboard take
+//! the sentence explaining it along, instead of leaving it behind to caption
+//! whatever moved into its place.
 //!
 //! The safety property that makes this defensible is at the bottom of
 //! [`apply`]: the edited text is parsed before it is returned, and the layout it
@@ -18,9 +33,11 @@
 //! the failure mode of an unusual config is "your change did not stick",
 //! reported, rather than "your config is now broken".
 
+use std::collections::HashMap;
+
 use anyhow::{Result, bail};
 
-use crate::config::{Config, Layout};
+use crate::config::{Config, Layout, LayoutRow};
 
 /// Rewrite the `[layout]` block of `source` so it describes `desired`.
 ///
@@ -40,67 +57,105 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
         );
     }
 
+    // Every panel's entry, keyed by widget and found across the whole block
+    // rather than within one row. That is what lets a panel moved to another
+    // row — or to a row that did not exist a moment ago — take the comments
+    // written above it along with it.
+    let blocks = panel_blocks(&lines, &map);
+    let pairing = pair_rows(&map, desired);
+
     // Work back to front so an insertion or deletion cannot shift the line
     // numbers of an edit that has not happened yet.
     let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
     let mut edits: Vec<Edit> = Vec::new();
 
-    for (row_index, row) in map.rows.iter().enumerate() {
-        let Some(want_row) = desired.rows.get(row_index) else {
-            // The row is gone entirely. Deleting a whole row textually means
-            // removing its opening and closing lines too, which is beyond what
-            // this does; the caller keeps the row and empties it instead.
-            bail!("removing a whole layout row is not supported");
-        };
-
-        if current.layout.rows[row_index].height != want_row.height {
-            edits.push(Edit::Number {
-                line: row.header_line,
-                key: "height",
-                value: want_row.height,
+    // Rows nothing in the new layout claimed. Their panels have already been
+    // captured, so anything that survived is being written somewhere else.
+    for (text_index, row) in map.rows.iter().enumerate() {
+        if !pairing.contains(&Some(text_index)) {
+            edits.push(Edit::Replace {
+                from: row.header_line,
+                to: row.closing_line + 1,
+                text: Vec::new(),
             });
-        }
-
-        for panel in &row.panels {
-            match want_row
-                .panels
-                .iter()
-                .find(|wanted| wanted.widget == panel.widget)
-            {
-                Some(wanted) if wanted.width != panel.width => edits.push(Edit::Number {
-                    line: panel.line,
-                    key: "width",
-                    value: wanted.width,
-                }),
-                Some(_) => {}
-                None => edits.push(Edit::Delete { line: panel.line }),
-            }
-        }
-
-        for wanted in &want_row.panels {
-            if !row.panels.iter().any(|p| p.widget == wanted.widget) {
-                let after = row.panels.last().map_or(row.header_line, |p| p.line);
-                edits.push(Edit::Insert {
-                    after,
-                    text: panel_line(&lines, after, &wanted.widget, wanted.width),
-                });
-            }
         }
     }
 
-    // Deletions and insertions both key off original line numbers, so applying
-    // from the bottom up keeps every unapplied edit's index valid.
+    for (want_index, want) in desired.rows.iter().enumerate() {
+        let Some(text_index) = pairing[want_index] else {
+            // A row that has no counterpart in the text: write a whole new
+            // block, anchored after the last row that does have one so the
+            // rows come out in the order the layout asks for.
+            let after = (0..want_index)
+                .rev()
+                .filter_map(|earlier| pairing[earlier])
+                .map(|text| map.rows[text].closing_line + 1)
+                .next()
+                .unwrap_or(map.rows[0].header_line);
+            edits.push(Edit::Replace {
+                from: after,
+                to: after,
+                text: row_block(&lines, &map, &blocks, want),
+            });
+            continue;
+        };
+
+        let row = &map.rows[text_index];
+
+        if current.layout.rows[text_index].height != want.height {
+            edits.push(Edit::Number {
+                line: row.header_line,
+                key: "height",
+                value: want.height,
+            });
+        }
+
+        // The cheap path, and the common one: the same panels in the same
+        // order, so only the numbers moved. Editing those in place keeps a
+        // hand-aligned block aligned, which rebuilding the row would not.
+        let unchanged_order = row
+            .panels
+            .iter()
+            .map(|panel| panel.widget.as_str())
+            .eq(want.panels.iter().map(|panel| panel.widget.as_str()));
+
+        if unchanged_order {
+            for (panel, wanted) in row.panels.iter().zip(&want.panels) {
+                if panel.width != wanted.width {
+                    edits.push(Edit::Number {
+                        line: panel.line,
+                        key: "width",
+                        value: wanted.width,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // The order or the membership changed, which no per-line edit can
+        // express: rebuild the row's panels from their captured entries.
+        let (from, to) = match (row.panels.first(), row.panels.last()) {
+            (Some(first), Some(last)) => (first.from, last.line + 1),
+            _ => (row.header_line + 1, row.header_line + 1),
+        };
+        let template = row.panels.first().map_or(row.header_line, |p| p.line);
+        edits.push(Edit::Replace {
+            from,
+            to,
+            text: panel_lines(&lines, &blocks, want, template),
+        });
+    }
+
+    // Every edit keys off original line numbers, so applying from the bottom
+    // up keeps every unapplied edit's index valid.
     edits.sort_by_key(Edit::anchor);
     for edit in edits.iter().rev() {
         match edit {
             Edit::Number { line, key, value } => {
                 out[*line] = set_number(&out[*line], key, *value);
             }
-            Edit::Delete { line } => {
-                out.remove(*line);
-            }
-            Edit::Insert { after, text } => {
-                out.insert(after + 1, text.clone());
+            Edit::Replace { from, to, text } => {
+                out.splice(*from..*to, text.iter().cloned());
             }
         }
     }
@@ -139,25 +194,26 @@ fn shape(layout: &Layout) -> Vec<(u16, Vec<(String, u16)>)> {
 }
 
 enum Edit {
+    /// Change a number in place, leaving the rest of the line alone.
     Number {
         line: usize,
         key: &'static str,
         value: u16,
     },
-    Delete {
-        line: usize,
-    },
-    Insert {
-        after: usize,
-        text: String,
+    /// Swap `from..to` for `text`. An empty `text` deletes the span, and an
+    /// empty span inserts without removing anything.
+    Replace {
+        from: usize,
+        to: usize,
+        text: Vec<String>,
     },
 }
 
 impl Edit {
     fn anchor(&self) -> usize {
         match self {
-            Self::Number { line, .. } | Self::Delete { line } => *line,
-            Self::Insert { after, .. } => *after,
+            Self::Number { line, .. } => *line,
+            Self::Replace { from, .. } => *from,
         }
     }
 }
@@ -165,6 +221,11 @@ impl Edit {
 struct PanelSite {
     widget: String,
     width: u16,
+    /// Where this panel's entry starts: its own line, or the first of the
+    /// comment lines written directly above it. Those comments describe the
+    /// panel, so they belong to it and travel with it.
+    from: usize,
+    /// The line carrying `widget = "…"`.
     line: usize,
 }
 
@@ -172,7 +233,122 @@ struct RowSite {
     /// The line carrying `height = …`, which is also where a row with no panels
     /// gets its first one inserted after.
     header_line: usize,
+    /// The line carrying the row's closing `] },`.
+    closing_line: usize,
     panels: Vec<PanelSite>,
+}
+
+/// One panel's entry, lifted out of the text so it can be written back
+/// somewhere else.
+struct PanelBlock {
+    /// The comment lines above the panel, then the panel's own line last.
+    lines: Vec<String>,
+}
+
+/// Every panel's entry, keyed by widget.
+fn panel_blocks(lines: &[&str], map: &LayoutMap) -> HashMap<String, PanelBlock> {
+    let mut blocks = HashMap::new();
+    for row in &map.rows {
+        for panel in &row.panels {
+            blocks.insert(
+                panel.widget.clone(),
+                PanelBlock {
+                    lines: lines[panel.from..=panel.line]
+                        .iter()
+                        .map(|line| (*line).to_string())
+                        .collect(),
+                },
+            );
+        }
+    }
+    blocks
+}
+
+/// Work out which row in the text each row of the new layout came from.
+///
+/// A row has no name to match on, so the match is by content: each row in the
+/// file goes to whichever new row kept most of its panels. A new row that
+/// claims nothing is one the user has just created, and a row in the file that
+/// nothing claims is one they have just emptied.
+///
+/// Nothing here enforces that the pairing comes out in order. It does not need
+/// to: a pairing that crosses over produces a file whose rows are in the wrong
+/// order, and the check at the end of [`apply`] throws that away rather than
+/// writing it.
+fn pair_rows(map: &LayoutMap, desired: &Layout) -> Vec<Option<usize>> {
+    let kept = |row: &RowSite, want: &LayoutRow| {
+        row.panels
+            .iter()
+            .filter(|panel| want.panels.iter().any(|w| w.widget == panel.widget))
+            .count()
+    };
+
+    let mut pairing = vec![None; desired.rows.len()];
+    for (text_index, row) in map.rows.iter().enumerate() {
+        let claimant = desired
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(want_index, _)| pairing[*want_index].is_none())
+            .map(|(want_index, want)| (kept(row, want), want_index))
+            .filter(|(shared, _)| *shared > 0)
+            // Most panels kept wins; the earliest row breaks a tie, so a split
+            // row leaves its panels where they were and moves the rest.
+            .max_by_key(|(shared, want_index)| (*shared, std::cmp::Reverse(*want_index)));
+        if let Some((_, want_index)) = claimant {
+            pairing[want_index] = Some(text_index);
+        }
+    }
+    pairing
+}
+
+/// The panel entries of `want`, in order, reusing each panel's captured lines.
+fn panel_lines(
+    lines: &[&str],
+    blocks: &HashMap<String, PanelBlock>,
+    want: &LayoutRow,
+    template: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for panel in &want.panels {
+        match blocks.get(&panel.widget) {
+            Some(block) => {
+                let last = block.lines.len().saturating_sub(1);
+                for (offset, text) in block.lines.iter().enumerate() {
+                    if offset == last {
+                        out.push(set_number(text, "width", panel.width));
+                    } else {
+                        out.push(text.clone());
+                    }
+                }
+            }
+            None => out.push(panel_line(lines, template, &panel.widget, panel.width)),
+        }
+    }
+    out
+}
+
+/// A whole new row block, indented to match the rows already in the file.
+fn row_block(
+    lines: &[&str],
+    map: &LayoutMap,
+    blocks: &HashMap<String, PanelBlock>,
+    want: &LayoutRow,
+) -> Vec<String> {
+    let model = &map.rows[0];
+    let indent: String = lines
+        .get(model.header_line)
+        .copied()
+        .unwrap_or("")
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let template = model.panels.first().map_or(model.header_line, |p| p.line);
+
+    let mut out = vec![format!("{indent}{{ height = {}, panels = [", want.height)];
+    out.extend(panel_lines(lines, blocks, want, template));
+    out.push(format!("{indent}] }},"));
+    out
 }
 
 struct LayoutMap {
@@ -205,6 +381,10 @@ fn map_layout(lines: &[&str]) -> Result<LayoutMap> {
         if line.contains("panels") && line.contains('[') {
             rows.push(RowSite {
                 header_line: index,
+                // Corrected when the closing line is reached. A row whose block
+                // never closes keeps its header here, which produces a span
+                // that changes nothing rather than one that eats the file.
+                closing_line: index,
                 panels: Vec::new(),
             });
         }
@@ -212,11 +392,27 @@ fn map_layout(lines: &[&str]) -> Result<LayoutMap> {
             && let Some(width) = number_value(line, "width")
             && let Some(row) = rows.last_mut()
         {
+            // Walk up through the comment lines directly above, without ever
+            // crossing the row header — those comments describe this panel.
+            let mut from = index;
+            while from > row.header_line + 1 && lines[from - 1].trim().starts_with('#') {
+                from -= 1;
+            }
             row.panels.push(PanelSite {
                 widget,
                 width,
+                from,
                 line: index,
             });
+        }
+        // The first `]` after the header closes the row. Later ones close the
+        // `rows = [` array itself — claiming those would have the last row
+        // swallow the bracket that ends the whole block.
+        if trimmed.starts_with(']')
+            && let Some(row) = rows.last_mut()
+            && row.closing_line == row.header_line
+        {
+            row.closing_line = index;
         }
     }
 
@@ -375,6 +571,123 @@ units = "imperial"
         assert_eq!(layout_of(&out).rows[1].panels[0].width, 60);
     }
 
+    /// Reordering within a row is the plainest thing arrange mode does, and no
+    /// per-line edit can say it: the old code matched panels by name, found
+    /// both still present, emitted nothing, and the round-trip check refused a
+    /// change the user had watched happen on screen.
+    #[test]
+    fn a_panel_moved_along_its_row_takes_its_comment_with_it() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows[0].panels.swap(0, 1);
+        let out = apply(SAMPLE, &desired).unwrap();
+
+        let calendar = out.find(r#""calendar""#).expect("calendar is still placed");
+        let clocks = out.find(r#""clocks""#).expect("clocks is still placed");
+        assert!(calendar < clocks, "calendar should now come first:\n{out}");
+
+        // The comment describes the calendar, so it has to travel with it
+        // rather than staying behind to caption whatever moved into its place.
+        let comment = out
+            .find("# Wide enough for two months side by side.")
+            .expect("the comment survives");
+        assert!(
+            comment < calendar && clocks < comment.max(calendar) + out.len(),
+            "the comment should sit directly above calendar:\n{out}"
+        );
+        assert_eq!(shape(&layout_of(&out)), shape(&desired));
+    }
+
+    /// Pushing a panel past the edge of the dashboard gives it a row of its
+    /// own. Writing that means inventing a whole block, which the old code had
+    /// no way to do — it only ever iterated rows the text already had.
+    #[test]
+    fn a_new_row_can_be_written_between_two_that_exist() {
+        let mut desired = layout_of(SAMPLE);
+        let calendar = desired.rows[0].panels.remove(1);
+        desired.rows.insert(
+            1,
+            LayoutRow {
+                height: 20,
+                panels: vec![calendar],
+            },
+        );
+
+        let out = apply(SAMPLE, &desired).unwrap();
+        let written = layout_of(&out);
+
+        assert_eq!(written.rows.len(), 3, "a row was added:\n{out}");
+        assert_eq!(written.rows[1].panels[0].widget, "calendar");
+        assert_eq!(written.rows[1].height, 20);
+        assert!(
+            out.contains("# Wide enough for two months side by side."),
+            "the comment follows the panel into its new row:\n{out}"
+        );
+        assert_eq!(shape(&written), shape(&desired));
+    }
+
+    /// The other half of the same gesture: the last panel out of a row closes
+    /// it. The old code refused this outright, in as many words.
+    #[test]
+    fn the_row_a_panel_leaves_empty_is_closed() {
+        let mut desired = layout_of(SAMPLE);
+        let notes = desired.rows[1].panels.remove(1);
+        let todo = desired.rows[1].panels.remove(0);
+        desired.rows.remove(1);
+        desired.rows[0].panels.push(todo);
+        desired.rows[0].panels.push(notes);
+
+        let out = apply(SAMPLE, &desired).unwrap();
+        let written = layout_of(&out);
+
+        assert_eq!(written.rows.len(), 1, "the emptied row is gone:\n{out}");
+        assert_eq!(written.rows[0].panels.len(), 4);
+        // The bracket that closes `rows = [` is not the row's own, and eating
+        // it leaves a file that does not parse.
+        assert!(out.contains("\n]\n"), "the rows array still closes:\n{out}");
+        assert!(out.contains(r#"units = "imperial""#), "the rest survives");
+        assert_eq!(shape(&written), shape(&desired));
+    }
+
+    /// A panel moving between rows is the one structural change the old code
+    /// could already express. It has to keep working, and it has to keep the
+    /// comment now that comments are looked up across the whole block.
+    #[test]
+    fn a_panel_moved_to_another_row_keeps_its_comment() {
+        let mut desired = layout_of(SAMPLE);
+        let calendar = desired.rows[0].panels.remove(1);
+        desired.rows[1].panels.insert(0, calendar);
+
+        let out = apply(SAMPLE, &desired).unwrap();
+        let written = layout_of(&out);
+
+        assert_eq!(written.rows[0].panels.len(), 1);
+        assert_eq!(written.rows[1].panels[0].widget, "calendar");
+        assert!(
+            out.contains("# Wide enough for two months side by side."),
+            "the comment moved rows with the panel:\n{out}"
+        );
+        assert_eq!(shape(&written), shape(&desired));
+    }
+
+    /// Resizing must stay a one-number edit. Rebuilding the row would work and
+    /// would quietly reflow a block the user had aligned by hand, on every
+    /// `Ctrl+arrow` repeat.
+    #[test]
+    fn a_resize_still_rewrites_nothing_but_the_number() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows[0].panels[0].width = 30;
+        let out = apply(SAMPLE, &desired).unwrap();
+
+        let before: Vec<&str> = SAMPLE.lines().collect();
+        let after: Vec<&str> = out.lines().collect();
+        assert_eq!(before.len(), after.len(), "no line was added or removed");
+        let changed: Vec<usize> = (0..before.len())
+            .filter(|i| before[*i] != after[*i])
+            .collect();
+        assert_eq!(changed.len(), 1, "exactly one line moved:\n{out}");
+        assert!(after[changed[0]].contains("width = 30"));
+    }
+
     #[test]
     fn a_height_change_edits_the_row_header() {
         let mut desired = layout_of(SAMPLE);
@@ -491,7 +804,7 @@ units = "imperial"
     /// `CLAUDE.md` has to move with it.
     #[test]
     fn the_comment_count_the_docs_quote_is_the_one_in_the_file() {
-        const CITED: usize = 207;
+        const CITED: usize = 214;
         let actual = crate::config::DEFAULT_CONFIG
             .lines()
             .filter(|line| line.trim_start().starts_with('#'))

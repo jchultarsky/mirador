@@ -36,6 +36,7 @@ use crate::ical;
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 
 const BINDINGS: &[Binding] = &[
+    Binding::primary("f", "file"),
     Binding::primary("r", "reload"),
     Binding::extra("↑ / ↓", "scroll"),
     Binding::extra("j / k", "scroll"),
@@ -86,12 +87,17 @@ pub struct AgendaPanel {
     generation: Arc<AtomicU64>,
     seen: u64,
     stop: Arc<AtomicBool>,
-    path: PathBuf,
+    /// Shared with the reader thread, which re-reads it every cycle, so
+    /// pointing the panel at a different calendar is a swap here and a reload
+    /// rather than tearing the thread down and starting another.
+    path: Arc<Mutex<PathBuf>>,
     days: u16,
     show_location: bool,
     scroll: ListState,
     status: Option<String>,
     list_area: Option<Rect>,
+    /// The `f` dialog, while it is open.
+    asking: Option<crate::prompt::Prompt>,
 }
 
 impl Drop for AgendaPanel {
@@ -121,7 +127,8 @@ impl AgendaPanel {
             Arc::clone(&stop),
             Arc::clone(&generation),
         );
-        let thread_path = path.clone();
+        let path = Arc::new(Mutex::new(path));
+        let thread_path = Arc::clone(&path);
         std::thread::Builder::new()
             .name("mirador-agenda".into())
             .spawn(move || {
@@ -150,7 +157,48 @@ impl AgendaPanel {
             scroll: ListState::default(),
             status: None,
             list_area: None,
+            asking: None,
         }
+    }
+
+    /// Deal with a keypress while the file prompt is open.
+    ///
+    /// The answer is checked before it is taken. A path that cannot be read is
+    /// almost always a typo, and accepting it would replace a working calendar
+    /// with an error message and no way back to what was there — so the prompt
+    /// stays open with the text in it and says what went wrong.
+    ///
+    /// An empty answer is allowed through, and means "no calendar": that is how
+    /// you undo this without having to remember the path you started with.
+    fn handle_prompt_key(&mut self, key: KeyEvent) {
+        let Some(prompt) = self.asking.as_mut() else {
+            return;
+        };
+        match prompt.handle_key(key) {
+            crate::prompt::Outcome::Editing => {}
+            crate::prompt::Outcome::Cancelled => self.asking = None,
+            crate::prompt::Outcome::Submitted(answer) => {
+                let path = crate::prompt::expand_tilde(&answer);
+                if !answer.is_empty()
+                    && let Err(e) = std::fs::metadata(&path)
+                {
+                    prompt.reject(format!("{e}"));
+                    return;
+                }
+                self.set_path(path);
+                self.asking = None;
+                self.status = Some("reloading…".into());
+            }
+        }
+    }
+
+    /// Point the panel at a different calendar and read it now.
+    pub fn set_path(&mut self, to: PathBuf) {
+        match self.path.lock() {
+            Ok(mut guard) => *guard = to,
+            Err(poisoned) => *poisoned.into_inner() = to,
+        }
+        self.ask_for_reload();
     }
 
     fn snapshot(&self) -> State {
@@ -240,9 +288,17 @@ fn weekday_name(day: Date) -> &'static str {
     }
 }
 
+/// The path as it stands, which the panel may have changed since the last pass.
+fn current_path(path: &Arc<Mutex<PathBuf>>) -> PathBuf {
+    match path.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    }
+}
+
 /// Read the file, parse it, and publish — then wait, and do it again.
 fn read_loop(
-    path: &PathBuf,
+    path: &Arc<Mutex<PathBuf>>,
     days: u16,
     interval: Duration,
     state: &Arc<Mutex<State>>,
@@ -260,7 +316,7 @@ fn read_loop(
             .and_then(|d| ical::local_midnight(d, &tz));
 
         let next = match (from, until) {
-            (Some(from), Some(until)) => match std::fs::read_to_string(path) {
+            (Some(from), Some(until)) => match std::fs::read_to_string(current_path(path)) {
                 Ok(text) => {
                     let calendar = ical::parse(&text, &tz, &from, &until);
                     State {
@@ -366,16 +422,33 @@ impl Panel for AgendaPanel {
         moved
     }
 
+    fn captures_input(&self) -> bool {
+        self.asking.is_some()
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        if self.asking.is_some() {
+            self.handle_prompt_key(key);
+            return KeyOutcome::Consumed;
+        }
+
         self.status = None;
         let len = self.snapshot().events.len();
         match key.code {
+            KeyCode::Char('f') => {
+                self.asking = Some(crate::prompt::Prompt::new(
+                    "AGENDA FILE",
+                    "Tab completes · Enter saves · Esc cancels",
+                    &current_path(&self.path).display().to_string(),
+                    crate::prompt::Completion::Paths,
+                ));
+            }
             KeyCode::Char('r') => {
                 self.ask_for_reload();
                 self.status = Some("reloading…".into());
             }
             KeyCode::Char('o') => {
-                self.status = Some(self.path.display().to_string());
+                self.status = Some(current_path(&self.path).display().to_string());
             }
             KeyCode::Down | KeyCode::Char('j') => crate::selection::down(&mut self.scroll, 1, len),
             KeyCode::Up | KeyCode::Char('k') => crate::selection::up(&mut self.scroll, 1, len),
@@ -408,6 +481,9 @@ impl Panel for AgendaPanel {
             return;
         }
 
+        // Kept before the area is divided up, so the prompt can be drawn over
+        // the whole panel at the end.
+        let whole = area;
         let state = self.snapshot();
         let now = Zoned::now();
 
@@ -441,10 +517,20 @@ impl Panel for AgendaPanel {
         if notice_area.height > 0 {
             frame.render_widget(Paragraph::new(notices), notice_area);
         }
+
+        // Last, and across the whole panel rather than the list: a dialog drawn
+        // before the list and the notices would be painted over by both.
+        if let Some(prompt) = &self.asking {
+            prompt.render(frame, whole, theme);
+        }
     }
 
     fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    fn remember(&self, state: &mut crate::state::UiState) {
+        state.agenda_file = Some(current_path(&self.path).display().to_string());
     }
 }
 
@@ -478,10 +564,10 @@ impl AgendaPanel {
                         "have — an export, or whatever your",
                         muted,
                     )),
-                    Line::from(TextSpan::styled("calendar syncs to.", muted)),
+                    Line::from(TextSpan::styled("calendar syncs to, or press f.", muted)),
                     Line::from(""),
                     Line::from(TextSpan::styled(
-                        format!("Looked in {}", self.path.display()),
+                        format!("Looked in {}", current_path(&self.path).display()),
                         muted,
                     )),
                 ],
@@ -496,7 +582,10 @@ impl AgendaPanel {
                     )),
                     Line::from(TextSpan::styled(why.clone(), muted)),
                     Line::from(""),
-                    Line::from(TextSpan::styled(self.path.display().to_string(), muted)),
+                    Line::from(TextSpan::styled(
+                        current_path(&self.path).display().to_string(),
+                        muted,
+                    )),
                 ],
             };
             if let Some(age) = state.read_at.map(|at| describe_age(at.elapsed())) {

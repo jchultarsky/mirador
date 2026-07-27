@@ -16,16 +16,19 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![All ten mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+![All ten mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
 *All ten panels on a first run, at 200x50 — wide enough that nothing has to fall
 back. The lit frame is the focused panel, with its own keys in its bottom
 border; every other panel is dimmed, so exactly one thing is at full brightness.*
 
-*Thirty seconds of it in use. Focus moves with `Tab`; a task is typed in and
+*Forty seconds of it in use. Focus moves with `Tab`; a task is typed in and
 lands in the list, which goes from four open to five. `w` opens the panel picker,
-switches one off, and the grid closes over the gap; `?` lists every binding for
-the focused panel and scrolls when there are more than fit.*
+switches one off, and the grid closes over the gap. `m` starts arranging: the
+task panel moves along its row, then up into the row above, then past the top
+edge into a row of its own — the real panels move as the keys are pressed, and
+`Esc` puts it all back. `?` lists every binding for the focused panel and
+scrolls when there are more than fit.*
 
 *The tasks and the note are the examples mirador seeds on a first run, and the
 weather, the prices and the graphs are whatever was true while it recorded —
@@ -204,8 +207,8 @@ To find the config:
 mirador --config-path
 ```
 
-Edit `[weather].location` to your own city and you are done. Nothing else is
-required: no account, no API key, no environment variables.
+Set your city with `L` in the weather panel, or edit `[weather].location`.
+Either way you are done: no account, no API key, no environment variables.
 
 ### Remembered settings
 
@@ -219,7 +222,11 @@ Some settings you change with a keystroke are remembered across restarts:
 | Seconds on the clock | `s` | Clock |
 | Pomodoro durations | `+` / `-` | Pomodoro |
 | Watchlist symbols | `a` / `d` | Markets |
+| World clocks | `a` / `d` | Clock |
+| Weather location | `L` | Weather |
+| Agenda file | `f` | Agenda |
 | Which panels are shown | `w` | — |
+| Where the panels are | `m` | — |
 | Panel sizes | `Ctrl+arrow` | — |
 
 They go to two different places, and the split is deliberate.
@@ -280,7 +287,8 @@ picker:
 `space` toggles, `↑`/`↓` or `j`/`k` move, `esc` closes. A panel appears or
 disappears the moment you toggle it, and the change is written to your config
 when you close the dialog — as a one-line edit, with your comments untouched.
-A new panel joins the row carrying the fewest panels; `Ctrl+arrow` moves the
+A new panel joins the row carrying the fewest panels; `m` moves it wherever you
+want it afterwards, and `Ctrl+arrow` moves the
 space around afterwards, and that is written too.
 
 The last panel cannot be switched off, because a layout with nothing in it is
@@ -353,6 +361,14 @@ offset *relative to that zone*, which is the number you actually want when
 scheduling across one. The calendar prints month grids in the shape `cal`
 does, with today marked.
 
+`a` adds a clock and `d` removes the selected one. Type a timezone —
+`Europe/Lisbon` — and `Tab` completes it as far as the candidates agree; the
+city becomes the label. Write `HQ = Europe/Berlin` to name it yourself. Like
+the watchlist, the live list is a data file (`zones.toml`) rather than config,
+which is what lets the panel own it; `[clocks].zones` seeds your first run. The
+large clock is not removable, because a clock panel with nothing to draw large
+is not a clock panel.
+
 ```
 ╭┤1 Calendar├───────────────────╮
 │      July 2026                │
@@ -373,7 +389,9 @@ leaving a void, up to a year in view.
 
 Current conditions and an hourly forecast from [Open-Meteo](https://open-meteo.com),
 which needs no key and no account. `u` switches between imperial and metric at
-runtime, converting what is already on screen rather than re-fetching.
+runtime, converting what is already on screen rather than re-fetching. `L` sets
+the location without touching your config; the panel re-geocodes and refetches
+on the spot.
 
 A failed refresh keeps the last reading and shows its age in amber rather than
 blanking the panel — weather two hours old is still useful, and an empty panel
@@ -399,7 +417,9 @@ is a data file rather than config, which is what lets the panel own it. See
 
 ### Agenda
 
-What is actually next, read from an `.ics` file on your disk.
+What is actually next, read from an `.ics` file on your disk. `f` points it at
+one from the panel, with `Tab` completing path segments as you type; a path
+that cannot be read is refused there and then rather than after the fact.
 
 ```
 ╭┤5 Agenda├──────────────────────────────┤2 today├╮
@@ -512,7 +532,27 @@ rather than a cap on what a wider panel can draw.
 | `Tab` / `Shift+Tab` | Move focus between panels |
 | `1` – `9` | Jump straight to a panel |
 | `?` | Show all key bindings |
+| `w` | Choose which panels are shown |
+| `m` | Rearrange the panels — see below |
+| `Ctrl+arrow` | Resize the focused panel against its neighbour |
 | `q` / `Ctrl+C` | Quit |
+
+### Rearranging the dashboard
+
+Press `m`, then move the focused panel with the arrow keys. `←` and `→` swap it
+with its neighbour; `↑` and `↓` move it between rows, landing it under wherever
+it already was rather than at the same index. Push it past the top or bottom
+edge and it gets a row of its own — which is how you end up with four rows
+without opening an editor. The last panel out of a row closes that row.
+
+The panels themselves move as you press, so what you see is what you will get.
+`Enter` keeps the arrangement and `Esc` puts everything back exactly as it was.
+`Tab` picks a different panel to move without leaving the mode, and `Ctrl+arrow`
+still resizes while you are in there.
+
+A panel keeps the width you gave it when it moves, and the row weights always
+add up to what they added up to before — so rearranging one corner of the
+dashboard never quietly rescales another.
 
 In the task panel:
 

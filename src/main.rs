@@ -3,6 +3,7 @@
 //! See <https://github.com/jchultarsky/mirador> for documentation.
 
 mod app;
+mod arrange;
 mod chart;
 mod config;
 mod dateinput;
@@ -16,6 +17,7 @@ mod note;
 mod panel;
 mod picker;
 mod poll;
+mod prompt;
 mod quote;
 mod samples;
 mod selection;
@@ -27,6 +29,7 @@ mod textfield;
 mod theme;
 mod update;
 mod widgets;
+mod zones;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

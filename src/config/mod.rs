@@ -279,6 +279,13 @@ impl Config {
         }
     }
 
+    /// Where the world clocks live. Like the watchlist, this is a data file
+    /// rather than config, because the panel edits it; `[clocks].zones` seeds
+    /// it on a first run and is not read again.
+    pub fn zones_path() -> Result<PathBuf> {
+        Ok(Self::default_data_dir()?.join("zones.toml"))
+    }
+
     /// Where remembered UI preferences live. Not configurable: it is mirador's
     /// own bookkeeping rather than something you curate, and a config key
     /// pointing at it would invite exactly the confusion this file avoids.
@@ -317,6 +324,16 @@ impl Config {
         }
         if let Some(show) = state.clocks_show_seconds {
             self.clocks.show_seconds = show;
+        }
+        // Free text, so there is nothing to validate against here — the panel
+        // that wrote it checked that the file could be read, and a file that
+        // has since gone is the panel's "no agenda file" case rather than a
+        // reason to discard the setting.
+        if let Some(file) = &state.agenda_file {
+            self.agenda.file = Some(std::path::PathBuf::from(file));
+        }
+        if let Some(location) = &state.weather_location {
+            self.weather.location.clone_from(location);
         }
         // Durations are clamped rather than dropped: the panel already bounds
         // them, so an out-of-range figure means a hand-edited file and the

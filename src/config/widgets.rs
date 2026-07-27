@@ -62,7 +62,10 @@ impl Default for ClocksConfig {
 }
 
 /// A single clock.
-#[derive(Debug, Clone, Deserialize, Default)]
+///
+/// `Serialize` because the live list lives in a data file the panel writes;
+/// see [`crate::zones`].
+#[derive(Debug, Clone, Deserialize, serde::Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClockZone {
     /// Display name.
