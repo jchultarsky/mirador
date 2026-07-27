@@ -64,6 +64,12 @@ pub struct RenderContext<'a> {
     pub gradients: &'a Gradients,
     /// Whether this panel currently has keyboard focus.
     pub focused: bool,
+    /// What has happened since mirador started.
+    ///
+    /// Handed to every panel rather than only the watch log, because it is
+    /// read-only from here and threading it to exactly one panel would mean a
+    /// second context type. Nothing else reads it today.
+    pub watch: &'a crate::watch::WatchLog,
 }
 
 /// A single dashboard widget.
@@ -149,6 +155,28 @@ pub trait Panel {
     /// laziness.
     fn tick(&mut self) -> bool {
         false
+    }
+
+    /// Notable things that have happened since this was last called.
+    ///
+    /// Drained every tick and handed to the watch log. Distinct from [`tick`]
+    /// on purpose: `tick` answers "did the screen change", which is true
+    /// constantly, and this answers "did something happen that a reader would
+    /// want to know about", which is true almost never.
+    ///
+    /// The bar is deliberately high. An event is something that happened **to**
+    /// the user rather than because of them, and that they would want to know
+    /// even if they never looked at this panel. A price moving, a graph
+    /// scrolling and a clock ticking are all changes and none of them qualify;
+    /// nor does anything the user did themselves, because they were there.
+    ///
+    /// Returning something every tick would make the log unreadable, which
+    /// costs the feature rather than the panel: a log nobody can scan is worse
+    /// than no log.
+    ///
+    /// [`tick`]: Panel::tick
+    fn events(&mut self) -> Vec<crate::watch::Event> {
+        Vec::new()
     }
 
     /// Draw the panel's contents. `area` is already inside the frame and its

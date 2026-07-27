@@ -123,6 +123,7 @@ layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 store.rs     write_atomic — every file mirador owns goes through it
 state.rs     UI-changed preferences, remembered across restarts
 update.rs    the opt-in update check — off unless the config turns it on
+watch.rs     the watch log's events and the rule that decides what is one
 task.rs      task model + TOML store
 note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
@@ -134,7 +135,7 @@ textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, cpu, network
+             pomodoro, watchlog, cpu, network
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -203,7 +204,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 230 of them, including the ones mirador
+    trip through `toml` discards all 232 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -402,6 +403,43 @@ exactly the default. Hence two things: `check_palette_ordering` refuses such a
 file by name, and the drift test is paired with one that asserts a standalone
 theme *sets every key*, which is the property that can actually fail.
 
+## The watch log — built
+
+Fills the third instrument the design thesis named and nothing had ever
+occupied. `watch.rs` holds the log and the rule for what belongs in it;
+`widgets/watchlog.rs` draws it; panels report through `Panel::events()`,
+drained each tick beside `tick()`.
+
+**Three commitments are what keep it on the right side of the unread-count
+rejection, and all three are presentational:** no counter in the frame, no
+unread state, and no effect on any other panel's appearance. Read the original
+objection closely — "looks like information, is a doomscroll hook, turns a calm
+dashboard into a nagging one" — and it is about the *badge*, not about
+surfacing change. Give this panel a `3 new` counter and it becomes the feature
+that was turned down. There is a test whose failure message says so.
+
+**"Since I last looked" is unknowable and the design admits it.** The dashboard
+cannot see you looking, and the moments it most needs to be right are the
+glances that touch nothing. mirador enables terminal focus reporting, which is
+the closest honest signal, and falls back to the last keypress. Where neither
+has fired it draws *no* rule line — a line in the wrong place makes a claim,
+where a missing one merely says nothing.
+
+**Focus reporting is unverified in practice.** It could not be tested here: a
+headless tmux server has no attached client to have focus, so the probe could
+not distinguish "unsupported" from "nothing is focused". The keypress fallback
+carries the feature until someone confirms it on a real terminal, and tmux
+needs `focus-events on` regardless.
+
+**The log does not persist, on purpose.** A file would come back after a restart
+with a hole in it — the hours mirador was not running and observed nothing —
+and it cannot mark that hole. Same discipline as weather showing a reading's
+age rather than implying it is current.
+
+**The first read of a calendar is not news.** `AgendaPanel::known` is `None`
+until the first successful read, so a startup does not announce every event in
+your `.ics`. A log that opens with forty entries is a log nobody reads twice.
+
 ## Recently settled, so it is not re-litigated
 
 **The layout grid stays two levels** — `rows: Vec<Row{height, panels}>` — rather
@@ -435,14 +473,20 @@ The mode's legend names both keys, so there is nothing to guess.
 Only things that are actually open. A "decided and built" entry in a list called
 open work is how the list stops being read.
 
-1. **"What changed since I last looked" markers.** No design yet.
-2. **A single "is anything on fire" signal.** No design yet. Named as a gap
-   alongside the other two and then quietly dropped from this list; it is back.
+1. **A single "is anything on fire" signal.** No design yet. It is the same
+   notion as the watch log seen from the other end — the log is notable things
+   in the past, this is a notable condition in the present — so whatever
+   defines "notable" for one should serve the other. `watch::Event` has no
+   severity today; that is where it would go.
 
-Both of these are the last two gaps from the original four-questions analysis,
-and both are structurally attention-grabbing mechanisms — which is the thing
-the unread-email-count rejection was about. Whatever they become has to earn
-its way past that rule rather than around it.
+   It is also structurally an attention-grabbing mechanism, which is the thing
+   the unread-email-count rejection was about, and it has to earn its way past
+   that rule rather than around it. See how the watch log did: the commitment
+   that made it acceptable was presentational — no count, no unread state, no
+   effect on any other panel.
+
+The "what changed since I last looked" markers that sat at the top of this list
+are built, as the watch log; see below.
 
 Named themes sat at the top of this list and is built; see the section above.
 

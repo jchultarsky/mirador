@@ -1167,6 +1167,7 @@ mod tests {
                             theme: &config.theme,
                             gradients: &gradients,
                             focused: true,
+                            watch: &crate::watch::WatchLog::default(),
                         },
                     );
                 })

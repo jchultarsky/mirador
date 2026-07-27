@@ -458,6 +458,45 @@ where one that misses a repeat costs you a glance at the real thing.
 An entry the parser cannot read is counted at the bottom of the panel rather
 than dropped silently, so a half-read calendar does not just look empty.
 
+### Watch log
+
+What happened while you were not looking.
+
+```
+╭┤7 Watch log├──────────────────────────────────╮
+│ 14:02  Standup appeared in your calendar      │
+│ ──────────────────── since you were here ──── │
+│ 13:30  Renew the domain went overdue          │
+│ watching from 08:12                           │
+╰───────────────────────────────────────────────╯
+```
+
+Almost nothing qualifies, and that is the point. The clock, the readings, the
+prices and the graphs change continuously and none of it is news; your notes and
+tasks change because you changed them. An entry is something that happened *to*
+you rather than because of you, and that you would want to know even if you
+never looked at the panel it came from. Out of the box that means two things: an
+event appearing in your `.ics` that you did not put there, and a task crossing
+into overdue because the day turned.
+
+**It has no counter, no unread state, and no effect on any other panel.** Unread
+message counts were considered for this dashboard and rejected — a number that
+accumulates is a number demanding you zero it. This is a record you consult, not
+an inbox that consults you, and nothing in it can be dismissed or acknowledged
+because an entry you can dismiss is an entry you are expected to dismiss.
+
+The rule line marks where you were last seen. mirador asks your terminal to
+report window focus, which is the only honest signal for "the reader is here" —
+every other one measures interaction, and a dashboard you glance at is precisely
+one you do not touch. Where the terminal does not report it (and under tmux
+unless `focus-events on` is set) it falls back to your last keypress, and where
+neither has happened it draws no line at all rather than one in the wrong place.
+
+The log lives in memory and says when it started watching. One written to disk
+would come back after a restart with a gap it could not mark — the hours mirador
+was not running — and a log that implies a completeness it does not have is
+worse than one that admits where it begins.
+
 ### Pomodoro
 
 A focus timer, in the same block numerals the clock uses.

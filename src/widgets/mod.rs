@@ -13,6 +13,7 @@ pub mod notes;
 pub mod pomodoro;
 pub mod stocks;
 pub mod todo;
+pub mod watchlog;
 pub mod weather;
 
 use anyhow::Result;
@@ -22,8 +23,8 @@ use crate::panel::Panel;
 
 /// Every widget id accepted in the `[layout]` table.
 pub const WIDGET_NAMES: &[&str] = &[
-    "clocks", "weather", "todo", "notes", "stocks", "calendar", "agenda", "pomodoro", "cpu",
-    "network",
+    "clocks", "weather", "todo", "notes", "stocks", "calendar", "agenda", "pomodoro", "watchlog",
+    "cpu", "network",
 ];
 
 /// Whether `name` refers to a widget mirador knows how to build.
@@ -79,6 +80,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.stocks_path()?,
         )?),
         "calendar" => Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
+        "watchlog" => Box::new(watchlog::WatchLogPanel::new()),
         "agenda" => Box::new(agenda::AgendaPanel::new(
             &config.agenda,
             config.agenda_path()?,
@@ -151,6 +153,7 @@ mod tests {
                                 theme: &config.theme,
                                 gradients: &gradients,
                                 focused: true,
+                                watch: &crate::watch::WatchLog::default(),
                             },
                         );
                     })

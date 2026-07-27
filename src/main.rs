@@ -29,6 +29,7 @@ mod textfield;
 mod theme;
 mod themes;
 mod update;
+mod watch;
 mod widgets;
 mod zones;
 
@@ -36,7 +37,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::event::{
+    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+};
 use ratatui::crossterm::execute;
 
 use crate::app::App;
@@ -200,6 +203,24 @@ fn run() -> Result<()> {
     // panic leaves the user with a working shell rather than a broken one.
     let mut terminal = ratatui::init();
 
+    // Asks the terminal to say when its window gains or loses focus, which is
+    // the only signal there is for "the reader is actually here" — everything
+    // else measures interaction, and a dashboard you glance at is precisely one
+    // you do not touch. Failure is ignored on purpose: plenty of terminals do
+    // not implement it, and the watch log falls back to the last keypress.
+    let _ = execute!(std::io::stdout(), EnableFocusChange);
+
+    // Released on the way out, and on a panic, for the same reason mouse
+    // capture is: a terminal left reporting focus writes escape sequences into
+    // the user's shell every time they switch windows.
+    {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableFocusChange);
+            previous(info);
+        }));
+    }
+
     if mouse {
         // ratatui's hook knows nothing about mouse capture, and a terminal
         // left holding the mouse turns every later click in the user's shell
@@ -217,6 +238,7 @@ fn run() -> Result<()> {
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
+    let _ = execute!(std::io::stdout(), DisableFocusChange);
     ratatui::restore();
     result
 }
