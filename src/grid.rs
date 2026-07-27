@@ -76,6 +76,63 @@ fn char_width(c: char) -> usize {
 ///
 /// Matches `Paragraph::new(text).wrap(Wrap { trim: false })`, whose own
 /// `line_count` is private. An empty line still occupies a row.
+/// Break `text` into lines no wider than `width` display cells.
+///
+/// The companion to [`wrapped_height`], which counts the same rows without
+/// producing them. `wrap(t, w).len()` and `wrapped_height(t, w)` are held equal
+/// by a test — they were written from the same rules and would otherwise drift,
+/// which for a panel that sizes itself from one and draws with the other means
+/// content sitting outside the box it was measured for.
+///
+/// Measured in cells rather than characters, per the rule the whole module
+/// exists for: a headline with an em dash or an accent breaks in the wrong
+/// place otherwise.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut current = String::new();
+        let mut used = 0usize;
+
+        for word in line.split_inclusive(' ') {
+            let w = display_width(word);
+            if used > 0 && used + w > width {
+                out.push(std::mem::take(&mut current));
+                used = 0;
+            }
+            current.push_str(word);
+            used += w;
+
+            // A single word longer than the line breaks inside itself, rather
+            // than running off the edge.
+            while used > width {
+                let keep: String = current
+                    .chars()
+                    .scan(0usize, |taken, c| {
+                        *taken += display_width(&c.to_string());
+                        (*taken <= width).then_some(c)
+                    })
+                    .collect();
+                let rest = current[keep.len()..].to_string();
+                out.push(keep);
+                current = rest;
+                used = display_width(&current);
+            }
+        }
+        out.push(current);
+    }
+    // `wrapped_height` floors at one row, on the grounds that an empty line
+    // still occupies one. These two are held equal by a test, so this has to
+    // agree — and `"".lines()` yields nothing at all.
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
 pub fn wrapped_height(text: &str, width: u16) -> u16 {
     if width == 0 {
         return 0;
@@ -360,6 +417,42 @@ fn fit(text: &str, width: u16, align: Align) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two must agree: a panel sizes itself with one and draws with the
+    /// other, so a disagreement puts content outside the box measured for it.
+    #[test]
+    fn wrapping_produces_exactly_as_many_rows_as_it_measures() {
+        let samples = [
+            "Wildfire now nine miles away from the French city of Bordeaux, mayor warns",
+            "short",
+            "",
+            "a supercalifragilisticexpialidociousandthensomeword in a line",
+            "Europa Clipper returns its first images — and they are extraordinary",
+            "line one\nline two is a good deal longer than the first one is",
+        ];
+        for text in samples {
+            for width in 8..40u16 {
+                assert_eq!(
+                    u16::try_from(wrap(text, usize::from(width)).len()).unwrap(),
+                    wrapped_height(text, width),
+                    "`{text}` at {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_wrapped_line_is_wider_than_asked_for() {
+        let text = "Wildfire now nine miles away from the French city of Bordeaux";
+        for width in 8..40usize {
+            for line in wrap(text, width) {
+                assert!(
+                    display_width(&line) <= width,
+                    "`{line}` is wider than {width}"
+                );
+            }
+        }
+    }
 
     fn columns() -> Vec<Column> {
         vec![

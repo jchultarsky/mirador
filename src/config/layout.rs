@@ -37,23 +37,20 @@ impl Default for Layout {
 
         Self {
             rows: vec![
-                row(34, &[("clocks", 26), ("calendar", 34), ("weather", 40)]),
+                row(26, &[("clocks", 26), ("calendar", 34), ("weather", 40)]),
+                row(32, &[("todo", 34), ("agenda", 30), ("notes", 36)]),
+                // The reading row. Both of these want width for prose rather
+                // than columns of numbers, which is why they get a row instead
+                // of being squeezed in beside the lists — and why the default
+                // is four rows now rather than three.
+                row(24, &[("news", 55), ("watchlog", 45)]),
                 row(
-                    42,
+                    18,
                     &[
-                        ("todo", 30),
-                        ("agenda", 26),
-                        ("notes", 22),
-                        ("watchlog", 22),
-                    ],
-                ),
-                row(
-                    24,
-                    &[
-                        ("pomodoro", 28),
-                        ("stocks", 32),
-                        ("cpu", 18),
-                        ("network", 22),
+                        ("pomodoro", 24),
+                        ("stocks", 28),
+                        ("cpu", 22),
+                        ("network", 26),
                     ],
                 ),
             ],

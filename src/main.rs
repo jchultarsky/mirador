@@ -7,6 +7,7 @@ mod arrange;
 mod chart;
 mod config;
 mod dateinput;
+mod feed;
 mod frame;
 mod glyphs;
 mod grid;

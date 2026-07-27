@@ -125,6 +125,7 @@ store.rs     write_atomic — every file mirador owns goes through it
 state.rs     UI-changed preferences, remembered across restarts
 update.rs    the opt-in update check — off unless the config turns it on
 watch.rs     the watch log's events and the rule that decides what is one
+feed.rs      enough RSS for a headline; quick-xml, unlike ical.rs — see below
 task.rs      task model + TOML store
 note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
@@ -136,7 +137,7 @@ textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, cpu, network
+             pomodoro, watchlog, news, cpu, network
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -205,7 +206,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 232 of them, including the ones mirador
+    trip through `toml` discards all 254 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -403,6 +404,39 @@ fails to parse, and the theme silently comes out as the defaults. The shipped
 exactly the default. Hence two things: `check_palette_ordering` refuses such a
 file by name, and the drift test is paired with one that asserts a standalone
 theme *sets every key*, which is the property that can actually fail.
+
+## The news panel — built
+
+The one that came closest to the feature this dashboard turned down. Unread
+counts were rejected as a doomscroll hook; news *is* the doomscroll surface.
+It survives on the same kind of commitment the watch log made, and the same
+three words apply: **no count, no unread state, nothing to dismiss**, plus a
+fourth — **no scrolling**. It shows what fits. You cannot work through it
+because there is nothing to work through. A `3 new` counter in that frame turns
+it back into the rejected feature; there is a test whose failure message says so.
+
+**Stories are interleaved across feeds, not sorted by date.** Pure date order
+hands the whole visible window to whichever outlet publishes most often — the
+first real run showed three consecutive Phys.org stories. Round-robin puts the
+newest from each feed at the top, which is what "a window on the world" has to
+mean.
+
+**`quick-xml`, where `ical.rs` hand-rolled.** Not an inconsistency: iCalendar is
+line-based and yields to `split`, where XML has entities, CDATA and namespaces.
+Measured before choosing — `quick-xml` adds two crates, `rss` twenty-three,
+`feed-rs` fifty-eight.
+
+**Do not set `trim_text(true)` on the reader.** An entity splits an element's
+text into several events, and trimming each piece separately eats the space
+beside it: a real headline came out as `'Dead stars'may have`. The assembled
+value is trimmed once, at the end. There is a test.
+
+**Headlines only.** Every feed sampled carries 80–384 characters of article
+prose in `<description>`. A headline is a fact; a summary is somebody's work.
+
+**The shipped feeds are science, space and technology.** Choosing outlets for
+general or political news is an editorial act this project should not make on
+a user's behalf, and it is the kind that arrives in the issue tracker.
 
 ## The watch log — built
 

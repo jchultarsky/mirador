@@ -40,13 +40,17 @@ pub struct WatchLogPanel {
     scroll: ListState,
     /// Entries drawn last frame, so `tick` can answer honestly.
     drawn: usize,
+    /// Whether a calendar is configured, so the empty panel can say that one
+    /// of the two things it watches is not switched on.
+    watching_calendar: bool,
 }
 
 impl WatchLogPanel {
-    pub fn new() -> Self {
+    pub fn new(config: &crate::config::Config) -> Self {
         Self {
             scroll: ListState::default(),
             drawn: 0,
+            watching_calendar: config.agenda.file.is_some(),
         }
     }
 }
@@ -138,19 +142,49 @@ impl Panel for WatchLogPanel {
         }
 
         if items.is_empty() {
-            frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(Span::styled(
-                        "Nothing has happened",
-                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(Span::styled(
-                        format!("since {}.", started(log.since())),
-                        Style::default().fg(theme.muted),
-                    )),
-                ]),
-                area,
+            // An empty log has to say what it is watching, or it reads as
+            // broken. It has no refresh key because nothing here is polled —
+            // the panels report to it — and "Nothing has happened" alone gives
+            // a reader no way to tell the difference between working and dead.
+            // Somebody switched this on, waited, and reasonably concluded it
+            // was the latter.
+            let width = usize::from(area.width);
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    "Nothing has happened",
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("since {}.", started(log.since())),
+                    Style::default().fg(theme.muted),
+                )),
+                Line::from(""),
+            ];
+
+            // Wrapped rather than hand-broken. The first version assumed a
+            // width the panel does not have and lost its last line off the
+            // bottom, which is a poor way to explain something.
+            let explain = |lines: &mut Vec<Line<'static>>, text: &str, colour| {
+                for line in crate::grid::wrap(text, width) {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(colour))));
+                }
+            };
+            explain(
+                &mut lines,
+                "Watching for things you did not do yourself: a task falling \
+                 overdue, an entry appearing in your calendar.",
+                theme.muted,
             );
+            if !self.watching_calendar {
+                lines.push(Line::from(""));
+                explain(
+                    &mut lines,
+                    "No calendar set, so only the first can happen. Press f on \
+                     the agenda panel.",
+                    theme.warning,
+                );
+            }
+            frame.render_widget(Paragraph::new(lines), area);
             self.drawn = 0;
             return;
         }
@@ -217,7 +251,10 @@ mod tests {
     /// fails, the question to ask is not how to fix the test.
     #[test]
     fn the_panel_never_offers_a_counter() {
-        assert_eq!(WatchLogPanel::new().counter(), None);
+        assert_eq!(
+            WatchLogPanel::new(&crate::config::Config::default()).counter(),
+            None
+        );
     }
 
     /// The log is read, never edited. A key that dismissed an entry would make
@@ -225,7 +262,7 @@ mod tests {
     /// obligation this panel is designed to avoid.
     #[test]
     fn nothing_dismisses_acknowledges_or_clears_an_entry() {
-        let mut panel = WatchLogPanel::new();
+        let mut panel = WatchLogPanel::new(&crate::config::Config::default());
         panel.drawn = 5;
         for code in [
             KeyCode::Char('d'),
