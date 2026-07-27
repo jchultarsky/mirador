@@ -85,10 +85,23 @@ impl UiState {
             todo_sort: Some(sort.label().to_string()),
             todo_show_completed: Some(config.todo.show_completed),
             clocks_show_seconds: Some(config.clocks.show_seconds),
+            // Resolved the same way the panel resolves it, not read raw from
+            // the config. The panel reports the *resolved* path, and a baseline
+            // in different terms is not a baseline: with `[agenda].file`
+            // commented out — which is the shipped default — the raw value is
+            // `None`, the panel reports a real path, they differ, and the
+            // resolved default was written to the state file on the first
+            // keystroke anywhere in the dashboard. After which setting
+            // `[agenda].file` in the config did nothing, because the state file
+            // outranks it.
+            //
+            // That is invariant 17's first wrong version, arrived at again by a
+            // different route: the rule is not only "compare against the
+            // config", it is "compare against the config *as the panel sees
+            // it*".
             agenda_file: config
-                .agenda
-                .file
-                .as_ref()
+                .agenda_path()
+                .ok()
                 .map(|path| path.display().to_string()),
             weather_location: Some(config.weather.location.clone()),
             pomodoro_focus_minutes: Some(config.pomodoro.focus_minutes),
@@ -283,6 +296,39 @@ mod tests {
         config.clocks.show_seconds = true;
         config.pomodoro.focus_minutes = 25;
         config
+    }
+
+    /// The baseline has to be the config *as the panel sees it*, not as it is
+    /// written. `[agenda].file` ships commented out, so the raw value is `None`
+    /// while the panel reports a resolved path — they differ, and the resolved
+    /// default was written to the state file on the first keystroke anywhere.
+    /// After that, setting `[agenda].file` in the config did nothing at all,
+    /// because the state file outranks it.
+    ///
+    /// That is invariant 17's first wrong version reached by a new route, in a
+    /// field added long after the invariant was written. The rule is not only
+    /// "compare against the config" — it is "compare against the config in the
+    /// same terms the panel will report".
+    #[test]
+    fn an_untouched_default_config_records_nothing() {
+        let config = crate::config::Config::default();
+        let baseline = UiState::from_config(&config);
+
+        // Exactly what the panels report when nobody has changed anything: the
+        // config's own values, resolved the way the panels resolve them.
+        let reported = UiState {
+            agenda_file: config
+                .agenda_path()
+                .ok()
+                .map(|path| path.display().to_string()),
+            ..baseline.clone()
+        };
+
+        assert_eq!(
+            reported.only_changes_from(&baseline),
+            UiState::default(),
+            "a dashboard nobody has touched wrote something to its state file"
+        );
     }
 
     #[test]

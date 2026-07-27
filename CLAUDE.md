@@ -560,6 +560,28 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**`store` and `state`: done.** Three findings, all about data rather than
+speed.
+
+`write_atomic` used one `.tmp` name per *file*, not per *write*. Two mirador
+windows — one per monitor — then raced for it: eight concurrent writers failed
+2,100 of 2,400 saves, and a failed save is reported, so the second window filled
+with complaints. Behind that sat a narrower hazard: `File::create` truncates, so
+a second writer emptied the first's half-written temporary and the first would
+have renamed *that* into place. Never reproduced, and it needs no reproducing to
+be worth removing. Names are unique per write now.
+
+A rename installs a new file, created per the umask, so `chmod 600` on a task
+list was widened to 0644 on the next save. Permissions are carried across.
+
+And invariant 17 was broken again, by a new route. `[agenda].file` ships
+commented out, so `from_config` produced `None` while the panel reported a
+*resolved* path — they differed, so one keystroke anywhere wrote the resolved
+default into the state file, after which editing `[agenda].file` did nothing.
+The rule is not only "compare against the config"; it is **compare against the
+config in the same terms the panel will report**. A test now asserts that an
+untouched default dashboard writes nothing at all.
+
 **Per-frame allocation, swept across all twelve panels: no further offenders.**
 Three fixes of the same shape in one day looked systemic, so it was measured
 rather than argued about. It was not systemic; the agenda was an outlier.
