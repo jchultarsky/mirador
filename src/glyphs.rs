@@ -273,7 +273,8 @@ pub fn art(sky: Sky) -> [&'static str; ART_HEIGHT] {
 /// Every glyph here is deliberately chosen so that `unicode-width` reports the
 /// same cell count the terminal actually draws. That sounds pedantic and is
 /// not: several of the obvious weather emoji — U+1F327 rain cloud, U+1F328
-/// snow cloud, U+2601 cloud — report width 1 but render as two cells, which
+/// snow cloud, U+2601 cloud, U+1F32B fog — report width 1 but render as two
+/// cells, which
 /// silently shifts every column after them and puts values under the wrong
 /// headers. The set below is restricted to glyphs that measure 2 and draw 2.
 ///

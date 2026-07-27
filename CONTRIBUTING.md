@@ -23,13 +23,29 @@ cargo run
 
 Requires Rust 1.95 or newer.
 
-Before pushing, run what CI runs:
+Before pushing, run what CI runs. All six, not the first three — the last two
+catch things the others cannot, and both have reddened `main` before: a broken
+intra-doc link only `cargo doc` sees, and an `exclude` in `Cargo.toml` that
+dropped a file the build needed.
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+cargo publish --dry-run
 ```
+
+CI also builds and tests on macOS, and type-checks against the minimum
+supported Rust version:
+
+```sh
+cargo +1.95.0 check --all-targets
+```
+
+Note that `clippy` gates some lints on the `rust-version` field, so a newer
+toolchain locally can report warnings CI does not, and vice versa. When the two
+disagree, CI is the one that matters.
 
 To try changes against a throwaway config instead of your real one:
 
@@ -43,8 +59,10 @@ cargo run -- --config /tmp/mirador.toml
 The `Panel` trait in `src/panel.rs` is the extension seam. To add a widget:
 
 1. Create `src/widgets/<name>.rs` and implement `Panel`.
-2. Add a config struct to `src/config.rs` and a field on `Config`, with a
-   `Default` implementation for every value.
+2. Add a config struct to `src/config/widgets.rs` and a field on `Config` in
+   `src/config/mod.rs`, with a `Default` implementation for every value. Mark
+   the struct `#[serde(default, deny_unknown_fields)]` — a config key that is
+   silently ignored makes a stale config look like stale code.
 3. Add the name to `WIDGET_NAMES` and an arm to `build` in
    `src/widgets/mod.rs`.
 4. Document the widget in `assets/default_config.toml` and in the README's
