@@ -550,6 +550,43 @@ fn cmp_due(a: &Task, b: &Task) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The README shows a `todos.toml` and tells people they can edit it by
+    /// hand. A wrong example there is worse than no example, because it fails
+    /// on *their* file after they have typed something into it.
+    ///
+    /// So the example is extracted from the README and parsed. The one this
+    /// replaced had drifted into a real task from this project's own
+    /// development, dated and long since done — nothing checked it, so nothing
+    /// noticed.
+    #[test]
+    fn the_task_file_example_in_the_readme_actually_parses() {
+        let readme = include_str!("../README.md");
+        let start = readme
+            .find("## Task file format")
+            .expect("the README documents the task file format");
+        let block = readme[start..]
+            .split("```toml")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+            .expect("that section shows a toml example");
+
+        let parsed: TaskFile = toml::from_str(block)
+            .unwrap_or_else(|e| panic!("the README example does not parse: {e}\n\n{block}"));
+
+        assert_eq!(parsed.tasks.len(), 2, "both examples must survive parsing");
+        assert!(
+            parsed.tasks.iter().any(|t| t.done && t.completed.is_some()),
+            "the example should show what a finished task looks like"
+        );
+        assert!(
+            parsed
+                .tasks
+                .iter()
+                .any(|t| t.notes.is_none() && t.tags.is_empty()),
+            "and that the optional fields really are optional"
+        );
+    }
     use jiff::civil::date;
 
     fn today() -> Date {

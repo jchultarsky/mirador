@@ -487,7 +487,7 @@ rows = [
 | Widget | What it shows |
 | --- | --- |
 | `clocks` | Any number of world clocks, by IANA timezone |
-| `weather` | Current conditions plus a 1–7 day forecast |
+| `weather` | Current conditions plus an hour-by-hour forecast |
 | `todo` | The task list, with full editing |
 | `notes` | Free-form notes: a list of titles and dates above the note you are reading |
 | `stocks` | A watchlist: last price, the day's change, and an intraday sparkline |
@@ -524,11 +524,23 @@ working; copying a value off the dashboard needs the terminal's override
 modifier, which is Shift in most terminals and Option in macOS Terminal and
 iTerm2. Set `[general].mouse = false` to keep ordinary selection instead.
 
-Colours accept a name (`red`, `light-blue`), a hex string (`#ff8800`), or a
-256-colour index (`12`). `reset` uses your terminal's own default.
+### Colours
 
-An unknown widget name or a malformed colour is reported at startup with a
-message that says how to fix it, rather than being ignored.
+Every colour the dashboard draws with lives under `[theme]`, and the graph
+gradients under `[theme.rx_gradient]` and friends. A colour accepts a name
+(`red`, `light-blue`), a hex string (`#ff8800`), or a 256-colour index (`12`).
+`reset` uses your terminal's own default.
+
+### When something is wrong with your config
+
+mirador refuses to start rather than starting wrong. An unknown widget name, a
+malformed colour, or a key it does not recognise is reported with a message
+that says how to fix it — including, for a key that was renamed in an earlier
+version, which key replaced it and that `mirador --migrate-config` will do it
+for you.
+
+A key that is silently ignored is the worst outcome a config can have, because
+it makes a stale config look like stale code.
 
 ## Task file format
 
@@ -538,17 +550,30 @@ or wherever `[todo].file` points. Press `o` in the task panel to see the path.
 ```toml
 [[task]]
 id = 1
-title = "Publish 0.0.0 placeholder"
-notes = "Reserve the crates.io name"
-due = "2026-07-28"
+title = "Renew the domain"
+notes = "Registrar sends the reminder to the old address"
+due = "2026-08-14"
 priority = "high"     # high | medium | low | none
-tags = ["mirador", "rust"]
+tags = ["admin"]
 done = false
-created = "2026-07-25"
+created = "2026-08-01"
+
+[[task]]
+id = 2
+title = "Read the ratatui 0.30 release notes"
+priority = "low"
+done = true
+created = "2026-07-30"
+completed = "2026-08-02"   # set when `done` flips; used by the `c` filter
 ```
 
-Writes are atomic — mirador writes a temporary file and renames it — so an
-interrupted save can never truncate your tasks.
+Only `id`, `title`, `done` and `created` are required; everything else may be
+left out.
+
+Writes are atomic — the file is written under a temporary name, flushed to the
+disk, and renamed over the original — so an interrupted save or a full disk can
+never truncate your tasks. The same goes for your notes, your watchlist and the
+config itself.
 
 ## Contributing
 

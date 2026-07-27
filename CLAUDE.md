@@ -357,7 +357,12 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
 - `parse_chart` is split from the HTTP call so it is tested against captured
   JSON. **No test in this repo touches the network** — keep it that way.
 
-## Theming — decided, not yet built
+## Named themes — decided, not yet built
+
+The `[theme]` table itself **is** built and shipping: every colour the dashboard
+draws with is configurable, gradients included, with names, hex and 256-colour
+indices accepted and bad values rejected at parse time. What is not built is
+*named* themes — `theme = "nord"` and a themes directory.
 
 Follow Helix. `theme = "name"` plus theme files in
 `<config>/mirador/themes/<name>.toml`, with:
@@ -379,19 +384,20 @@ inline `[theme]` table from a `theme = "name"` string).
 
 ## Open work, in priority order
 
-1. **Settings editable from the UI — decided and built.** The owner's call was
-   the state file, following the watchlist: config seeds, `state.rs` records
-   where the user moved since, and the config is still never rewritten. Live
-   for weather units, task sort and completed-visibility, clock seconds and
-   pomodoro durations.
+Only things that are actually open. A "decided and built" entry in a list called
+open work is how the list stops being read.
 
-   What is *not* covered: `[weather].location`, which was the original example.
-   Editing it needs text entry in the panel rather than a toggle, and that is a
-   UI question rather than a persistence one now that the storage exists.
-2. Calendar panel reading a local `.ics` — the shipped `calendar` widget is a
-   date grid only, deliberately offline; events are a separate, larger panel.
-3. Theme system per above.
-4. "What changed since I last looked" markers.
+1. **Editing `[weather].location` from the panel.** Everything else the UI can
+   change is already remembered — units, task sort and completed-visibility,
+   clock seconds, pomodoro durations — through `state.rs`, which records where
+   the user moved from what the config seeded. Location is the one that needs
+   text entry in the panel rather than a toggle, so it is a UI question now
+   rather than a persistence one.
+2. **Named themes**, per the section above. The `[theme]` table is built; the
+   `theme = "nord"` layer over it is not.
+3. **Calendar reading a local `.ics`.** The shipped `calendar` widget is a date
+   grid only, deliberately offline; events are a separate and much larger panel.
+4. **"What changed since I last looked" markers.**
 
 ## Housekeeping
 
