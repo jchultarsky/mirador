@@ -45,6 +45,13 @@ const BINDINGS: &[Binding] = &[
     Binding::extra("o", "show file path"),
 ];
 
+/// How close an event has to be before it is worth interrupting for.
+///
+/// Ten minutes is about the time it takes to finish a thought, find the link
+/// and get there. Much longer and the signal is lit for a large part of a
+/// working day, which is the failure this whole feature is built to avoid.
+const IMMINENT: std::time::Duration = std::time::Duration::from_mins(10);
+
 /// Width at which the panel stops gaining anything: a time, a generous summary
 /// and a location beside it.
 const USEFUL_WIDTH: u16 = 52;
@@ -476,6 +483,40 @@ impl Panel for AgendaPanel {
             self.note_new_entries();
         }
         moved
+    }
+
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        let now = Zoned::now();
+        let state = self.snapshot();
+
+        // The nearest event that has not started and starts within the window.
+        // An event already under way is deliberately not an alert: you are
+        // either in it or you have missed it, and a dashboard telling you about
+        // a meeting you are sitting in is noise.
+        state
+            .events
+            .iter()
+            .filter(|event| !event.all_day)
+            .filter_map(|event| {
+                let until = event.start.duration_since(&now);
+                let until = std::time::Duration::try_from(until).ok()?;
+                (until <= IMMINENT).then_some((until, event))
+            })
+            .min_by_key(|(until, _)| *until)
+            .map(|(until, event)| {
+                let minutes = until.as_secs() / 60;
+                let when = if minutes == 0 {
+                    "now".to_string()
+                } else {
+                    format!("in {minutes}m")
+                };
+                match &event.location {
+                    Some(place) => {
+                        crate::panel::Alert::soon(format!("{} {when} · {place}", event.summary))
+                    }
+                    None => crate::panel::Alert::soon(format!("{} {when}", event.summary)),
+                }
+            })
     }
 
     fn events(&mut self) -> Vec<crate::watch::Event> {

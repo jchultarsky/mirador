@@ -300,6 +300,12 @@ impl Panel for ClocksPanel {
         self.asking.as_ref()
     }
 
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        self.zones.last_error.as_ref().map(|why| {
+            crate::panel::Alert::failing(format!("The world clocks could not be saved — {why}"))
+        })
+    }
+
     fn captures_input(&self) -> bool {
         self.asking.is_some()
     }

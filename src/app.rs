@@ -1436,6 +1436,34 @@ impl App {
             spans.push(Span::styled(format!(" {}", binding.action), muted));
         }
 
+        // An alert takes the whole bar rather than sharing it. It outranks both
+        // hints — one is about a new version, the other about widgets you are
+        // not using, and neither gets worse while you read the other — and it
+        // outranks the key list too, because the *reason* is the actionable
+        // part and squeezing it in beside `Tab focus` truncated it to
+        // "read-only file syste…". The keys are behind `?`, and an alert is
+        // gone as soon as the thing it names is.
+        if let Some(alert) = self.alert() {
+            let marker = " ⚠ ";
+            let room = usize::from(area.width).saturating_sub(marker.chars().count());
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        marker,
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        crate::grid::truncate(&alert.text, room),
+                        Style::default().fg(theme.error),
+                    ),
+                ])),
+                area,
+            );
+            return;
+        }
+
         // The hint rides on the right of the bar it shares with the global
         // keys, and gives way to them when the terminal is too narrow: knowing
         // how to quit matters more than knowing what you are not using.
@@ -1457,6 +1485,31 @@ impl App {
         }
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    /// The single most pressing thing, if anything is pressing.
+    ///
+    /// Absent almost always, which is the point — see [`crate::panel::Alert`].
+    /// There is no all-clear: an indicator that says everything is fine is a
+    /// light you have to read in order to learn nothing, and reading it is work
+    /// a dashboard should not ask for.
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        // The layout write is the one genuine silent failure in the program.
+        // It is reported inside the `w` picker and nowhere else, so a
+        // rearrangement that fails to persist says nothing at all once the
+        // picker closes — and the change is gone at the next launch.
+        let own = self.layout_error.as_ref().map(|why| {
+            crate::panel::Alert::failing(format!("The layout could not be saved — {why}"))
+        });
+
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.panel.alert())
+            .chain(own)
+            // Most severe wins, and the newest of equals — with two levels and
+            // both near-never, which one shows barely matters; that it is only
+            // ever *one* does.
+            .max_by_key(|alert| alert.severity)
     }
 
     /// The one-line startup notice about widgets this layout does not place.
@@ -1903,6 +1956,52 @@ mod tests {
         // And only once — a second pass on the same day adds nothing.
         assert!(!app.collect_events(), "the same day is not news twice");
         assert_eq!(app.watch.entries().count(), 1);
+    }
+
+    /// The layout write is the one thing in the program that could fail
+    /// silently: it was reported inside the `w` picker and nowhere else, so a
+    /// rearrangement that did not persist said nothing once the picker closed,
+    /// and the change was gone at the next launch.
+    #[test]
+    fn a_layout_that_would_not_save_reaches_the_status_bar() {
+        let mut app = App::new(resizable()).expect("builds");
+        assert!(app.alert().is_none(), "nothing is wrong yet");
+
+        app.layout_error = Some("read-only file system (os error 30)".into());
+        let alert = app.alert().expect("an alert");
+        assert_eq!(alert.severity, crate::panel::Severity::Failing);
+        assert!(alert.text.contains("layout"), "names it: {}", alert.text);
+
+        let bar = status_bar_at(&mut app, 120);
+        assert!(bar.contains('⚠'), "and it is on the bar: {bar}");
+        assert!(bar.contains("os error 30"), "with the reason: {bar}");
+    }
+
+    /// There is no all-clear. An indicator saying everything is fine is a light
+    /// you have to read to learn nothing, and reading it is work.
+    #[test]
+    fn a_quiet_dashboard_says_nothing_at_all() {
+        let mut app = App::new(resizable()).expect("builds");
+        let bar = status_bar_at(&mut app, 120);
+        assert!(!bar.contains('⚠'), "no marker: {bar}");
+        assert!(
+            !bar.to_lowercase().contains("ok") && !bar.to_lowercase().contains("clear"),
+            "and no reassurance: {bar}"
+        );
+    }
+
+    /// An alert outranks both hints. Neither of those is going to get worse
+    /// while you read the other one.
+    #[test]
+    fn an_alert_displaces_the_hints_rather_than_queueing_behind_them() {
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        let before = status_bar_at(&mut app, 200);
+        assert!(before.contains("unused"), "the hint is there to displace");
+
+        app.layout_error = Some("disk full".into());
+        let after = status_bar_at(&mut app, 200);
+        assert!(after.contains("disk full"), "the alert shows: {after}");
+        assert!(!after.contains("unused"), "and the hint gives way: {after}");
     }
 
     #[test]

@@ -72,6 +72,59 @@ pub struct RenderContext<'a> {
     pub watch: &'a crate::watch::WatchLog,
 }
 
+/// Something that will get worse if it is ignored.
+///
+/// Deliberately not "something is wrong". Panels already show what is wrong in
+/// their own frames — an overdue task is red, a stale reading says its age, a
+/// failing fetch says so — and eight of the twelve do it today. Repeating all
+/// of that in one line would produce a signal that is lit permanently, and a
+/// permanently lit alarm is furniture: you stop seeing it inside a week, which
+/// is the unread-badge failure reached from a different direction.
+///
+/// The bar is therefore **will this deteriorate if nobody acts in the next few
+/// minutes**. A save that is failing loses work. An event about to start is
+/// missed. A layout that did not persist is gone at the next launch. An overdue
+/// task from three days ago is none of those: it is notable, it is already red,
+/// and it will be exactly as overdue in an hour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alert {
+    pub severity: Severity,
+    /// One line, naming the thing rather than the panel, in the terms someone
+    /// would use to describe the problem to somebody else.
+    pub text: String,
+}
+
+/// How bad, for picking one alert out of several.
+///
+/// Two levels because two is all the distinction that is needed: something is
+/// about to happen, or something has broken. More would be a taxonomy nobody
+/// consults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// A deadline approaching. Missing it is bad and survivable.
+    Soon,
+    /// Something is failing now. Ranked above `Soon` because what it costs —
+    /// usually work you cannot retype — does not come back, where a missed
+    /// meeting at least leaves you the rest of the day.
+    Failing,
+}
+
+impl Alert {
+    pub fn soon(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Soon,
+            text: text.into(),
+        }
+    }
+
+    pub fn failing(text: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Failing,
+            text: text.into(),
+        }
+    }
+}
+
 /// A single dashboard widget.
 ///
 /// Implementors are stored as `Box<dyn Panel>`, so the trait is deliberately
@@ -193,6 +246,22 @@ pub trait Panel {
     ///
     /// [`render`]: Panel::render
     fn overlay(&self) -> Option<&crate::prompt::Prompt> {
+        None
+    }
+
+    /// Something about this panel that will get worse if it is ignored.
+    ///
+    /// The present-tense sibling of [`events`]: that one reports a moment that
+    /// has passed, this one a condition that is still true. Both ask what is
+    /// notable; they differ in tense, which is why they are separate hooks
+    /// rather than one.
+    ///
+    /// Called every frame, so it must be cheap and must not allocate when there
+    /// is nothing to say — which is nearly always. Returning `Some` for an
+    /// ordinary state is how this feature stops working: see [`Alert`].
+    ///
+    /// [`events`]: Panel::events
+    fn alert(&self) -> Option<crate::panel::Alert> {
         None
     }
 

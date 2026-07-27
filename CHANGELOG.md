@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The status bar says when something needs you.** One line, naming the single
+  most pressing thing — an event about to start, a save that is failing, a
+  layout change that did not persist — and nothing at all when nothing is
+  pressing.
+
+  It names one thing and never a count, and it clears itself when the cause
+  does. **There is no all-clear**: an indicator saying everything is fine is a
+  light you have to read to learn nothing.
+
+  Deliberately strict about what qualifies: *will this get worse if nobody acts
+  in the next few minutes*. An overdue task does not — it is notable, already
+  red in its own panel, and a signal lit for it would be lit permanently, which
+  is how a warning becomes furniture.
+
+### Fixed
+
+- **A layout that could not be saved now says so.** It was reported inside the
+  `w` picker and nowhere else, so a rearrangement that failed to persist was
+  silent once the picker closed — and gone at the next launch. It was the one
+  genuine silent failure left in the program.
+
 ## [0.13.0] - 2026-07-27
 
 ### Added

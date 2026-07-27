@@ -693,6 +693,15 @@ impl Panel for NotesPanel {
         moved
     }
 
+    fn alert(&self) -> Option<crate::panel::Alert> {
+        // A save that is failing is the clearest case there is: the work is on
+        // screen and not on disk, and every further edit widens the gap.
+        self.store
+            .last_error
+            .as_ref()
+            .map(|why| crate::panel::Alert::failing(format!("Notes could not be saved — {why}")))
+    }
+
     fn captures_input(&self) -> bool {
         !matches!(self.mode, Mode::List)
     }
