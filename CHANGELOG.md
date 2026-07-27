@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-07-27
+
+### Changed
+
+- **Arrange mode says that rows can be opened.** The legend read
+  `↑↓ move rows`, which a reader reasonably took to mean "move between the rows
+  you have" — and then asked how to make a new one, which the mode had been
+  able to do all along. It now reads `↑↓ at the edge opens a new row`, paid for
+  by collapsing the two movement hints into one: which arrow goes which way is
+  obvious the moment you press it, because the panels move.
+
+  The legend also drops hints whole rather than clipping them when the terminal
+  is narrow, keeping `Enter keep` and `Esc cancel` longest. Half a hint reads as
+  a rendering fault; a missing one reads as a narrow terminal, which is what it
+  is.
+
+- The README now answers "how do I manage rows" directly instead of leaving it
+  inside a sentence about moving panels.
+
 ## [0.9.0] - 2026-07-27
 
 ### Added
@@ -720,7 +739,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/jchultarsky/mirador/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/jchultarsky/mirador/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jchultarsky/mirador/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jchultarsky/mirador/compare/v0.7.0...v0.7.1
