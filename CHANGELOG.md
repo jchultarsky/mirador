@@ -5,10 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-26
 
-Findings from an adversarial review of the whole project, fixed in order of how
-much they could cost someone.
+Fifteen items from an adversarial review of the whole project, worked in order
+of how much each could cost someone.
+
+**Upgrading:** two changes can stop a config that used to start. A misspelled
+key under `[theme]` is now an error rather than being silently ignored, and an
+absurd `[weather].refresh_minutes` or `[stocks].refresh_secs` is rejected rather
+than wrapping. Both report the key and how to fix it. If your config was written
+before 0.1.0, `mirador --migrate-config` will update it.
 
 ### Fixed
 
@@ -549,7 +555,7 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/jchultarsky/mirador/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jchultarsky/mirador/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jchultarsky/mirador/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jchultarsky/mirador/compare/v0.2.0...v0.3.0
