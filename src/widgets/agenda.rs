@@ -114,6 +114,15 @@ pub struct AgendaPanel {
     known: Option<std::collections::HashSet<String>>,
     /// Events waiting to be drained by the watch log.
     pending: Vec<crate::watch::Event>,
+    /// What the reader thread had published at the last tick.
+    ///
+    /// Copied once when the generation moves, rather than on every draw. The
+    /// panel used to call `snapshot` from `render` and from two key handlers —
+    /// two of those cloning the entire event list only to read its `len` —
+    /// which measured at 210,000 event clones in thirty idle seconds against a
+    /// calendar of three hundred daily meetings. A recurring rule expands, so
+    /// the list is far longer than the file suggests.
+    shown: State,
 }
 
 impl Drop for AgendaPanel {
@@ -176,6 +185,7 @@ impl AgendaPanel {
             asking: None,
             known: None,
             pending: Vec::new(),
+            shown: State::default(),
         }
     }
 
@@ -220,7 +230,7 @@ impl AgendaPanel {
     /// is worth knowing whether or not you were looking at this panel, which is
     /// the whole test for whether something belongs in the log.
     fn note_new_entries(&mut self) {
-        let state = self.snapshot();
+        let state = &self.shown;
         // A failed read publishes no events; treating that as "everything was
         // cancelled" and then "everything is new" would fill the log with a
         // network blip.
@@ -348,6 +358,35 @@ fn weekday_name(day: Date) -> &'static str {
     }
 }
 
+/// Largest `.ics` that will be read.
+///
+/// The network side of this program is bounded — `ureq` stops at 10MB — and the
+/// local side was not bounded at all. A calendar is a file somebody else's
+/// software writes, it grows without anyone deciding to, and reading it costs
+/// more than its size: unfolding turns it into a `Vec<String>`, and a recurring
+/// rule expands further still. Matching the network figure keeps one number to
+/// remember.
+///
+/// A year of a busy calendar is a few megabytes, so this refuses nothing real.
+const MAX_CALENDAR: u64 = 10 * 1024 * 1024;
+
+/// Read the calendar, refusing one too large to be a calendar.
+///
+/// Checked before reading rather than after: the point is not to notice that
+/// something enormous was loaded, it is not to load it.
+fn read_calendar(path: &std::path::Path) -> std::io::Result<String> {
+    let size = std::fs::metadata(path)?.len();
+    if size > MAX_CALENDAR {
+        return Err(std::io::Error::other(format!(
+            "the calendar is {} MB, over the {} MB limit — mirador reads a \
+             calendar into memory, so it will not open one this large",
+            size / (1024 * 1024),
+            MAX_CALENDAR / (1024 * 1024)
+        )));
+    }
+    std::fs::read_to_string(path)
+}
+
 /// The path as it stands, which the panel may have changed since the last pass.
 fn current_path(path: &Arc<Mutex<PathBuf>>) -> PathBuf {
     match path.lock() {
@@ -376,7 +415,7 @@ fn read_loop(
             .and_then(|d| ical::local_midnight(d, &tz));
 
         let next = match (from, until) {
-            (Some(from), Some(until)) => match std::fs::read_to_string(current_path(path)) {
+            (Some(from), Some(until)) => match read_calendar(&current_path(path)) {
                 Ok(text) => {
                     let calendar = ical::parse(&text, &tz, &from, &until);
                     State {
@@ -436,8 +475,11 @@ impl Panel for AgendaPanel {
     }
 
     fn counter(&self) -> Option<String> {
-        let state = self.snapshot();
-        match state.error {
+        // Reads the cache, not the mutex. `counter` is called on *every* frame
+        // by the frame renderer, with nothing guarding it — cloning an expanded
+        // recurring calendar here was the most expensive of the three.
+        let state = &self.shown;
+        match &state.error {
             Some(Trouble::NoFile) => return Some("not set up".into()),
             Some(Trouble::Unreadable(_)) => return Some("unreadable".into()),
             None => {}
@@ -480,6 +522,8 @@ impl Panel for AgendaPanel {
         let moved = now != self.seen;
         self.seen = now;
         if moved {
+            // One copy, at the one moment the data can have changed.
+            self.shown = self.snapshot();
             self.note_new_entries();
         }
         moved
@@ -550,7 +594,7 @@ impl Panel for AgendaPanel {
         }
 
         self.status = None;
-        let len = self.snapshot().events.len();
+        let len = self.shown.events.len();
         match key.code {
             KeyCode::Char('f') => {
                 self.asking = Some(crate::prompt::Prompt::new(
@@ -583,7 +627,7 @@ impl Panel for AgendaPanel {
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
-        let len = self.snapshot().events.len();
+        let len = self.shown.events.len();
         match event.kind {
             MouseEventKind::ScrollDown => crate::selection::down(&mut self.scroll, 1, len),
             MouseEventKind::ScrollUp => crate::selection::up(&mut self.scroll, 1, len),
@@ -598,7 +642,7 @@ impl Panel for AgendaPanel {
             return;
         }
 
-        let state = self.snapshot();
+        let state = &self.shown;
         let now = Zoned::now();
 
         // Notices take rows from the bottom, and the list is given what is
@@ -626,7 +670,8 @@ impl Panel for AgendaPanel {
         let (list_area, notice_area) =
             split_for_notices(area, u16::try_from(notices.len()).unwrap_or(0));
 
-        self.draw_list(frame, list_area, &state, &now, theme);
+        self.list_area = Some(list_area);
+        self.draw_list(frame, list_area, state, &now, theme);
 
         if notice_area.height > 0 {
             frame.render_widget(Paragraph::new(notices), notice_area);
@@ -644,7 +689,7 @@ impl Panel for AgendaPanel {
 
 impl AgendaPanel {
     fn draw_list(
-        &mut self,
+        &self,
         frame: &mut Frame,
         area: Rect,
         state: &State,
@@ -755,7 +800,6 @@ impl AgendaPanel {
             })
             .collect();
 
-        self.list_area = Some(area);
         frame.render_widget(List::new(items), area);
     }
 }
@@ -862,6 +906,38 @@ mod tests {
             start,
             all_day,
         }
+    }
+
+    /// A calendar is written by somebody else's software and grows without
+    /// anyone deciding to. Reading it costs more than its size — unfolding
+    /// makes a `Vec<String>` of it and a recurring rule expands further — so
+    /// the size is checked before the read rather than regretted after it.
+    #[test]
+    fn a_calendar_too_large_to_be_a_calendar_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("mirador-ics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("test directory");
+        let path = dir.join("big.ics");
+
+        // Sparse where the filesystem allows it, so this costs no real disk.
+        let file = std::fs::File::create(&path).expect("create");
+        file.set_len(MAX_CALENDAR + 1).expect("grow");
+        drop(file);
+
+        let err = read_calendar(&path).expect_err("must refuse");
+        let message = err.to_string();
+        assert!(message.contains("limit"), "says why: {message}");
+        assert!(
+            message.contains("10 MB"),
+            "and what the limit is: {message}"
+        );
+
+        // And one of an ordinary size is read.
+        let small = dir.join("small.ics");
+        std::fs::write(&small, "BEGIN:VCALENDAR\nEND:VCALENDAR\n").expect("write");
+        assert!(read_calendar(&small).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

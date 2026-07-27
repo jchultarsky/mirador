@@ -560,6 +560,18 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**`ical` and the agenda panel: done.** The parser itself held up — two
+thousand recurring events in 32ms, `COUNT=999999999` clipped by the window,
+fifty thousand folded lines and twenty thousand nested components all bounded.
+The panel around it did not: `render`, `counter` and two key handlers each
+cloned the whole expanded event list, at 210,000 clones per thirty idle seconds
+against three hundred daily meetings. `counter` was the worst of them, being
+called on every frame with nothing guarding it. All four now read a cache
+filled once per tick.
+
+Also bounded the `.ics` read at 10MB, matching what `ureq` already enforces on
+the network side. Reading a calendar costs several times its size.
+
 **`layout_edit` and `migrate`: done.** Found that both flattened CRLF to LF —
 `str::lines()` strips the `\r`, so a Windows config was rewritten entirely
 because one panel moved. `store::line_ending` now carries the file's own ending
