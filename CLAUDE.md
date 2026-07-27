@@ -560,6 +560,43 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**Per-frame allocation, swept across all twelve panels: no further offenders.**
+Three fixes of the same shape in one day looked systemic, so it was measured
+rather than argued about. It was not systemic; the agenda was an outlier.
+
+The property that matters is not the size of the number, it is what the number
+scales with. **A panel may allocate in proportion to what is on screen. It must
+not allocate in proportion to how much data you have.** The agenda broke that —
+a recurring calendar expands, and it cloned the expansion four times a frame —
+and nothing else does. Verified by loading 5 items and then 500: `todo` stayed
+at 667 allocations a frame both times, `notes` at 783 and 768.
+
+For reference, allocations per frame with each panel alone, on an idle
+dashboard. Roughly 150 of each figure is the shell — frames, layout, status bar
+— so `cpu`, `network` and the fixed `agenda` are at the floor:
+
+```
+notes 1118   calendar 892   todo 885   weather 755   clocks 438
+pomodoro 404  stocks 348    watchlog 271  news 252
+agenda 175    cpu 174       network 159      (whole dashboard: 1345)
+```
+
+Nothing here is worth optimising. A thousand small allocations a frame at about
+one frame a second is ordinary work for building styled spans, and the
+measurement exists to catch *growth*, not to be minimised.
+
+**To repeat the measurement:** put a counting `GlobalAlloc` in `main.rs`, wrap
+the `terminal.draw` call in `App::run` to record the delta, and write it to a
+file each frame. `unsafe_code = "forbid"` in Cargo.toml has to be relaxed for
+that build, so do it on a scratch branch and check `git status` is clean
+afterwards — shipping that lint relaxed would be a worse bug than any it found.
+Then generate one config per widget with a single-panel `[layout]` and run each
+for a few seconds.
+
+**The fix to copy, if a panel ever does break the rule:** cache the shared state
+in the panel when `tick` sees the generation move, and have `render`, `counter`
+and `alert` read the cache. `agenda` and `news` both do this.
+
 **`ical` and the agenda panel: done.** The parser itself held up — two
 thousand recurring events in 32ms, `COUNT=999999999` clipped by the window,
 fifty thousand folded lines and twenty thousand nested components all bounded.
