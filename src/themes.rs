@@ -2,9 +2,16 @@
 //!
 //! The `[theme]` table has always let you set every colour. What it could not
 //! do is let you *keep* more than one set of them, or hand one to somebody
-//! else. A theme is a file now: four ship inside the binary, and anything in
+//! else. A theme is a file now: ten ship inside the binary, and anything in
 //! `<config>/mirador/themes/<name>.toml` is found first, so a bundled theme can
 //! be replaced without editing it in place.
+//!
+//! Six of the ten are ports of palettes from elsewhere — Nord, Gruvbox,
+//! Dracula, Catppuccin Mocha, Tokyo Night, Solarized Dark. Each file cites the
+//! upstream source its hex values came from, and each is a port rather than an
+//! interpretation: someone who picks `nord` wants Nord, not mirador's opinion
+//! of it. Adjust the *mapping* of a palette onto mirador's keys if it reads
+//! badly; do not adjust the palette.
 //!
 //! Two things make a theme file short. `inherits` names another theme to start
 //! from, so a variant is the handful of lines that differ rather than a copy of
@@ -50,6 +57,24 @@ const BUNDLED: &[(&str, &str)] = &[
         include_str!("../assets/themes/high-contrast.toml"),
     ),
     ("ansi", include_str!("../assets/themes/ansi.toml")),
+    // The community palettes. These are ports, not originals — each file cites
+    // the upstream source it took its hex values from, and none of them should
+    // be "improved" away from it. Someone picking `nord` wants Nord.
+    ("nord", include_str!("../assets/themes/nord.toml")),
+    ("gruvbox", include_str!("../assets/themes/gruvbox.toml")),
+    ("dracula", include_str!("../assets/themes/dracula.toml")),
+    (
+        "catppuccin-mocha",
+        include_str!("../assets/themes/catppuccin-mocha.toml"),
+    ),
+    (
+        "tokyo-night",
+        include_str!("../assets/themes/tokyo-night.toml"),
+    ),
+    (
+        "solarized-dark",
+        include_str!("../assets/themes/solarized-dark.toml"),
+    ),
 ];
 
 /// How deep an `inherits` chain may go before it is treated as a mistake.
@@ -136,6 +161,15 @@ fn is_plain_name(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Whether a file in the themes directory can be offered in the picker.
+///
+/// The same rule [`read`] enforces, exposed so the picker can leave a file out
+/// rather than list it and fail on selection. A name mirador cannot look up is
+/// not a theme the user has; it is a file they will have to rename.
+pub fn is_listable(name: &str) -> bool {
+    is_plain_name(name)
 }
 
 /// Read one theme document, preferring the user's copy.
@@ -477,8 +511,16 @@ mod tests {
 
     #[test]
     fn an_unknown_name_lists_what_is_available() {
-        let err = format!("{:#}", resolve("nord", None).expect_err("must fail"));
-        assert!(err.contains("no theme called `nord`"), "got: {err}");
+        // Deliberately not the name of a real palette. This test used to ask
+        // for `nord`, which stopped being unknown the day nord shipped.
+        let err = format!(
+            "{:#}",
+            resolve("no-such-theme", None).expect_err("must fail")
+        );
+        assert!(
+            err.contains("no theme called `no-such-theme`"),
+            "got: {err}"
+        );
         for name in bundled_names() {
             assert!(err.contains(name), "`{name}` missing from: {err}");
         }

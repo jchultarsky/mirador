@@ -1,0 +1,65 @@
+# Nord — the arctic, north-bluish palette by Arctic Ice Studio.
+#
+# Frost blue for the instruments, Polar Night for chrome, Aurora for signals.
+# Values from the official palette at nordtheme.com; nord8 is the documented
+# primary accent, which is why it carries the focus and the clock here.
+#
+# `border` is nord2 and `muted` is nord3 — Nord's own comment colour — rather
+# than both being nord3. Chrome and secondary text at the same value reads as a
+# panel whose labels have failed rather than as one that is de-emphasised.
+#
+# `text` is `reset` on purpose. A named theme says which *accents* you want; the
+# body text still belongs to whatever foreground your terminal is set to, and
+# hard-coding Snow Storm white would be unreadable on a light background.
+
+border         = "polar2"
+border_focused = "frost-ice"
+rule           = "polar1"
+title          = "frost-ice"
+text           = "reset"
+muted          = "polar3"
+label          = "frost-water"
+accent         = "frost-ice"
+key            = "frost-ice"
+success        = "aurora-green"
+warning        = "aurora-yellow"
+error          = "aurora-red"
+track          = "polar1"
+
+[palette]
+polar1        = "#3b4252"
+polar2        = "#434c5e"
+polar3        = "#4c566a"
+frost-ice     = "#88c0d0"
+frost-water   = "#8fbcbb"
+frost-ocean   = "#5e81ac"
+aurora-red    = "#bf616a"
+aurora-orange = "#d08770"
+aurora-yellow = "#ebcb8b"
+aurora-green  = "#a3be8c"
+aurora-purple = "#b48ead"
+
+[cpu_gradient]
+start = "#3b4252"
+mid   = "#ebcb8b"
+end   = "#bf616a"
+
+[rx_gradient]
+start = "#4c566a"
+mid   = "#8fbcbb"
+end   = "#a3be8c"
+
+[tx_gradient]
+start = "#434c5e"
+mid   = "#5e81ac"
+end   = "#b48ead"
+
+[gain_gradient]
+start = "#4c566a"
+mid   = "#a3be8c"
+end   = "#a3be8c"
+
+[loss_gradient]
+start = "#4c566a"
+mid   = "#bf616a"
+end   = "#bf616a"

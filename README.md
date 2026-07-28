@@ -637,6 +637,7 @@ rather than a cap on what a wider panel can draw.
 | `?` | Show all key bindings |
 | `w` | Choose which panels are shown |
 | `m` | Rearrange the panels — see below |
+| `t` | Choose a theme, previewing as you move — see below |
 | `Ctrl+arrow` | Resize the focused panel against its neighbour |
 | `q` / `Ctrl+C` | Quit |
 
@@ -831,7 +832,16 @@ You can also name a theme instead, and drop the table entirely:
 theme = "high-contrast"
 ```
 
-Four ship inside the binary:
+**Press `t` to browse them.** The list previews as you move through it, so you
+see a theme on your own dashboard before you choose it; `Enter` keeps what is on
+screen and `Esc` puts back what you had. Your own themes are listed alongside
+the shipped ones. A theme picked this way is remembered, the same way your
+weather units and task sort order are — so if you set `theme` in the config and
+it appears to be ignored, you picked something else with `t` at some point.
+
+#### What ships
+
+Four are mirador's own:
 
 | Theme | For |
 | --- | --- |
@@ -839,6 +849,24 @@ Four ship inside the binary:
 | `default-light` | Light backgrounds. Not the dark theme inverted: the hues are deepened so they keep their contrast on paper-coloured terminals |
 | `high-contrast` | Bright rooms, projectors, low vision. `muted` is deliberately *not* dim — faint grey is the first thing to vanish on a washed-out screen, so de-emphasis is carried by hue instead |
 | `ansi` | The sixteen ANSI colours and nothing else, so it follows whatever palette your terminal already uses and works with no true-colour support |
+
+Six more are ports of palettes you may already be running in your editor,
+terminal or multiplexer, so mirador can match the rest of your screen. All six
+are dark:
+
+| Theme | Palette |
+| --- | --- |
+| `nord` | [Nord](https://www.nordtheme.com/docs/colors-and-palettes) — arctic, north-bluish; Frost for the instruments, Aurora for the signals |
+| `gruvbox` | [Gruvbox](https://github.com/morhetz/gruvbox) dark — retro groove; the warmest and highest-contrast of the six |
+| `dracula` | [Dracula](https://spec.draculatheme.com/) — the loudest, six saturated accents at the same brightness |
+| `catppuccin-mocha` | [Catppuccin](https://github.com/catppuccin/catppuccin) Mocha — pastel accents on soft charcoal |
+| `tokyo-night` | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) Storm — the lifted variant, so mirador's slate chrome stays visible |
+| `solarized-dark` | [Solarized](https://ethanschoonover.com/solarized/) dark — designed against measured contrast rather than by eye, and the calmest of the six |
+
+These are ports, not reinterpretations: the hex values come from each palette's
+own specification, and the theme file cites its source. Body text stays `reset`
+in all of them, so it keeps following your terminal's foreground rather than
+being pinned to the palette's.
 
 The same key does both jobs, and TOML decides which: a quoted string is a theme
 name, a table is colours written out. You cannot do both, because one key cannot
@@ -848,10 +876,12 @@ be both types.
 
 Put `<name>.toml` in `themes/` beside your config — `mirador --config-path` will
 tell you where that is. A file there wins over a bundled theme of the same name,
-so you can replace `default` without renaming it.
+so you can replace `default` without renaming it, and it appears in the `t` list
+marked as yours. The name has to be letters, digits, dashes and underscores;
+anything else is not a name mirador can look up, so it is left out of the list.
 
 ```toml
-# themes/nord.toml
+# themes/frostbite.toml
 inherits = "ansi"
 
 accent         = "frost"

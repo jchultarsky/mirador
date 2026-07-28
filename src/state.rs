@@ -55,6 +55,21 @@ pub struct UiState {
     pub pomodoro_short_break_minutes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pomodoro_long_break_minutes: Option<u64>,
+    /// `t` in the dashboard.
+    ///
+    /// A theme name and not a set of colours: the picker offers names, and
+    /// storing the resolved palette would freeze a copy of a theme file the
+    /// user can still edit.
+    ///
+    /// This is the one preference with an obvious case for living in the config
+    /// instead — people do curate their theme. It is here anyway, because the
+    /// config's `[theme]` may be an inline table rather than a name, and
+    /// swapping a whole table for a scalar is a textual edit far more likely to
+    /// mangle a config than the single-line `[layout]` rewrites are. The user
+    /// who wants it in the config can still write it there; this only records
+    /// that they pressed `t`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl UiState {
@@ -107,6 +122,10 @@ impl UiState {
             pomodoro_focus_minutes: Some(config.pomodoro.focus_minutes),
             pomodoro_short_break_minutes: Some(config.pomodoro.short_break_minutes),
             pomodoro_long_break_minutes: Some(config.pomodoro.long_break_minutes),
+            // `None` when the config carries an inline `[theme]` table, which
+            // is right: such a config names no theme, so *any* name the picker
+            // returns is a change from it.
+            theme: config.theme.name.clone(),
         }
     }
 
@@ -141,6 +160,7 @@ impl UiState {
             pomodoro_focus_minutes,
             pomodoro_short_break_minutes,
             pomodoro_long_break_minutes,
+            theme,
         );
         self
     }
@@ -215,6 +235,7 @@ mod tests {
             pomodoro_focus_minutes: Some(30),
             pomodoro_short_break_minutes: Some(7),
             pomodoro_long_break_minutes: Some(20),
+            theme: Some("nord".into()),
         };
         state.save(&path).unwrap();
         assert_eq!(UiState::load(&path), state);
@@ -328,6 +349,41 @@ mod tests {
             reported.only_changes_from(&baseline),
             UiState::default(),
             "a dashboard nobody has touched wrote something to its state file"
+        );
+    }
+
+    /// `a_dashboard_nobody_has_touched_writes_nothing` cannot see this field.
+    /// A default config carries an inline `[theme]` table and so names no
+    /// theme, which leaves baseline and reported both `None` — equal whether
+    /// or not `theme` is in `only_changes_from`'s list. So the case is made
+    /// here explicitly, with a name on both sides.
+    ///
+    /// Worth the separate test: that list is hand-written, and a field left out
+    /// of it is a preference that can be set once and never retracted.
+    #[test]
+    fn a_theme_matching_the_config_is_not_recorded() {
+        let baseline = UiState {
+            theme: Some("nord".into()),
+            ..UiState::default()
+        };
+        let reported = UiState {
+            theme: Some("nord".into()),
+            ..UiState::default()
+        };
+        assert_eq!(
+            reported.only_changes_from(&baseline).theme,
+            None,
+            "picking the theme the config already names must retract the entry"
+        );
+
+        let moved = UiState {
+            theme: Some("gruvbox".into()),
+            ..UiState::default()
+        };
+        assert_eq!(
+            moved.only_changes_from(&baseline).theme,
+            Some("gruvbox".into()),
+            "a theme that differs from the config must be remembered"
         );
     }
 

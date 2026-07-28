@@ -1,0 +1,68 @@
+# Solarized dark — by Ethan Schoonover.
+#
+# The oldest palette here and the only one designed against measured contrast
+# rather than by eye, which shows: the accents are deliberately *low* saturation
+# and all sit at similar lightness. That makes it the calmest of the set and the
+# closest in spirit to mirador's own default, and it is why `error` here is a
+# muted brick rather than a shout — Solarized has no shout.
+#
+# `muted` is base0 rather than base01: Solarized's own chrome colour is base02,
+# which is nearly black and would disappear on any terminal not already using a
+# Solarized background. So base01 carries the borders here and secondary text
+# moves up to base0, keeping the two apart on a plain dark terminal too.
+#
+# Values from ethanschoonover.com/solarized.
+
+border         = "base01"
+border_focused = "blue"
+rule           = "base02"
+title          = "blue"
+text           = "reset"
+muted          = "base0"
+label          = "cyan"
+accent         = "blue"
+key            = "violet"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "base02"
+
+[palette]
+base02  = "#073642"
+base01  = "#586e75"
+base00  = "#657b83"
+base0   = "#839496"
+base1   = "#93a1a1"
+yellow  = "#b58900"
+orange  = "#cb4b16"
+red     = "#dc322f"
+magenta = "#d33682"
+violet  = "#6c71c4"
+blue    = "#268bd2"
+cyan    = "#2aa198"
+green   = "#859900"
+
+[cpu_gradient]
+start = "#073642"
+mid   = "#b58900"
+end   = "#dc322f"
+
+[rx_gradient]
+start = "#073642"
+mid   = "#2aa198"
+end   = "#859900"
+
+[tx_gradient]
+start = "#073642"
+mid   = "#268bd2"
+end   = "#6c71c4"
+
+[gain_gradient]
+start = "#073642"
+mid   = "#859900"
+end   = "#859900"
+
+[loss_gradient]
+start = "#073642"
+mid   = "#dc322f"
+end   = "#dc322f"

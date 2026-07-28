@@ -380,6 +380,28 @@ impl Config {
             }
         }
     }
+
+    /// Apply a remembered theme name, if there is one and it still loads.
+    ///
+    /// Separate from [`Config::apply_state`] for the same reason
+    /// [`Config::resolve_theme`] is separate from deserializing: it touches the
+    /// filesystem, and it needs the config's own path to know where to look.
+    ///
+    /// Failure is not an error. A theme file the user has since deleted or
+    /// broken must not stop the dashboard starting — the state file is written
+    /// by mirador and a person who has just made their config unloadable
+    /// deserves a message, but a person whose *remembered* theme has gone
+    /// deserves the config's theme and no drama. The picker will show them the
+    /// list again the next time they press `t`.
+    pub fn apply_state_theme(&mut self, state: &crate::state::UiState, config_path: &Path) {
+        let Some(name) = state.theme.as_deref() else {
+            return;
+        };
+        let dir = crate::themes::user_dir(config_path);
+        if let Ok(theme) = crate::themes::resolve(name, dir.as_deref()) {
+            self.theme = theme;
+        }
+    }
 }
 
 /// Turn a parse failure into an error that says how to fix it.

@@ -245,7 +245,11 @@ pub fn de_theme<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Theme, D::
 }
 
 /// Gradients baked once at startup, so drawing a frame is array lookups.
-#[derive(Debug)]
+///
+/// `PartialEq` is here for the tests that check a theme swap rebaked this —
+/// it is the one thing in the dashboard that does not read `Theme` at draw
+/// time, so it is the one thing a swap can forget.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gradients {
     pub cpu: Gradient,
     pub rx: Gradient,

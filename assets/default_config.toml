@@ -99,15 +99,25 @@ rows = [
 #
 # There are two ways to write this, and they use the same key.
 #
+# Press `t` in the dashboard to browse them. The list previews as you move, so
+# you can see a theme before choosing it, and `Esc` puts back what you had. A
+# theme picked that way is remembered in mirador's state file, which outranks
+# whatever this file says — so if you set a theme here and it seems to be
+# ignored, press `t` and pick it again, or delete the state file.
+#
 # Name a theme, and this whole table goes away:
 #
 #     theme = "high-contrast"
 #
-# Four ship inside the binary — `default` (this), `default-light`,
-# `high-contrast` and `ansi` — and anything in themes/<name>.toml beside this
-# file is found first, so a bundled theme can be replaced without renaming it.
-# A theme file may `inherits` another and may define a `[palette]` of named
-# colours; see the README.
+# Ten ship inside the binary. Four are mirador's own — `default` (this),
+# `default-light`, `high-contrast` and `ansi` — and six are ports of palettes
+# you may already be running elsewhere: `nord`, `gruvbox`, `dracula`,
+# `catppuccin-mocha`, `tokyo-night` and `solarized-dark`. All six are dark; on
+# a light terminal, `default-light` is the one to reach for.
+#
+# Anything in themes/<name>.toml beside this file is found first, so a bundled
+# theme can be replaced without renaming it. A theme file may `inherits`
+# another and may define a `[palette]` of named colours; see the README.
 #
 # Or keep the table below and set colours here. Naming a theme and writing the
 # table are mutually exclusive: TOML will not let one key be both a string and

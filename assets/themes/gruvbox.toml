@@ -1,0 +1,56 @@
+# Gruvbox dark — retro groove, by Pavel Pertsev.
+#
+# The warmest of the popular palettes and the highest contrast, which is why it
+# gets recommended for long sessions. Values from morhetz/gruvbox-contrib's
+# colour table.
+
+border         = "dark2"
+border_focused = "bright-orange"
+rule           = "dark1"
+title          = "bright-orange"
+text           = "reset"
+muted          = "gray"
+label          = "bright-aqua"
+accent         = "bright-orange"
+key            = "bright-yellow"
+success        = "bright-green"
+warning        = "bright-yellow"
+error          = "bright-red"
+track          = "dark1"
+
+[palette]
+dark1         = "#3c3836"
+dark2         = "#504945"
+gray          = "#928374"
+bright-red    = "#fb4934"
+bright-green  = "#b8bb26"
+bright-yellow = "#fabd2f"
+bright-blue   = "#83a598"
+bright-purple = "#d3869b"
+bright-aqua   = "#8ec07c"
+bright-orange = "#fe8019"
+
+[cpu_gradient]
+start = "#3c3836"
+mid   = "#fabd2f"
+end   = "#fb4934"
+
+[rx_gradient]
+start = "#504945"
+mid   = "#689d6a"
+end   = "#b8bb26"
+
+[tx_gradient]
+start = "#504945"
+mid   = "#b16286"
+end   = "#d3869b"
+
+[gain_gradient]
+start = "#504945"
+mid   = "#98971a"
+end   = "#b8bb26"
+
+[loss_gradient]
+start = "#504945"
+mid   = "#cc241d"
+end   = "#fb4934"

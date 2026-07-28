@@ -1,0 +1,58 @@
+# Tokyo Night (Storm) — after the lights of Tokyo at night, by Enkia.
+#
+# The Storm variant rather than the darker default, because mirador draws its
+# chrome *against* the background: on Tokyo Night's near-black the slate borders
+# vanish, and Storm's lifted background keeps them visible without brightening
+# anything else.
+
+border         = "storm-hi"
+border_focused = "blue"
+rule           = "storm"
+title          = "blue"
+text           = "reset"
+muted          = "comment"
+label          = "cyan"
+accent         = "blue"
+key            = "purple"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "storm"
+
+[palette]
+storm    = "#24283b"
+storm-hi = "#414868"
+comment  = "#565f89"
+red      = "#f7768e"
+orange   = "#ff9e64"
+yellow   = "#e0af68"
+green    = "#9ece6a"
+teal     = "#73daca"
+cyan     = "#7dcfff"
+blue     = "#7aa2f7"
+purple   = "#bb9af7"
+
+[cpu_gradient]
+start = "#24283b"
+mid   = "#e0af68"
+end   = "#f7768e"
+
+[rx_gradient]
+start = "#414868"
+mid   = "#7dcfff"
+end   = "#9ece6a"
+
+[tx_gradient]
+start = "#414868"
+mid   = "#7aa2f7"
+end   = "#bb9af7"
+
+[gain_gradient]
+start = "#414868"
+mid   = "#9ece6a"
+end   = "#9ece6a"
+
+[loss_gradient]
+start = "#414868"
+mid   = "#f7768e"
+end   = "#f7768e"
