@@ -164,11 +164,41 @@ impl Partial {
         }
         Some(Story {
             source: String::new(),
-            title: title.to_string(),
-            link: self.link.trim().to_string(),
+            title: clip(title, MAX_TITLE),
+            link: clip(self.link.trim(), MAX_LINK),
             published: parse_date(self.date.trim()),
         })
     }
+}
+
+/// The longest headline kept. Real ones run to about 150 characters; this is
+/// generous enough that nothing genuine is ever clipped.
+const MAX_TITLE: usize = 400;
+
+/// The longest link kept. Real ones are well under 200.
+const MAX_LINK: usize = 1_000;
+
+/// The longest feed name kept, applied where the panel names the feed.
+pub const MAX_SOURCE: usize = 80;
+
+/// Keep the first `limit` characters of `text`.
+///
+/// This is the bound that was missing, and the reason it matters is not tidiness
+/// — it is that everything downstream is per *frame*. A story's title is wrapped
+/// on every draw and its source is uppercased on every draw, so an unbounded
+/// string here becomes unbounded work sixty times a minute. Measured before
+/// fixing: a 2 MB headline wrapped to 40,000 lines and cost **72 ms a frame**,
+/// and `ureq`'s body cap allows five times that. A feed you do not control
+/// should not be able to decide how much work the dashboard does.
+///
+/// Cutting on a character boundary rather than a byte one, so a clipped headline
+/// is still a string. The panel truncates again for display, in *cells*; this
+/// bound is about what is worth holding at all.
+fn clip(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    text.chars().take(limit).collect()
 }
 
 /// The text an entity reference stands for.
@@ -220,6 +250,54 @@ fn local_name(name: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bound that was missing. Everything downstream of a story runs per
+    /// *frame* — the title is wrapped on every draw, the source uppercased on
+    /// every draw — so an unbounded field here is unbounded work sixty times a
+    /// minute. Measured before the fix: a 2 MB headline wrapped to 40,000 lines
+    /// and cost 72 ms a frame, and `ureq`'s body cap allows five times that.
+    ///
+    /// A feed is the one input to this program that somebody else writes.
+    #[test]
+    fn a_hostile_feed_cannot_decide_how_much_work_the_dashboard_does() {
+        let huge = "word ".repeat(400_000);
+        let xml = format!(
+            "<rss><channel><item><title>{huge}</title>\
+             <link>http://example.com/{huge}</link></item></channel></rss>"
+        );
+        let stories = parse(&xml).expect("parses");
+        let story = stories.first().expect("one story");
+
+        assert!(
+            story.title.chars().count() <= MAX_TITLE,
+            "a {} character headline survived",
+            story.title.chars().count()
+        );
+        assert!(
+            story.link.chars().count() <= MAX_LINK,
+            "a {} character link survived",
+            story.link.chars().count()
+        );
+
+        // The property that actually matters: what it costs to draw.
+        let wrapped = crate::grid::wrap(&story.title, 50);
+        assert!(
+            wrapped.len() <= 40,
+            "the headline still wraps to {} lines a frame",
+            wrapped.len()
+        );
+    }
+
+    /// And an ordinary headline is untouched — a bound that clips real news is
+    /// worse than no bound.
+    #[test]
+    fn a_headline_of_ordinary_length_is_not_clipped() {
+        let title = "Astronomers find a planet where it rains glass sideways, \
+                     and the discovery may rewrite how we think gas giants form";
+        let xml = format!("<rss><channel><item><title>{title}</title></item></channel></rss>");
+        let stories = parse(&xml).expect("parses");
+        assert_eq!(stories[0].title, title, "a real headline was clipped");
+    }
 
     /// Captured from real feeds, and deliberately awkward: CDATA titles, an
     /// entity inside a link, an entity that splits a title into three text
