@@ -943,6 +943,12 @@ already `truncate`d to the width, so neither ever wraps untrusted text.
 `ratatuis_own_wrapper_is_why_this_module_wraps_first` pins the dependency bug the
 way the TOML nesting bound is pinned, and **says in its failure message that a
 fix upstream is good news** rather than something to delete the assertion over.
+Reported as [ratatui#2679](https://github.com/ratatui/ratatui/issues/2679), with
+a standalone repro and two passing controls — the same text without the leading
+mark, and plain ASCII at width 2 — since what makes the report useful is the
+pair that *does not* crash. The root cause is `render_line` advancing `x` by each
+grapheme's width and indexing the buffer unguarded, trusting `WordWrapper` never
+to yield a line wider than the area; that invariant is what breaks.
 
 The other two were in this module, and both are the Phase 1 pattern again:
 

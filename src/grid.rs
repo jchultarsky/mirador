@@ -606,6 +606,8 @@ mod tests {
     /// a leading combining mark, which throws the accounting off at any width.
     /// Neither needs unusual input — emoji in a note is ordinary.
     ///
+    /// Reported upstream as <https://github.com/ratatui/ratatui/issues/2679>.
+    ///
     /// **If this test starts failing, ratatui has fixed it.** That is good
     /// news, and the thing to do is check whether `wrapped` can go, not to
     /// delete the assertion. The bound lives in a dependency and would leave
