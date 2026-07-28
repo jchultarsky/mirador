@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-27
+
+### Added
+
+- **Six more themes, and a `t` key to try them on.** Nord, Gruvbox, Dracula,
+  Catppuccin Mocha, Tokyo Night and Solarized Dark now ship inside the binary
+  alongside mirador's own four, so the dashboard can match whatever your editor
+  and terminal are already wearing. The values come from each palette's own
+  specification and the theme file cites its source: these are ports, not
+  interpretations.
+
+  Press `t` to browse them. **The list previews as you move through it**, on
+  your real dashboard rather than on a swatch, because a theme you cannot see is
+  a theme you cannot choose. `Enter` keeps what is on screen; `Esc` puts back
+  what you had. Themes of your own are listed alongside the shipped ones and
+  marked as yours.
+
+  Your choice is remembered the same way your weather units and sort order are.
+  If you set `theme` in your config and it seems to be ignored, you picked
+  something else with `t` at some point — pick it again, or delete the state
+  file.
+
+  All six keep `text = "reset"`, so body text still follows the foreground you
+  have already tuned your terminal to.
+
 ### Fixed
 
 - **A theme name is a name, not a path.** `theme = "../../elsewhere"` resolved,
@@ -971,7 +996,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/jchultarsky/mirador/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/jchultarsky/mirador/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/jchultarsky/mirador/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/jchultarsky/mirador/compare/v0.12.0...v0.13.0
