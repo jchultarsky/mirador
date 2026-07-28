@@ -259,18 +259,14 @@ an obvious way back.
 **A new widget will not appear in a config you already have.** A config written
 by an earlier version lays out exactly the panels that existed when it was
 written, and nothing since. Leaving a panel out is a legitimate choice, so this
-cannot be an error and cannot be decided for you.
+cannot be an error and cannot be decided for you — and mirador does not tell
+you about it either. It used to, in the status bar and in the help overlay, and
+that was a mistake in the same family as an unread badge: a dashboard cannot
+tell "hasn't discovered this yet" from "decided against it", and it was
+reminding the second group for ever.
 
-You get a notice on the right of the status bar naming what your layout does
-not place, and telling you which key fixes it:
-
-```
- mirador   Tab focus   ? keys   q quit   w panels        1 unused: pomodoro   press w
-```
-
-It retires on your first keypress, because a dashboard you leave open all day
-must not nag; `?` keeps it in the help overlay. Press `w` and you get the
-picker:
+Press `w` — a key that is on the status bar and in the help — to see every
+widget mirador has and which of them your layout places:
 
 ```
 ╭PANELS────────────────────────────────╮
@@ -304,9 +300,9 @@ and leaves a backup beside the original.
 
 ## The panels
 
-Ten widgets, each answering one question. Put the ones you want in the
-layout and drop the rest — an unused widget costs nothing but is also not
-built.
+Twelve widgets, each answering one question. Put the ones you want in the
+layout and drop the rest — a widget your layout leaves out is never built, and
+nothing will nag you about it.
 
 ### Tasks
 
@@ -418,14 +414,23 @@ is not. Columns drop as the panel narrows, in the order that costs you least.
 A watchlist with the last price, the day's change, and an intraday sparkline.
 
 ```
-╭┤1 Markets├──────────────────────────────────────────────────────────────┤3├╮
+╭┤1 Markets├──────────────────────────────────────────────────────────────┤7├╮
 │   SYMBOL         LAST       CHG        % TODAY                             │
-│ ▸ AAPL         333.02    +11.36   +3.53% ▂▄▅▆▇█▇▇▇▇▇▇                      │
-│   MSFT         381.70     +0.12   +0.03% ▄▃▅▇▆▇▆▆▇▆▆▃                      │
-│   ^GSPC       7411.98     +3.68   +0.05% ▃▃▃▆▇▇▅▆▅▂▁▂                      │
+│ ▸ ^GSPC       7413.18     +1.20   +0.02% ▇▄▃▃▂▃▂▁▂▂▃▃                      │
+│   ^DJI       52210.08   +262.83   +0.51% ▇▅▃▃▂▂▂▂▂▂▃▄                      │
+│   ^IXIC      24932.08    -43.74   -0.18% ▇▄▃▃▂▃▂▂▂▂▄▄                      │
+│   ^RUT        2948.03    +18.04   +0.62% ▇▄▃▃▂▃▂▂▃▃▄▄                      │
+│   ^NDX       28039.21    -89.13   -0.32% ▇▄▃▃▂▃▂▂▃▂▄▄                      │
+│   AAPL         336.91     +3.89   +1.17% ▂▄▅▇▅▅▃▃▂▂▂▄                      │
+│   MSFT         389.10     +7.40   +1.94% ▃▄▂▆▃▃▄▅▇▇▆▂                      │
 │ via yahoo                                                                  │
 ╰─────────────────────── a add · d remove · r refresh ───────────────────────╯
 ```
+
+The default watchlist is the five major US indexes — S&P 500, Dow, Nasdaq
+Composite, Russell 2000 and Nasdaq-100 — plus two ordinary stocks, so the panel
+shows both kinds on a first run. `^VIX` is the volatility index if you want it,
+and `EURUSD=X` and `BTC-USD` work too.
 
 `a` adds a symbol and `d` removes one, and those edits stick — the watchlist
 is a data file rather than config, which is what lets the panel own it. See

@@ -62,7 +62,7 @@ pub fn truncate(text: &str, width: usize) -> String {
 }
 
 /// Display width of a single character, treating unprintables as zero-width.
-fn char_width(c: char) -> usize {
+pub fn char_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 

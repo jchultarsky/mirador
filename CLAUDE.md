@@ -207,7 +207,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 264 of them, including the ones mirador
+    trip through `toml` discards all 269 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -319,6 +319,23 @@ anything on fire" signal.
 
 **Rejected:** unread email/message counts. Looks like information, is a
 doomscroll hook, turns a calm dashboard into a nagging one.
+
+**Also rejected, after shipping it: the unused-widget notice.** A line in the
+status bar and a section in the help overlay naming the widgets your layout
+does not place. Removed at the owner's request, and the reason generalises:
+*a dashboard cannot tell "has not discovered this yet" from "decided against
+it"*, so a hint aimed at the first group reminds the second group for ever.
+The status bar half retired on the first keypress; the help overlay half did
+not, and that is the one that grated — press `?` and be told about four panels
+you deliberately switched off, every time.
+
+This is the unread-badge rejection reached from the direction of helpfulness
+rather than of notifications, which is exactly why it got built. `w` remains a
+primary binding, so the *capability* is still one keystroke and on the status
+bar; what is gone is being told you should use it.
+`a_layout_missing_widgets_is_not_advertised_anywhere` renders the dashboard and
+the help overlay at 200x40 with eleven widgets unplaced and fails on the word
+"unused".
 
 **Calendar must be independent** — no connecting to the user's mail or calendar
 server. Read a local `.ics` file or a plain events file.

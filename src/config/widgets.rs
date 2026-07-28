@@ -158,7 +158,13 @@ pub struct StocksConfig {
 impl Default for StocksConfig {
     fn default() -> Self {
         Self {
-            symbols: vec!["AAPL".into(), "MSFT".into(), "^GSPC".into()],
+            // The major US indexes first, then two ordinary stocks so the
+            // panel shows both kinds on a first run. Kept identical to
+            // `[stocks].symbols` in assets/default_config.toml.
+            symbols: ["^GSPC", "^DJI", "^IXIC", "^RUT", "^NDX", "AAPL", "MSFT"]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             file: None,
             source: "yahoo".to_string(),
             refresh_secs: 120,
