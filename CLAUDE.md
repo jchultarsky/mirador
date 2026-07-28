@@ -881,6 +881,43 @@ attacker-influenced text. Property tests over generated input are the cheap
 version and want no new tooling; a fuzz target is the thorough one and wants
 nightly.
 
+**`ical`: done.** Three findings, two of them crashes, and the pass is worth
+reading as a lesson about Phase 1 rather than only about this module.
+
+Phase 1 declared `ical` clean. It had tested the parser at **scale** — two
+thousand recurring events, `COUNT=999999999`, fifty thousand folded lines,
+twenty thousand nested components — and never varied the *alphabet* or the
+*shape*. Both crashes were sitting in plain sight the whole time:
+
+- `vevents` read `line.len() > 6 && line[..6].eq_ignore_ascii_case("BEGIN:")`.
+  Slicing a `&str` at a byte offset panics when that offset falls inside a
+  character, so any line in a `VEVENT` with a multi-byte character straddling
+  byte 4 or 6 brought the dashboard down. `日本語日本語` does it; so does
+  `abcé`. A calendar is somebody else's file and international text in one is
+  not an edge case. Now `starts_with_ci`, comparing bytes.
+- `INTERVAL=999999999` with `FREQ=DAILY` panicked *inside jiff*: `Span::days`
+  panics rather than erroring above about seven million. Now the `try_` setters,
+  with a refusal treated as a rule that has run out of road. Deliberately not a
+  constant of our own — encoding jiff's bounds here would be a second copy of a
+  dependency's number, the same trap the TOML nesting bound in `themes` avoids.
+
+The third is memory, and it is the one the byte cap was supposed to prevent.
+`read_calendar` refuses a `.ics` over 10MB, but **the cost of reading one is per
+line, not per byte**: every line becomes a `String` in a `Vec`, and a `String`
+is 24 bytes before it holds anything. Measured at a flat 24x — a 10MB file of
+bare newlines produced **240MB of `Vec`** before a single event was parsed.
+`MAX_LINES` now caps it at 400,000, which is more lines than a maximally-folded
+10MB calendar holds, and hitting it is reported through `Calendar::skipped`
+rather than silently losing the rest.
+
+The generator that found the second one lives at the foot of the module. It is
+hand-rolled and deterministic — `proptest` and `arbitrary` both do this better
+and neither is worth a dependency here, because what matters is the *corpus*.
+Every fragment in it is there because of something in the parser, not sampled
+from all possible bytes. 40,000 generated calendars run clean at a worst case of
+235µs; the committed test runs a subset that fits CI, and `probe_wide_sweep` is
+`#[ignore]`d for the full run.
+
 *Exit:* no arbitrary input to any of the five produces a panic, a hang, or
 unbounded memory.
 
