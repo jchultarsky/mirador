@@ -33,7 +33,7 @@
 //! the failure mode of an unusual config is "your change did not stick",
 //! reported, rather than "your config is now broken".
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
 
@@ -48,20 +48,14 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
     let lines: Vec<&str> = source.lines().collect();
     let map = map_layout(&lines)?;
 
-    if map.rows.len() != current.layout.rows.len() {
-        bail!(
-            "found {} layout rows in the text but {} when parsed; the `[layout]` \
-             block is formatted in a way this cannot edit safely",
-            map.rows.len(),
-            current.layout.rows.len()
-        );
-    }
+    check_editable(&map, &current)?;
 
     // Every panel's entry, keyed by widget and found across the whole block
     // rather than within one row. That is what lets a panel moved to another
     // row — or to a row that did not exist a moment ago — take the comments
     // written above it along with it.
     let blocks = panel_blocks(&lines, &map);
+    let duplicates = duplicated_widgets(&map);
     let pairing = pair_rows(&map, desired);
 
     // Work back to front so an insertion or deletion cannot shift the line
@@ -95,7 +89,7 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
             edits.push(Edit::Replace {
                 from: after,
                 to: after,
-                text: row_block(&lines, &map, &blocks, want),
+                text: row_block(&lines, &map, &blocks, &duplicates, want)?,
             });
             continue;
         };
@@ -142,7 +136,7 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
         edits.push(Edit::Replace {
             from,
             to,
-            text: panel_lines(&lines, &blocks, want, template),
+            text: panel_lines(&lines, &blocks, &duplicates, want, template)?,
         });
     }
 
@@ -249,6 +243,55 @@ struct PanelBlock {
     lines: Vec<String>,
 }
 
+/// Refuse a `[layout]` block this module cannot edit without guessing.
+///
+/// Both checks are about the text disagreeing with what was parsed from it,
+/// which is the one thing the round-trip check at the end of [`apply`] cannot
+/// catch on its own — it compares layouts, and a layout does not carry the
+/// formatting or the comments that make the edit worth doing.
+fn check_editable(map: &LayoutMap, current: &Config) -> Result<()> {
+    if map.rows.len() != current.layout.rows.len() {
+        bail!(
+            "found {} layout rows in the text but {} when parsed; the `[layout]` \
+             block is formatted in a way this cannot edit safely",
+            map.rows.len(),
+            current.layout.rows.len()
+        );
+    }
+    Ok(())
+}
+
+/// Every widget named more than once anywhere in the block.
+///
+/// A panel's entry is looked up by widget name, so a name used twice has no
+/// single entry to be. Rebuilding a row then writes one of the two entries for
+/// both panels: the surviving comment captions a panel it does not describe,
+/// and the other is gone. The layout still comes out right, so the round-trip
+/// check at the end of [`apply`] passes it — **a shape comparison cannot see a
+/// lost comment**, and comments surviving is the whole reason this module edits
+/// text instead of reserialising.
+///
+/// Neither the picker (a toggle) nor arrange mode can produce a duplicate, so
+/// this is a hand-written config, and refusing is what this module already does
+/// when it cannot edit confidently. "Your change did not stick" is recoverable;
+/// a deleted sentence someone wrote is not.
+///
+/// Consulted only where an entry is actually reused — [`panel_lines`] — rather
+/// than at the top of [`apply`]. The cheap path rewrites digits on the lines
+/// they are already on and never touches an entry, so a plain `Ctrl+arrow`
+/// resize is safe even in a file like this, and refusing it would be a wider
+/// answer than the problem.
+fn duplicated_widgets(map: &LayoutMap) -> HashSet<&str> {
+    let mut seen = HashSet::new();
+    let mut twice = HashSet::new();
+    for panel in map.rows.iter().flat_map(|row| row.panels.iter()) {
+        if !seen.insert(panel.widget.as_str()) {
+            twice.insert(panel.widget.as_str());
+        }
+    }
+    twice
+}
+
 /// Every panel's entry, keyed by widget.
 fn panel_blocks(lines: &[&str], map: &LayoutMap) -> HashMap<String, PanelBlock> {
     let mut blocks = HashMap::new();
@@ -310,11 +353,21 @@ fn pair_rows(map: &LayoutMap, desired: &Layout) -> Vec<Option<usize>> {
 fn panel_lines(
     lines: &[&str],
     blocks: &HashMap<String, PanelBlock>,
+    duplicates: &HashSet<&str>,
     want: &LayoutRow,
     template: usize,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for panel in &want.panels {
+        if duplicates.contains(panel.widget.as_str()) {
+            bail!(
+                "`{}` appears more than once in `[layout]`, so its entry cannot \
+                 be told apart from its twin and rewriting the row would caption \
+                 one panel with the other's comment. Give each panel a distinct \
+                 widget, or move this row by hand",
+                panel.widget
+            );
+        }
         match blocks.get(&panel.widget) {
             Some(block) => {
                 let last = block.lines.len().saturating_sub(1);
@@ -329,7 +382,7 @@ fn panel_lines(
             None => out.push(panel_line(lines, template, &panel.widget, panel.width)),
         }
     }
-    out
+    Ok(out)
 }
 
 /// A whole new row block, indented to match the rows already in the file.
@@ -337,8 +390,9 @@ fn row_block(
     lines: &[&str],
     map: &LayoutMap,
     blocks: &HashMap<String, PanelBlock>,
+    duplicates: &HashSet<&str>,
     want: &LayoutRow,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let model = &map.rows[0];
     let indent: String = lines
         .get(model.header_line)
@@ -350,9 +404,9 @@ fn row_block(
     let template = model.panels.first().map_or(model.header_line, |p| p.line);
 
     let mut out = vec![format!("{indent}{{ height = {}, panels = [", want.height)];
-    out.extend(panel_lines(lines, blocks, want, template));
+    out.extend(panel_lines(lines, blocks, duplicates, want, template)?);
     out.push(format!("{indent}] }},"));
-    out
+    Ok(out)
 }
 
 struct LayoutMap {
@@ -475,6 +529,13 @@ fn number_value(line: &str, key: &str) -> Option<u16> {
 /// The text just past `key =`, ignoring keys that are only a suffix of a longer
 /// one — `width` must not match inside `max_width`.
 fn after_key<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    // `find("")` matches at the cursor every time and consumes nothing, so the
+    // loop below would never advance. No caller passes an empty key — all four
+    // are literals — but the cost of never having to check that again is one
+    // line, and a hang is the one failure a dashboard cannot recover from.
+    if key.is_empty() {
+        return None;
+    }
     let mut from = 0;
     while let Some(found) = line[from..].find(key) {
         let at = from + found;
@@ -790,6 +851,275 @@ units = "imperial"
             "only {applied} of {} shapes applied; the editor has become too \
              timid to be useful",
             shapes.len()
+        );
+    }
+
+    /// A widget named twice has no entry that is unambiguously its own, so a
+    /// rebuild wrote one panel's comment above both and dropped the other's.
+    /// The shape still matched, so the round-trip check at the end of `apply`
+    /// passed it — a shape comparison cannot see a lost comment, which is why
+    /// this needs a check of its own.
+    #[test]
+    fn a_widget_named_twice_is_refused_rather_than_losing_a_comment() {
+        let src = "\
+[layout]
+rows = [
+  { height = 50, panels = [
+    # the left one
+    { widget = \"todo\",  width = 30 },
+    # the right one
+    { widget = \"todo\",  width = 40 },
+    # notes
+    { widget = \"notes\", width = 30 },
+  ] },
+]
+";
+        let mut want = layout_of(src);
+        // Reorder so the widget set changes and the rebuild path runs.
+        want.rows[0].panels.rotate_right(1);
+
+        let err = apply(src, &want).expect_err("a duplicated widget must be refused");
+        let message = err.to_string();
+        assert!(message.contains("todo"), "name the widget: `{message}`");
+        assert!(
+            message.contains("more than once"),
+            "say what is wrong: `{message}`"
+        );
+    }
+
+    /// The ordinary case is untouched: one of each is not a duplicate.
+    #[test]
+    fn a_layout_with_no_repeated_widget_still_edits() {
+        let mut want = layout_of(SAMPLE);
+        want.rows[0].panels.reverse();
+        assert!(apply(SAMPLE, &want).is_ok());
+    }
+
+    /// And the refusal is as narrow as the problem. Only a *rebuild* reuses a
+    /// panel's captured entry, so a plain resize — every `Ctrl+arrow`, the
+    /// common case — is safe even in a file with a widget named twice, and must
+    /// keep working. Refusing it would be a wider answer than the question.
+    #[test]
+    fn a_resize_still_works_even_where_a_rebuild_would_not() {
+        let src = "\
+[layout]
+rows = [
+  { height = 50, panels = [
+    # the left one
+    { widget = \"todo\",  width = 30 },
+    # the right one
+    { widget = \"todo\",  width = 40 },
+  ] },
+]
+";
+        let mut want = layout_of(src);
+        want.rows[0].panels[0].width = 55;
+
+        let out = apply(src, &want).expect("a resize must survive a duplicate");
+        assert!(out.contains("width = 55"), "the resize did not land: {out}");
+        // Both comments still there, and each still above its own panel.
+        assert!(out.contains("# the left one") && out.contains("# the right one"));
+        assert_eq!(
+            out.matches("# the right one").count(),
+            1,
+            "a comment was duplicated: {out}"
+        );
+    }
+
+    /// `find("")` matches at the cursor without consuming anything, so the scan
+    /// in `after_key` would never advance. Unreachable through its four
+    /// callers, which all pass literals — and a hang is the one failure a
+    /// dashboard cannot recover from, so it is guarded rather than argued
+    /// about. The same reasoning as `samples::push_bounded` at capacity zero.
+    #[test]
+    fn an_empty_key_terminates_instead_of_spinning() {
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&done);
+        std::thread::spawn(move || {
+            assert!(after_key("height = 3", "").is_none());
+            assert_eq!(set_number("height = 3", "", 9), "height = 3");
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "an empty key never returned; the scan is spinning"
+        );
+    }
+
+    /// The other axis. `no_mutation_of_the_shipped_config_produces_a_wrong_file`
+    /// varies the *desired layout* against one fixed piece of text; this varies
+    /// the **text**, which is the half a person actually edits by hand.
+    ///
+    /// That distinction is the lesson `ical` taught: Phase 1 tested that parser
+    /// at scale, never varied its alphabet or its shape, and both crashes in it
+    /// were sitting in plain sight the whole time.
+    ///
+    /// Only two outcomes are acceptable — applied and exactly right, or refused
+    /// — and "wrote something plausible" is what this module exists to make
+    /// impossible.
+    /// Three of these are invalid TOML on purpose and never reach `apply` —
+    /// leading zeros in an integer, a table named twice, and a section this
+    /// crate does not know.
+    const UNPARSABLE_MUTATIONS: usize = 3;
+
+    /// Mutations of the shipped config *text*, which is the half a person edits.
+    ///
+    /// Normalised to LF first, and that is not decoration. This repository has
+    /// no `.gitattributes`, so a Windows checkout writes the file with CRLF —
+    /// and then `"crlf"` below, which replaces every `\n`, produces `\r\r\n`
+    /// and stops being the mutation it is named after. The asymmetry that hides
+    /// this is worth knowing: **rustc normalises CRLF to LF inside string
+    /// literals, and `include_str!` does not**, so `SAMPLE` is LF on every
+    /// platform while this file is whatever git wrote. Windows CI found it; the
+    /// same two mutations pass locally either way.
+    fn text_mutations() -> Vec<(&'static str, String)> {
+        let shipped = &include_str!("../assets/default_config.toml").replace("\r\n", "\n");
+        vec![
+            ("shipped", shipped.clone()),
+            ("crlf", shipped.replace('\n', "\r\n")),
+            ("crlf-mixed", shipped.replacen('\n', "\r\n", 40)),
+            ("no-trailing-newline", shipped.trim_end().to_string()),
+            ("tabs-for-indent", shipped.replace("  ", "\t")),
+            ("no-space-around-eq", shipped.replace(" = ", "=")),
+            ("extra-space-around-eq", shipped.replace(" = ", "   =   ")),
+            // Alphabet: prose in the places a person writes prose. A comment is
+            // the one part of this file mirador did not author.
+            (
+                "cjk-comments",
+                shipped.replace("# ", "# \u{65E5}\u{672C}\u{8A9E} "),
+            ),
+            ("emoji-comments", shipped.replace("# ", "# \u{1F31E} ")),
+            (
+                "combining-marks",
+                shipped.replace("# ", "# a\u{0301}\u{0301} "),
+            ),
+            ("rtl-comments", shipped.replace("# ", "# \u{05D0}\u{05D1} ")),
+            (
+                "quote-in-a-comment",
+                shipped.replace("# ", "# it\"s \"quoted\" "),
+            ),
+            // Numbers at and beyond the edges of the type they parse into.
+            ("width-0", shipped.replace("width = 30", "width = 0")),
+            (
+                "width-65535",
+                shipped.replace("width = 30", "width = 65535"),
+            ),
+            (
+                "width-leading-zeros",
+                shipped.replace("width = 30", "width = 000030"),
+            ),
+            // Shape.
+            (
+                "comment-between-header-and-panels",
+                shipped.replace("panels = [\n", "panels = [\n    # stray\n"),
+            ),
+            (
+                "duplicated-layout-header",
+                shipped.replace("[layout]", "[layout]\n[layout]"),
+            ),
+            (
+                "no-layout-section",
+                shipped.replace("[layout]", "[disabled]"),
+            ),
+        ]
+    }
+
+    /// A spread of layouts to ask each mutated text for.
+    fn desired_variants(base: &Layout) -> Vec<Layout> {
+        let mut wants = vec![base.clone()];
+        if let Some(first) = base.rows.first() {
+            let mut wider = base.clone();
+            if let Some(panel) = wider.rows[0].panels.first_mut() {
+                panel.width = panel.width.saturating_add(7);
+            }
+            wants.push(wider);
+
+            let mut reversed = base.clone();
+            reversed.rows[0].panels.reverse();
+            wants.push(reversed);
+
+            let mut taller = base.clone();
+            taller.rows[0].height = first.height.saturating_add(3);
+            wants.push(taller);
+
+            let mut emptied = base.clone();
+            emptied.rows[0].panels.clear();
+            emptied.rows.retain(|row| !row.panels.is_empty());
+            wants.push(emptied);
+        }
+        if base.rows.len() > 1 {
+            let mut swapped = base.clone();
+            swapped.rows.swap(0, 1);
+            wants.push(swapped);
+
+            let mut moved = base.clone();
+            if !moved.rows[0].panels.is_empty() {
+                let panel = moved.rows[0].panels.remove(0);
+                moved.rows[1].panels.insert(0, panel);
+                moved.rows.retain(|row| !row.panels.is_empty());
+                wants.push(moved);
+            }
+        }
+        wants
+    }
+
+    /// The other axis. `no_mutation_of_the_shipped_config_produces_a_wrong_file`
+    /// varies the *desired layout* against one fixed piece of text; this varies
+    /// the **text**, which is the half a person actually edits by hand.
+    ///
+    /// That distinction is the lesson `ical` taught: Phase 1 tested that parser
+    /// at scale, never varied its alphabet or its shape, and both crashes in it
+    /// were sitting in plain sight the whole time.
+    ///
+    /// Only two outcomes are acceptable — applied and exactly right, or refused
+    /// — and "wrote something plausible" is what this module exists to make
+    /// impossible.
+    #[test]
+    fn no_mutation_of_the_config_text_produces_a_wrong_file() {
+        let mutations = text_mutations();
+        let (mut applied, mut refused, mut exercised) = (0usize, 0usize, 0usize);
+        for (name, source) in &mutations {
+            // A mutation that no longer parses is not this module's problem;
+            // `apply` rejects it at the first line.
+            let Ok(parsed) = toml::from_str::<Config>(source) else {
+                continue;
+            };
+            exercised += 1;
+            for (index, want) in desired_variants(&parsed.layout).iter().enumerate() {
+                match apply(source, want) {
+                    Err(_) => refused += 1,
+                    Ok(text) => {
+                        applied += 1;
+                        let reparsed = toml::from_str::<Config>(&text).unwrap_or_else(|e| {
+                            panic!("`{name}` want {index} produced unparsable TOML: {e}")
+                        });
+                        assert_eq!(
+                            shape(&reparsed.layout),
+                            shape(want),
+                            "`{name}` want {index} wrote a layout nobody asked for"
+                        );
+                        assert!(
+                            text.contains("[weather]"),
+                            "`{name}` want {index} lost a section outside `[layout]`"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Coverage, asserted exactly rather than assumed: a sweep that quietly
+        // stopped parsing its own fixtures would pass while testing nothing.
+        assert_eq!(
+            exercised,
+            mutations.len() - UNPARSABLE_MUTATIONS,
+            "{exercised} of {} mutations parsed",
+            mutations.len()
+        );
+        assert!(
+            applied > refused,
+            "{applied} applied against {refused} refused; the editor has become \
+             too timid to be useful"
         );
     }
 
