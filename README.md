@@ -761,6 +761,13 @@ rows = [
 ]
 ```
 
+**Keep that shape if you want `w` and `m` to work.** TOML lets you spell the
+same layout as a series of `[[layout.rows]]` sections, and mirador reads it
+perfectly well — but it *writes* your config by editing the text, so your
+comments survive, and the text it knows how to edit is the form above.
+Rearranging a layout written the other way tells you so in the status bar
+rather than failing quietly.
+
 ### Widgets
 
 | Widget | What it shows |

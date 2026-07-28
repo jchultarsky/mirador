@@ -87,12 +87,34 @@ fn vertical(layout: &mut Layout, row: usize, column: usize, down: bool) -> Optio
 
 /// Give the panel a row of its own at the outer edge.
 fn promote(layout: &mut Layout, row: usize, column: usize, below: bool) -> Option<(usize, usize)> {
+    // Splitting a weight of one in two needs finer granularity than the layout
+    // currently has. Scale every row rather than inventing weight for this one:
+    // doubling preserves every proportion exactly, which is what the rule at the
+    // top of this module is actually about.
+    //
+    // It used to read `source.height.max(2)`, which for a row of height 1 handed
+    // out two rows of 1 and grew the total by one. A `[[layout.rows]]` written
+    // without a `height` gets `LayoutRow::default()`, which is height 1, and
+    // nothing validates heights — so with rows of `[1, 1]` a promotion turned a
+    // 50/50 dashboard into 33/33/33 and rescaled a row the user had not touched.
+    // `a_move_never_changes_what_the_weights_add_up_to` could not see it: every
+    // height in that fixture is comfortably above two.
+    if layout.rows.get(row).is_some_and(|entry| entry.height == 1) {
+        for entry in &mut layout.rows {
+            entry.height = entry.height.saturating_mul(2);
+        }
+    }
+
     let source = layout.rows.get_mut(row)?;
     let panel = source.panels.remove(column);
 
     // The new row's height comes out of the row the panel left, so the total is
     // unchanged and every other row keeps the share the user gave it.
-    let height = source.height.max(2);
+    //
+    // A source of height 0 gives 0, which is right rather than a special case: a
+    // row with no weight draws nothing, and a panel promoted out of one has not
+    // asked to start being visible.
+    let height = source.height;
     let taken = height / 2;
     source.height = height - taken;
 
@@ -100,7 +122,7 @@ fn promote(layout: &mut Layout, row: usize, column: usize, below: bool) -> Optio
     layout.rows.insert(
         at,
         LayoutRow {
-            height: taken.max(1),
+            height: taken,
             panels: vec![panel],
         },
     );
@@ -272,6 +294,102 @@ mod tests {
         assert_eq!(move_panel(&mut l, 0, 0, Direction::Up), None);
         assert_eq!(l.rows.len(), 2, "no row was opened");
         assert_eq!(heights(&l), [50, 50], "and no weight was moved");
+    }
+
+    /// The rule at the top of this module, stated as the property it is really
+    /// about: an untouched row keeps its *share* of the dashboard.
+    ///
+    /// The sum-based test below cannot see the case this exists for. Every
+    /// height in its fixture is comfortably above two, and the bug only showed
+    /// up at one: `source.height.max(2)` turned a row of height 1 into two rows
+    /// of 1, so `[1, 1]` became `[1, 1, 1]` and a row nobody had moved went from
+    /// half the screen to a third of it.
+    #[test]
+    fn promoting_out_of_a_thin_row_does_not_rescale_the_rows_around_it() {
+        for height in [0u16, 1, 2, 3, 7, 100] {
+            let mut l = layout(&[
+                (height, &[("clocks", 50), ("weather", 50)]),
+                (50, &[("todo", 100)]),
+            ]);
+            let before: u16 = heights(&l).iter().sum();
+            let untouched_share = f64::from(50) / f64::from(before.max(1));
+
+            assert_eq!(
+                move_panel(&mut l, 0, 0, Direction::Up),
+                Some((0, 0)),
+                "height {height}: the move itself must still work"
+            );
+
+            let after: u16 = heights(&l).iter().sum();
+            let todo = *heights(&l).last().expect("the untouched row");
+            let share = f64::from(todo) / f64::from(after.max(1));
+            assert!(
+                (share - untouched_share).abs() < 1e-9,
+                "height {height}: the untouched row went from {:.4} of the screen \
+                 to {:.4} — heights {:?}",
+                untouched_share,
+                share,
+                heights(&l)
+            );
+        }
+    }
+
+    /// `validate` refuses a layout with no rows, and a row with no panels. A
+    /// gesture the user can hold down must not be able to produce either.
+    #[test]
+    fn no_sequence_of_moves_can_produce_a_layout_the_config_would_reject() {
+        let start = layout(&[
+            (1, &[("clocks", 26), ("calendar", 74)]),
+            (1, &[("todo", 100)]),
+            (2, &[("cpu", 50), ("network", 50)]),
+        ]);
+
+        // Every direction, from every position, repeatedly — which is what
+        // holding the key down amounts to.
+        let mut l = start;
+        for step in 0..200usize {
+            let direction = match step % 4 {
+                0 => Direction::Down,
+                1 => Direction::Right,
+                2 => Direction::Up,
+                _ => Direction::Left,
+            };
+            let row = step % l.rows.len().max(1);
+            let column = step % l.rows[row].panels.len().max(1);
+            move_panel(&mut l, row, column, direction);
+
+            assert!(!l.rows.is_empty(), "step {step}: the layout emptied");
+            for entry in &l.rows {
+                assert!(
+                    !entry.panels.is_empty(),
+                    "step {step}: an empty row survived: {:?}",
+                    shape(&l)
+                );
+            }
+            let mut placed: Vec<&str> = l.widgets();
+            placed.sort_unstable();
+            assert_eq!(
+                placed,
+                ["calendar", "clocks", "cpu", "network", "todo"],
+                "step {step}: a panel was lost or duplicated"
+            );
+        }
+    }
+
+    /// The one panel on the dashboard has nowhere to go in any direction, and
+    /// must not be able to leave the layout empty by trying.
+    #[test]
+    fn the_only_panel_on_the_dashboard_refuses_every_direction() {
+        for direction in [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ] {
+            let mut l = layout(&[(100, &[("clocks", 100)])]);
+            assert_eq!(move_panel(&mut l, 0, 0, direction), None, "{direction:?}");
+            assert_eq!(shape(&l), [["clocks"]], "{direction:?} moved something");
+        }
     }
 
     #[test]

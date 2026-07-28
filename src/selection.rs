@@ -29,11 +29,20 @@ pub fn down(state: &mut ListState, n: usize, len: usize) {
 }
 
 /// Move the cursor `n` rows up, stopping at the first row.
+///
+/// Clamps the *starting* position against `len` as well, which [`down`] has
+/// always done and this had not. A selection can be left past the end of a list
+/// that has since got shorter — `news` and `watchlog` both count what they last
+/// managed to draw, so making the panel shorter does exactly that — and the two
+/// directions then disagreed about it. `down` pulled a stale index back into
+/// range; `up` walked it one row at a time from wherever it was, so the
+/// highlight stayed invisible and the key looked broken until you had pressed
+/// it as many times as the list had shrunk.
 pub fn up(state: &mut ListState, n: usize, len: usize) {
-    if len == 0 {
+    let Some(last) = len.checked_sub(1) else {
         return;
-    }
-    let current = state.selected().unwrap_or(0);
+    };
+    let current = state.selected().unwrap_or(0).min(last);
     state.select(Some(current.saturating_sub(n)));
 }
 
@@ -103,6 +112,34 @@ mod tests {
             state.selected(),
             None,
             "a highlight over an empty list has nothing under it"
+        );
+    }
+
+    /// A list that gets shorter can leave the selection past its end — `news`
+    /// and `watchlog` both bound movement by what they last drew, so shrinking
+    /// the panel does it. Both directions have to pull it back, and `up` did
+    /// not: it stepped down from the stale index one row at a time, with
+    /// nothing highlighted the whole way.
+    #[test]
+    fn both_directions_pull_a_selection_left_past_the_end_back_into_range() {
+        let mut state = at(30);
+        down(&mut state, 1, 5);
+        assert_eq!(state.selected(), Some(4), "down clamps into the new list");
+
+        let mut state = at(30);
+        up(&mut state, 1, 5);
+        assert_eq!(
+            state.selected(),
+            Some(3),
+            "up must land one above the last row, not one below a row that is gone"
+        );
+
+        let mut state = at(30);
+        up(&mut state, usize::MAX, 5);
+        assert_eq!(
+            state.selected(),
+            Some(0),
+            "and `first` still goes to the top"
         );
     }
 

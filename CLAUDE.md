@@ -734,6 +734,45 @@ filled once per tick.
 Also bounded the `.ics` read at 10MB, matching what `ureq` already enforces on
 the network side. Reading a calendar costs several times its size.
 
+**`arrange` and `selection`: done.** Two findings, both in code that had a test
+sitting next to it which could not fail.
+
+`promote` broke the one rule its own module header states. Splitting a row's
+height in two read `source.height.max(2)`, so a row of height **1** produced two
+rows of 1 and grew the total by one — and heights are relative weights, so
+`[1, 1]` becoming `[1, 1, 1]` takes an untouched row from half the screen to a
+third of it. Reachable without doing anything odd: `LayoutRow::default()` is
+height 1, nothing in `validate` bounds heights, and a `[[layout.rows]]` entry
+written without a `height` gets the default. It now doubles every row before
+splitting, which preserves every proportion exactly, and a height of 0 stays 0
+rather than being forced up to 2.
+
+`a_move_never_changes_what_the_weights_add_up_to` could never have caught it —
+every height in its fixture is comfortably above two. The replacement asserts
+the property the rule is actually about: an untouched row keeps its *share*.
+
+`selection::up` did not clamp its starting index against `len` where `down`
+always had. A list that gets shorter can leave the selection past its end —
+`news` and `watchlog` both bound movement by what they last managed to *draw*,
+so making the panel shorter does exactly that — and the two directions then
+disagreed: `down` pulled a stale index back into range, `up` walked it down one
+row at a time with nothing highlighted the whole way. This is the same complaint
+as the zone picker's missing scroll, one module over.
+
+Non-findings worth recording. `row_at` maps one screen row to one list index,
+which would be wrong for a multi-line `ListItem` — `news` builds one — but news
+does not use `row_at`; only `todo`, `notes` and `stocks` do, and all three draw
+one line per row. And `insertion_point` cannot divide by zero or see a NaN,
+because `weight` floors each panel at 1.
+
+Found while driving arrange mode in a real terminal, and left as a known
+limitation rather than fixed: **`layout_edit` can only rewrite the
+`rows = [ … ]` form**, not a layout spelled with `[[layout.rows]]` sections.
+Both load; only one can be edited. That is not silent — it is an alert — but the
+message said "no `[layout]` rows found" about a file that visibly has rows,
+which reads as a bug. It now names the form it wants, front-loaded so the useful
+clause survives the status bar's truncation on a narrow terminal.
+
 **`layout_edit` and `migrate`: done.** Found that both flattened CRLF to LF —
 `str::lines()` strips the `\r`, so a Windows config was rewritten entirely
 because one panel moved. `store::line_ending` now carries the file's own ending
@@ -749,9 +788,7 @@ exists to make impossible.
 One pass covered the code written on 27 July and found a hang and two per-frame
 allocation faults. The rest of the program has not had the same treatment.
 
-Not yet reviewed: `layout_edit` (the structural path especially), `themes`,
-`prompt`/`textfield`/`textarea`, `arrange`, `ical`, `quote`, `migrate`, `state`,
-`store`, `chart`, `samples`, `selection`, `glyphs`.
+Not yet reviewed: `chart`, `samples`, `glyphs`, `theme_picker`.
 
 *Exit:* every module reviewed, findings fixed or recorded with a reason.
 

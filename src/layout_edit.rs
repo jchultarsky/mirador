@@ -421,7 +421,21 @@ fn map_layout(lines: &[&str]) -> Result<LayoutMap> {
     }
 
     if rows.is_empty() {
-        bail!("no `[layout]` rows found in the config text");
+        // Naming the shape it wants, because the reader is looking at a config
+        // that loaded perfectly well and is being told it cannot be written to.
+        // `[[layout.rows]]` is valid TOML and mirador parses it happily; this
+        // module only knows how to edit the `rows = [ { … } ]` form the shipped
+        // config uses, and "no rows found" on a file that visibly has rows reads
+        // as a bug rather than as a limitation.
+        // The actionable half comes first, because the status bar truncates and
+        // the whole of this will not fit on a narrow terminal. The first clause
+        // has to be the one worth reading.
+        bail!(
+            "only the `rows = [ … ]` layout form can be rewritten, not \
+             `[[layout.rows]]` sections. Both load; mirador edits the config as \
+             text so your comments survive, and it recognises the form that \
+             `mirador --print-config` writes"
+        );
     }
     Ok(LayoutMap { rows })
 }
