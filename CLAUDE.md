@@ -734,6 +734,33 @@ filled once per tick.
 Also bounded the `.ics` read at 10MB, matching what `ureq` already enforces on
 the network side. Reading a calendar costs several times its size.
 
+**`theme_picker`: done.** One finding, which is a thin haul and worth saying so
+rather than dressing up — the module is mostly declarative drawing, and it was
+written with `prompt`'s lessons already in hand.
+
+`render` reserved `self.names.len() + 2` lines and drew at most `ROWS`. With
+five thousand themes on disk that is room for 5,012 lines every frame to push
+14. Nobody has five thousand themes; the number was never the point. The rule
+about allocating in proportion to what is on screen rather than to how much data
+sits behind it was written down three days before this module broke it, which is
+the useful part of the finding.
+
+**The first test written for it could not fail**, and that is the second useful
+part. It counted theme rows reaching the screen — but `take(ROWS)` caps those
+whichever way the reservation is written, so it passed with the bug in place.
+The fix was to split the line building into `ThemePicker::lines` and weigh the
+`Vec`'s own capacity, which is the thing that was wrong. Same trap as the id
+reuse test and the `default.toml` drift test; the tell each time is that the
+assertion is about a *consequence* that the bug does not actually change.
+
+Non-findings: no panic anywhere from 1x1 to 5x5, with and without a list long
+enough to scroll — unlike `prompt`, this module never indexes the buffer itself,
+so ratatui's own clipping covers it. And live preview costs about **30µs per
+keystroke**, measured across all ten bundled themes, including the filesystem
+stat that checks for a user override. That is a fair question to ask of a dialog
+that re-resolves a theme on every cursor move, and the answer is that it does not
+matter.
+
 **`chart`, `samples` and `glyphs`: done.** Five findings, and the interesting
 thing about them is the split: four were *latent* — a hole in a public function
 that no current caller can reach — and one was live, in a module these three
@@ -830,9 +857,17 @@ exists to make impossible.
 One pass covered the code written on 27 July and found a hang and two per-frame
 allocation faults. The rest of the program has not had the same treatment.
 
-Not yet reviewed: `theme_picker`, which is newer than this list.
+**Phase 1 is complete.** Every module has been read adversarially, and every
+finding is either fixed or recorded above with the reason it was left.
 
-*Exit:* every module reviewed, findings fixed or recorded with a reason.
+Two patterns ran through the whole pass and are worth carrying into Phase 2.
+**Most findings sat next to a test that could not fail** — counting characters
+where cells were the bug, summing weights where proportions were the bug,
+counting drawn rows where the allocation was the bug. The tell is always that
+the assertion is about a consequence the bug does not change. And **the live
+defects clustered at the edges**: unbounded third-party feed text, a terminal
+resized to one column, a list that got shorter. The interior arithmetic was
+mostly right.
 
 ### Phase 2 — harden the untrusted-input boundary
 

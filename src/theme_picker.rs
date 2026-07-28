@@ -147,22 +147,16 @@ impl ThemePicker {
         }
     }
 
-    /// Draw the dialog centred over whatever is behind it.
-    pub fn render(&self, frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
-        let width = 44u16.min(area.width);
-        let rows = u16::try_from(self.names.len().min(ROWS)).unwrap_or(u16::MAX);
-        // List, the two frame rows, the blank row and the footer. Nothing more:
-        // a spare row inside the border reads as a list that has run out rather
-        // than as breathing space.
-        let height = rows.saturating_add(4).min(area.height);
-        let rect = Rect {
-            x: area.x + (area.width.saturating_sub(width)) / 2,
-            y: area.y + (area.height.saturating_sub(height)) / 2,
-            width,
-            height,
-        };
-
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(self.names.len() + 2);
+    /// The rows to draw: the visible slice of the list, a blank, and the footer.
+    ///
+    /// Split out of `render` so a test can weigh it. The bug it exists to pin
+    /// was invisible on screen — `render` reserved `self.names.len() + 2` lines
+    /// and drew at most `ROWS`, so with five thousand themes on disk it
+    /// allocated room for 5,012 every frame and pushed 14. Nothing looked
+    /// wrong, which is exactly why a test that only checks what reaches the
+    /// screen cannot catch it.
+    fn lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(ROWS + 2);
         for (index, name) in self.names.iter().enumerate().skip(self.offset).take(ROWS) {
             let chosen = index == self.selected;
             let marker = if chosen { "▸ " } else { "  " };
@@ -196,6 +190,25 @@ impl ThemePicker {
             ),
             Span::styled(" put back", Style::default().fg(theme.muted)),
         ]));
+        lines
+    }
+
+    /// Draw the dialog centred over whatever is behind it.
+    pub fn render(&self, frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
+        let width = 44u16.min(area.width);
+        let rows = u16::try_from(self.names.len().min(ROWS)).unwrap_or(u16::MAX);
+        // List, the two frame rows, the blank row and the footer. Nothing more:
+        // a spare row inside the border reads as a list that has run out rather
+        // than as breathing space.
+        let height = rows.saturating_add(4).min(area.height);
+        let rect = Rect {
+            x: area.x + (area.width.saturating_sub(width)) / 2,
+            y: area.y + (area.height.saturating_sub(height)) / 2,
+            width,
+            height,
+        };
+
+        let lines = self.lines(theme);
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -367,14 +380,69 @@ mod tests {
         assert_eq!(picker.names().len(), crate::themes::bundled_names().len());
     }
 
+    /// Every size down to one cell. `prompt` had a panic that only appeared at
+    /// width 1, found by sweeping rather than by reasoning, so this sweeps —
+    /// and it holds with a list long enough to scroll, which is when the
+    /// arithmetic has something to get wrong.
     #[test]
-    fn it_draws_without_panicking_in_a_small_terminal() {
-        for (w, h) in [(80, 24), (30, 10), (10, 5)] {
-            let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
-            let picker = ThemePicker::new(None, None);
-            terminal
-                .draw(|f| picker.render(f, f.area(), &Theme::default()))
-                .expect("draw");
+    fn it_draws_without_panicking_at_every_size_down_to_one_cell() {
+        let dir = themes_dir("tiny");
+        for i in 0..30 {
+            write(&dir.0, &format!("mine-{i:02}"));
+        }
+
+        for (w, h) in [(80u16, 24u16), (30, 10), (10, 5), (2, 2), (1, 1)] {
+            for themes in [None, Some(&dir.0)] {
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+                let mut picker = ThemePicker::new(None, themes.map(std::path::PathBuf::as_path));
+                // Draw at the top, part-way down, and at the end, so the
+                // scrolled window is exercised as well as the initial one.
+                for _ in 0..3 {
+                    terminal
+                        .draw(|f| picker.render(f, f.area(), &Theme::default()))
+                        .unwrap_or_else(|e| panic!("{w}x{h} failed to draw: {e}"));
+                    for _ in 0..15 {
+                        picker.handle_key(key(KeyCode::Down));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A dialog may allocate in proportion to what it draws. It must not
+    /// allocate in proportion to how many themes happen to be on disk.
+    ///
+    /// Weighs the buffer rather than the screen, deliberately. `take(ROWS)`
+    /// caps what is *drawn* whichever way the reservation is written, so a test
+    /// that counted rows on screen would pass with the bug in place — the trap
+    /// this repository keeps walking into. What was wrong was the size of the
+    /// allocation, so that is what this measures.
+    #[test]
+    fn drawing_reserves_room_for_the_window_not_for_the_whole_list() {
+        let dir = themes_dir("many");
+        for i in 0..400 {
+            write(&dir.0, &format!("mine-{i:03}"));
+        }
+        let mut picker = ThemePicker::new(None, Some(&dir.0));
+        assert!(picker.names().len() > 400, "there is a big list behind it");
+
+        // At the top, part-way down, and at the end.
+        for _ in 0..4 {
+            let lines = picker.lines(&Theme::default());
+            assert!(
+                lines.len() <= ROWS + 2,
+                "{} lines built for a {ROWS}-row window",
+                lines.len()
+            );
+            assert!(
+                lines.capacity() <= ROWS + 2,
+                "reserved room for {} lines to draw {}",
+                lines.capacity(),
+                lines.len()
+            );
+            for _ in 0..150 {
+                picker.handle_key(key(KeyCode::Down));
+            }
         }
     }
 }
