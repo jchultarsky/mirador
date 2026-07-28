@@ -560,6 +560,24 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**`quote`: done, and clean.** No defects. Worth recording *why*, because the
+reasons are load-bearing and easy to remove by accident:
+
+- Numbers too large for an `f64` are refused by the JSON parser before any
+  guard sees them. That is stronger than a downstream check and it is why no
+  downstream check exists — so a future move away from `serde_json`'s strictness
+  would need one.
+- `change_pct` returns zero rather than infinity for a previous close of zero,
+  and the sparkline returns its middle glyph for a series with no span. Both
+  divisors are guarded at the point of division.
+- Symbols reach the URL through a strict RFC 3986 unreserved allowlist, so
+  nothing in a symbol can alter the request — while `.` passes through, which is
+  what keeps `BRK.B` working.
+
+All four market-data promises are enforced rather than merely written down, and
+were re-checked: no key anywhere, `WatchlistFile` carries symbols and no prices,
+`refresh_secs.max(60)`, and `stagger_ms.clamp(100, 10_000)`.
+
 **`store` and `state`: done.** Three findings, all about data rather than
 speed.
 

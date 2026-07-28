@@ -469,6 +469,73 @@ mod tests {
       }
     }"#;
 
+    /// A quote response is untrusted network input carrying numbers straight
+    /// into arithmetic and onto a screen. These are the shapes that break float
+    /// code: a value too large for an `f64`, a divisor of zero, a series with
+    /// no span, nothing at all.
+    ///
+    /// The outcome to insist on is that a row never reads `inf%` or `NaN`. A
+    /// wrong-looking number in a money column is worse than a missing one,
+    /// which is the same reasoning that keeps stale prices off this panel.
+    #[test]
+    fn hostile_numbers_never_reach_the_screen_as_inf_or_nan() {
+        let swap = |price: &str, prev: &str, series: &str| {
+            SAMPLE
+                .replace("213.5,", &format!("{price},"))
+                .replace(
+                    "\"chartPreviousClose\": 211.0",
+                    &format!("\"chartPreviousClose\": {prev}"),
+                )
+                .replace("[211.0, null, 212.5, 213.5]", series)
+        };
+
+        for (name, price, prev, series) in [
+            (
+                "a price too large for an f64",
+                "1e400",
+                "211.0",
+                "[211.0, 212.5]",
+            ),
+            (
+                "a previous close too large",
+                "213.5",
+                "1e400",
+                "[211.0, 212.5]",
+            ),
+            (
+                "a value in the series too large",
+                "1.0",
+                "1.0",
+                "[1e400, 1.0]",
+            ),
+            ("a previous close of zero", "213.5", "0.0", "[211.0, 212.5]"),
+            ("negative prices", "-5.0", "-10.0", "[-1.0, -2.0, -3.0]"),
+            ("an empty series", "1.0", "1.0", "[]"),
+            ("a flat series", "1.0", "1.0", "[7.0, 7.0, 7.0]"),
+        ] {
+            // Out-of-range literals are refused outright by the JSON parser,
+            // which is a stronger defence than any guard downstream — and one
+            // worth pinning, since it is the reason no guard is needed for them.
+            let Ok(quote) = parse_chart(&swap(price, prev, series)) else {
+                continue;
+            };
+
+            assert!(quote.price.is_finite(), "{name}: price is {}", quote.price);
+            assert!(
+                quote.change_pct().is_finite(),
+                "{name}: `{}%` would read as a broken panel",
+                quote.change_pct()
+            );
+            // And the sparkline neither panics nor overruns its width.
+            for width in [0, 1, 8, 40] {
+                assert!(
+                    sparkline(&quote.series, width).chars().count() <= width,
+                    "{name}: sparkline overran {width} cells"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_chart_response_becomes_a_quote() {
         let q = parse_chart(SAMPLE).unwrap();
