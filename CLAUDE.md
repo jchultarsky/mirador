@@ -1161,10 +1161,23 @@ going to guess that from reading.
 
 ## Open work
 
-Nothing. All three gaps named in the original product analysis are built — the
-`.ics` agenda, the watch log, and the on-fire signal — along with named themes
-and the `t` picker over them, arrange mode, and in-panel editing for everything
-the UI can change.
+**Arrange mode cannot move a row, only a panel** —
+[#100](https://github.com/jchultarsky/mirador/issues/100), deferred past 1.0
+because it adds behaviour to a key rather than fixing a defect.
+
+The reason it matters, since that is what this list is for: `promote` is the only
+thing that creates a row, and it is reachable only when the panel is in the
+**top or bottom** row. So a panel alone in a *middle* row can only ever merge
+into a neighbour — going from `[clocks] [watchlog] [notes] [cpu]` to
+`[clocks] [notes] [watchlog] [cpu]` is not expressible with the current keys at
+all, and the row count falls when you try. Found by the owner rearranging a tall
+vertical monitor, whose first reading was that four rows was a cap. It is not:
+six rows build fine and nothing limits the count.
+
+Everything else from the original product analysis is built — the `.ics` agenda,
+the watch log, and the on-fire signal — along with named themes and the `t`
+picker over them, arrange mode, and in-panel editing for everything the UI can
+change.
 
 That is a fact about the *list*, not a claim the program is finished. Two things
 shipped recently have never run in the conditions they were built for, and both
