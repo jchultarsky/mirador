@@ -59,6 +59,10 @@ impl TextArea {
     }
 
     /// Cursor as `(row, column)`, both zero-based and in characters.
+    ///
+    /// Rendering goes through [`TextArea::visible`], which places the caret in
+    /// display cells; this raw accessor is for tests.
+    #[cfg(test)]
     pub fn cursor(&self) -> (usize, usize) {
         (self.row, self.col)
     }
@@ -162,8 +166,14 @@ impl TextArea {
     /// the editor, and swallowing them would trap the user inside the body.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
-            KeyCode::Char(c) if !ctrl => {
+            // Alt is excluded as well as Ctrl, which it was not: `Alt+x` typed
+            // an `x` into the note. `TextField` had always excluded both, and
+            // two editors sitting side by side disagreeing about what a chord
+            // means is the kind of difference nobody reports and everybody
+            // trips over.
+            KeyCode::Char(c) if !ctrl && !alt => {
                 self.insert(c);
                 true
             }
@@ -216,6 +226,75 @@ impl TextArea {
         // Only ever scrolls far enough to bring the cursor back into view, so
         // the text does not jump when the cursor is already visible.
         self.row.saturating_sub(height - 1)
+    }
+
+    /// Display cells to skip at the left of *every* line, so the caret stays on
+    /// screen in a viewport `width` cells wide.
+    ///
+    /// Shared across all rows rather than computed per row, or the lines shear
+    /// against each other and the block stops reading as a block.
+    ///
+    /// The editor deliberately does not wrap — a soft wrap that moves as you
+    /// type makes the cursor impossible to follow — and for a long time that
+    /// meant a long line simply ran off the right-hand edge, taking the caret
+    /// with it. You could keep typing; you could not see any of it. Not
+    /// wrapping is a decision about *layout*; it was never a decision to stop
+    /// showing people what they are writing.
+    fn h_offset(&self, width: usize) -> usize {
+        if width == 0 {
+            return 0;
+        }
+        let line = self.lines.get(self.row).map_or("", String::as_str);
+        let before: usize = line
+            .chars()
+            .take(self.col)
+            .map(crate::grid::char_width)
+            .sum();
+        // One cell held back for the caret, which is drawn between characters
+        // and still has to land somewhere.
+        before.saturating_sub(width - 1)
+    }
+
+    /// The slice of `row` to draw in a viewport `width` cells wide, and the byte
+    /// offset within it where the caret belongs — `None` when the caret is on
+    /// another row.
+    ///
+    /// Measured in cells throughout, per invariant 9: a note written in
+    /// Japanese would otherwise scroll by half a glyph at a time.
+    pub fn visible(&self, row: usize, width: usize) -> (String, Option<usize>) {
+        if width == 0 {
+            return (String::new(), None);
+        }
+        let line = self.lines.get(row).map_or("", String::as_str);
+        let skip = self.h_offset(width);
+        let here = row == self.row;
+        // The caret occupies a cell of its own on the row that carries it.
+        let budget = if here { width - 1 } else { width };
+
+        let mut out = String::new();
+        let mut consumed = 0usize;
+        let mut drawn = 0usize;
+        let mut caret = None;
+        for (index, c) in line.chars().enumerate() {
+            if here && index == self.col && caret.is_none() && consumed >= skip {
+                caret = Some(out.len());
+            }
+            let w = crate::grid::char_width(c);
+            if consumed >= skip {
+                if drawn + w > budget {
+                    break;
+                }
+                out.push(c);
+                drawn += w;
+            }
+            consumed += w;
+        }
+        // A cursor sitting past the last character — the common case, since
+        // that is where typing leaves it.
+        if here && caret.is_none() && self.col >= line.chars().count() {
+            caret = Some(out.len());
+        }
+        (out, caret)
     }
 }
 
@@ -340,6 +419,118 @@ mod tests {
         let mut a = TextArea::new();
         assert!(!a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert_eq!(a.value(), "", "Ctrl+C must not insert a `c`");
+    }
+
+    /// The two editors have to agree about this. `TextField` excluded Alt from
+    /// the start and this did not, so `Alt+x` typed an `x` into a note body and
+    /// did nothing in a task title.
+    #[test]
+    fn alt_chords_are_left_alone_too_just_as_the_single_line_field_does() {
+        let mut a = TextArea::new();
+        assert!(!a.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)));
+        assert_eq!(a.value(), "", "Alt+x must not insert an `x`");
+
+        let mut f = crate::textfield::TextField::new();
+        assert!(!f.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)));
+        assert_eq!(f.value(), "", "and the single-line field still agrees");
+    }
+
+    /// The bug: the editor does not wrap, so a long line ran off the right and
+    /// took the caret with it. You could keep typing and see none of it — the
+    /// same complaint as the zone picker's missing scroll, one axis over.
+    #[test]
+    fn a_long_line_scrolls_sideways_so_the_caret_stays_on_screen() {
+        let mut a = TextArea::new();
+        for c in "the quick brown fox jumps over the lazy dog".chars() {
+            a.insert(c);
+        }
+        let (text, caret) = a.visible(0, 20);
+        let caret = caret.expect("the caret is on this row");
+        assert!(
+            crate::grid::display_width(&text) < 20,
+            "drew {} cells into 20 columns",
+            crate::grid::display_width(&text)
+        );
+        assert!(caret <= text.len(), "caret {caret} outside {text:?}");
+        assert!(
+            text.ends_with("dog"),
+            "the window should be pinned to the caret at the end, got {text:?}"
+        );
+
+        // And it comes back as the cursor returns.
+        a.home();
+        let (text, caret) = a.visible(0, 20);
+        assert_eq!(caret, Some(0), "caret back at the left");
+        assert!(
+            text.starts_with("the quick"),
+            "the window followed it back, got {text:?}"
+        );
+    }
+
+    /// Every row shares one offset. Per-row offsets would shear the block.
+    #[test]
+    fn the_whole_block_scrolls_together_rather_than_shearing() {
+        let long = "x".repeat(60);
+        let mut a = TextArea::with_value(format!("{long}\nshort\n{long}"));
+        a.end();
+        let (top, _) = a.visible(0, 20);
+        let (bottom, _) = a.visible(2, 20);
+        assert_eq!(
+            crate::grid::display_width(&top),
+            crate::grid::display_width(&bottom),
+            "two identical lines drew different windows"
+        );
+        // The short line is entirely to the left of the window, so it shows
+        // nothing — which is what a horizontally scrolled editor does.
+        let (short, _) = a.visible(1, 20);
+        assert!(short.is_empty(), "expected an empty window, got {short:?}");
+    }
+
+    /// Measured in cells, or a note in Japanese scrolls by half a glyph.
+    #[test]
+    fn the_sideways_window_is_measured_in_cells_not_characters() {
+        for text in [
+            "日本語のノートです、とても長い行",
+            "aé日b🦀cd",
+            "🦀🦀🦀🦀🦀🦀🦀🦀",
+        ] {
+            let full: Vec<char> = text.chars().collect();
+            for len in 0..=full.len() {
+                let value: String = full[..len].iter().collect();
+                let mut a = TextArea::with_value(value);
+                for back in 0..=len {
+                    for _ in 0..back {
+                        a.left();
+                    }
+                    for width in 1..10usize {
+                        let (window, caret) = a.visible(0, width);
+                        assert!(
+                            crate::grid::display_width(&window) <= width,
+                            "{text:?} len={len} width={width} drew {} cells",
+                            crate::grid::display_width(&window)
+                        );
+                        if let Some(at) = caret {
+                            assert!(
+                                window.is_char_boundary(at),
+                                "caret {at} splits a character in {window:?}"
+                            );
+                        }
+                    }
+                    a.end();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_zero_width_viewport_cannot_panic() {
+        let a = TextArea::with_value("anything at all");
+        assert_eq!(a.visible(0, 0), (String::new(), None));
+        assert_eq!(
+            a.visible(99, 10).1,
+            None,
+            "no caret on a row that is not there"
+        );
     }
 
     #[test]

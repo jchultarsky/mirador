@@ -238,6 +238,11 @@ preview     = "below"        # below | beside
 # Last price, the day's change, and an intraday sparkline. `a` adds a symbol,
 # `d` removes one, `r` refreshes now.
 #
+# The default is the five major US indexes — S&P 500, Dow, Nasdaq Composite,
+# Russell 2000 and Nasdaq-100 — followed by two ordinary stocks, so the panel
+# shows both kinds out of the box. `^VIX` is the volatility index if you want
+# it; `EURUSD=X` and `BTC-USD` also work.
+#
 # `symbols` seeds the watchlist on the FIRST RUN ONLY. After that the watchlist
 # file is the truth, so symbols you add or remove in the UI stick. Only symbols
 # are stored — prices are never written to disk, because a stale price read as
@@ -254,7 +259,7 @@ preview     = "below"        # below | beside
 # unauthenticated; hammering them gets the address blocked for everyone on it.
 # ---------------------------------------------------------------------------
 [stocks]
-symbols        = ["AAPL", "MSFT", "^GSPC"]
+symbols        = ["^GSPC", "^DJI", "^IXIC", "^RUT", "^NDX", "AAPL", "MSFT"]
 # file         = "~/notes/watchlist.toml"
 source         = "yahoo"
 refresh_secs   = 120

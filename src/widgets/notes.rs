@@ -601,38 +601,29 @@ impl NotesPanel {
 
         if rows[3].height > 0 {
             let height = usize::from(rows[3].height);
+            let width = usize::from(rows[3].width);
             let offset = form.body.scroll_offset(height);
-            let (cursor_row, cursor_col) = form.body.cursor();
-            let lines: Vec<Line> = form
-                .body
-                .lines()
-                .iter()
-                .enumerate()
-                .skip(offset)
-                .take(height)
-                .map(|(index, line)| {
-                    if form.field == Field::Body && index == cursor_row {
+            let editing = form.field == Field::Body;
+            let last = form.body.lines().len().min(offset + height);
+            let lines: Vec<Line> = (offset..last)
+                .map(|index| {
+                    // The editor scrolls sideways as well as down, so a long
+                    // line does not carry the caret off the right-hand edge.
+                    // `visible` owns the arithmetic — it is measured in display
+                    // cells, and getting that wrong here is what invariant 9 is
+                    // about.
+                    let (text, caret) = form.body.visible(index, width);
+                    match caret.filter(|_| editing) {
                         // Draw the caret inline rather than moving the terminal
                         // cursor: the panel does not own the screen cursor, and
                         // a caret that only appears in the focused field is
                         // what tells the user where typing will land.
-                        let split = line
-                            .char_indices()
-                            .nth(cursor_col)
-                            .map_or(line.len(), |(byte, _)| byte);
-                        Line::from(vec![
-                            Span::styled(
-                                line[..split].to_string(),
-                                Style::default().fg(theme.text),
-                            ),
+                        Some(at) => Line::from(vec![
+                            Span::styled(text[..at].to_string(), Style::default().fg(theme.text)),
                             Span::styled("▏", Style::default().fg(theme.accent)),
-                            Span::styled(
-                                line[split..].to_string(),
-                                Style::default().fg(theme.text),
-                            ),
-                        ])
-                    } else {
-                        Line::from(Span::styled(line.clone(), Style::default().fg(theme.text)))
+                            Span::styled(text[at..].to_string(), Style::default().fg(theme.text)),
+                        ]),
+                        None => Line::from(Span::styled(text, Style::default().fg(theme.text))),
                     }
                 })
                 .collect();

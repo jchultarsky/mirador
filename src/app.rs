@@ -262,11 +262,9 @@ pub struct App {
     /// A config written by an earlier version silently lacks every widget added
     /// since — an absent widget is a valid choice, so nothing errors and
     /// `--migrate-config` has nothing to fix. This is the only way to find out.
-    unused_widgets: Vec<&'static str>,
     /// Whether the startup hint is still on screen. Cleared by the first input
     /// of any kind: a dashboard you leave open all day must not nag, and a
     /// notice that will not go away is a nag.
-    show_widget_hint: bool,
     /// A newer version, if the opt-in check found one. Empty otherwise, and
     /// empty always when the check is off — `App` never starts it, so no test
     /// and no `--print-config` run can reach the network.
@@ -345,7 +343,6 @@ impl App {
         let (slots, positions) = Self::build_slots(&config)?;
 
         let gradients = config.theme.gradients();
-        let unused_widgets = crate::widgets::unused_widgets(&config);
         Ok(Self {
             config,
             gradients,
@@ -357,10 +354,8 @@ impl App {
             help_overflow: 0,
             help_viewport: 0,
             should_quit: false,
-            show_widget_hint: !unused_widgets.is_empty(),
             update: crate::update::Found::default(),
             show_update_hint: true,
-            unused_widgets,
             watch: crate::watch::WatchLog::default(),
             today: jiff::Zoned::now().date(),
             picker: None,
@@ -532,7 +527,6 @@ impl App {
             .unwrap_or_else(|| self.focus.min(slots.len().saturating_sub(1)));
         self.slots = slots;
         self.positions = positions;
-        self.unused_widgets = crate::widgets::unused_widgets(&self.config);
         Ok(())
     }
 
@@ -746,7 +740,6 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         // Any key at all retires the startup hint. It has been read or it has
         // been ignored; either way it has had its turn.
-        self.show_widget_hint = false;
         self.show_update_hint = false;
         // A keypress is weaker evidence than a focus event — the moments this
         // most wants to be right are the glances that touch nothing — but it is
@@ -1234,8 +1227,7 @@ impl App {
         // A deliberate click or scroll retires the startup hint, as a key does.
         // Pointer motion deliberately does not: the mouse crossing the window
         // on its way somewhere else is not the user reading anything.
-        let had_hint =
-            std::mem::take(&mut self.show_widget_hint) | std::mem::take(&mut self.show_update_hint);
+        let had_hint = std::mem::take(&mut self.show_update_hint);
 
         // The help overlay swallows the next input, whatever it is — the same
         // rule keys follow.
@@ -1559,7 +1551,7 @@ impl App {
         // The hint rides on the right of the bar it shares with the global
         // keys, and gives way to them when the terminal is too narrow: knowing
         // how to quit matters more than knowing what you are not using.
-        if let Some(hint) = self.update_hint().or_else(|| self.widget_hint()) {
+        if let Some(hint) = self.update_hint() {
             let used: usize = spans
                 .iter()
                 .map(|s| crate::grid::display_width(&s.content))
@@ -1631,21 +1623,6 @@ impl App {
         Some(format!("mirador {latest} is out   mirador-update "))
     }
 
-    fn widget_hint(&self) -> Option<String> {
-        if !self.show_widget_hint || self.unused_widgets.is_empty() {
-            return None;
-        }
-        // Names the key rather than only the widgets. Saying what is missing
-        // without saying what to do about it is how someone ends up reading the
-        // help, not finding the answer there either, and going to look for a
-        // config file.
-        Some(format!(
-            "{} unused: {}   press w ",
-            self.unused_widgets.len(),
-            self.unused_widgets.join(", ")
-        ))
-    }
-
     fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         let theme = self.config.theme.clone();
         let theme = &theme;
@@ -1679,27 +1656,6 @@ impl App {
                 lines.push(section(&slot.panel.title()));
                 lines.extend(panel_keys.iter().map(entry));
             }
-        }
-
-        // The durable half of the unused-widget hint. The status bar notice is
-        // gone after one keypress; this stays, because `?` is where someone
-        // goes when they wonder what else the thing does.
-        if !self.unused_widgets.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(section("widgets not in your layout"));
-            // The actionable line comes before the list because it is the more
-            // useful of the two if only one is on screen. The names go on one
-            // wrapped line because one line per widget cost eight rows on a
-            // stale config.
-            lines.push(Line::from(vec![
-                Span::styled("  press ", muted),
-                Span::styled("w", key_style),
-                Span::styled(" to switch them on", muted),
-            ]));
-            lines.push(Line::from(Span::styled(
-                format!("  {}", self.unused_widgets.join(", ")),
-                Style::default().fg(theme.text),
-            )));
         }
 
         // The footer is rendered separately and pinned to the last row, rather
@@ -2082,18 +2038,24 @@ mod tests {
         );
     }
 
-    /// An alert outranks both hints. Neither of those is going to get worse
-    /// while you read the other one.
+    /// An alert outranks the update notice. That notice is not going to get
+    /// worse while you read the alert; the alert might.
     #[test]
     fn an_alert_displaces_the_hints_rather_than_queueing_behind_them() {
         let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
         let before = status_bar_at(&mut app, 200);
-        assert!(before.contains("unused"), "the hint is there to displace");
+        assert!(before.contains("9.9.9"), "the notice is there to displace");
 
         app.layout_error = Some("disk full".into());
         let after = status_bar_at(&mut app, 200);
         assert!(after.contains("disk full"), "the alert shows: {after}");
-        assert!(!after.contains("unused"), "and the hint gives way: {after}");
+        assert!(
+            !after.contains("9.9.9"),
+            "and the notice gives way: {after}"
+        );
     }
 
     #[test]
@@ -2319,57 +2281,69 @@ mod tests {
     }
 
     #[test]
-    fn an_update_notice_displaces_the_widget_hint_rather_than_sharing_the_row() {
-        // Both want the right-hand end of the status bar. The update notice is
-        // rarer and stops being true once acted on, so it wins; the widget hint
-        // is unchanged every launch until the layout changes.
+    fn the_update_notice_has_the_end_of_the_status_bar_to_itself() {
+        // It used to share the row with a hint listing the widgets your layout
+        // left out. That hint is gone — see
+        // `a_layout_missing_widgets_is_not_advertised_anywhere` — so the update
+        // notice is the only thing that can appear here.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
-        assert!(app.widget_hint().is_some(), "this layout omits widgets");
-
         app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
             "9.9.9".to_string(),
         ))));
-        let shown = app.update_hint().or_else(|| app.widget_hint()).unwrap();
-        assert!(shown.contains("9.9.9"), "the widget hint won: `{shown}`");
+        let shown = app.update_hint().expect("an update is waiting");
+        assert!(shown.contains("9.9.9"), "got `{shown}`");
     }
 
+    /// A layout that leaves widgets out is a decision, not an oversight.
+    ///
+    /// mirador used to say so — once in the status bar at startup, and for ever
+    /// in the help overlay. The status bar line retired on the first keypress;
+    /// the overlay section did not, so someone who had deliberately switched
+    /// four panels off was told about them every time they pressed `?`. That is
+    /// the nagging this dashboard exists not to do, arrived at from the
+    /// direction of helpfulness rather than of notifications.
+    ///
+    /// `w` is still a primary binding, so the way to switch a panel on is on
+    /// the status bar and in the help. What is gone is being told you *should*.
     #[test]
-    fn a_layout_missing_widgets_says_so_once_and_then_stops() {
+    fn a_layout_missing_widgets_is_not_advertised_anywhere() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        // One panel out of twelve, so eleven are unused — the loudest possible
+        // case for the hint that used to be here.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
-        assert!(
-            app.unused_widgets.contains(&"stocks"),
-            "a widget the layout never places must be reported: {:?}",
-            app.unused_widgets
-        );
-        let hint = app.widget_hint().expect("the hint shows at startup");
-        assert!(hint.contains("stocks"), "got `{hint}`");
-
-        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(
-            app.widget_hint().is_none(),
-            "a dashboard left open all day must not keep nagging"
-        );
-    }
-
-    #[test]
-    fn a_layout_using_everything_gets_no_hint_at_all() {
-        let config = Config {
-            layout: LayoutConfig {
-                rows: crate::widgets::WIDGET_NAMES
-                    .iter()
-                    .map(|name| LayoutRow {
-                        height: 1,
-                        panels: vec![LayoutPanel {
-                            widget: (*name).to_string(),
-                            width: 1,
-                        }],
-                    })
-                    .collect(),
-            },
-            ..Config::default()
+        let screen = |app: &mut App, help: bool| -> String {
+            if help {
+                app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+            }
+            let mut terminal = Terminal::new(TestBackend::new(200, 40)).unwrap();
+            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..40)
+                .map(|y| {
+                    (0..200)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         };
-        let unused = crate::widgets::unused_widgets(&config);
-        assert!(unused.is_empty(), "nothing to suggest: {unused:?}");
+
+        let dashboard = screen(&mut app, false);
+        assert!(
+            !dashboard.contains("unused"),
+            "the dashboard advertises what you chose not to run"
+        );
+
+        let help = screen(&mut app, true);
+        assert!(app.show_help, "the overlay is open");
+        for banned in ["unused", "not in your layout", "switch them on"] {
+            assert!(
+                !help.contains(banned),
+                "the help overlay still nags about unused widgets: found `{banned}`"
+            );
+        }
     }
 
     #[test]
@@ -2384,14 +2358,17 @@ mod tests {
         };
 
         let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
         app.handle_mouse(mouse(MouseEventKind::Moved));
         assert!(
-            app.widget_hint().is_some(),
+            app.update_hint().is_some(),
             "the mouse crossing the window is not the user reading anything"
         );
 
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
-        assert!(app.widget_hint().is_none(), "a deliberate click retires it");
+        assert!(app.update_hint().is_none(), "a deliberate click retires it");
     }
 
     #[test]
@@ -2499,23 +2476,14 @@ mod tests {
     }
 
     #[test]
-    fn the_unused_widget_section_stays_a_fixed_size_however_many_are_unused() {
-        // One line per widget put eight rows into an overlay that clips
-        // silently; the names share a single wrapped line instead.
-        let one = App::new(config_with(&["clocks"])).unwrap();
-        let hint = one.widget_hint().expect("something is unused");
-        assert!(
-            hint.lines().count() == 1,
-            "the status hint must stay one line: `{hint}`"
-        );
-    }
-
-    #[test]
     fn the_hint_gives_way_to_the_global_keys_on_a_narrow_terminal() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
         let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
         let row_text = |app: &mut App, width: u16| -> String {
             let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
             terminal.draw(|frame| app.render_for_test(frame)).unwrap();
@@ -2523,17 +2491,14 @@ mod tests {
             (0..width).map(|x| buf[(x, 5)].symbol()).collect()
         };
 
-        // Wide enough for the global keys *and* a hint naming every widget
-        // this layout leaves out — which grows by a word every time a widget is
-        // added, so this figure is a floor rather than a round number. It was
-        // 160 until the watch log made the list one name longer than that.
+        // Wide enough for the global keys *and* the notice.
         let wide = row_text(&mut app, 200);
-        assert!(wide.contains("unused"), "wide enough for both: `{wide}`");
+        assert!(wide.contains("9.9.9"), "wide enough for both: `{wide}`");
 
         let narrow = row_text(&mut app, 44);
         assert!(
-            !narrow.contains("unused"),
-            "knowing how to quit outranks the hint: `{narrow}`"
+            !narrow.contains("9.9.9"),
+            "knowing how to quit outranks the notice: `{narrow}`"
         );
         assert!(
             narrow.contains("quit"),
@@ -3203,28 +3168,6 @@ mod tests {
         );
         assert_eq!(app.slots.len(), 1);
         assert!(app.layout_error.is_some(), "and it says why");
-    }
-
-    #[test]
-    fn a_toggle_updates_the_unused_list_the_hint_reads_from() {
-        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
-        assert!(app.unused_widgets.contains(&"pomodoro"));
-
-        app.handle_key(key(KeyCode::Char('w')));
-        let index = crate::widgets::WIDGET_NAMES
-            .iter()
-            .position(|n| *n == "pomodoro")
-            .unwrap();
-        for _ in 0..index {
-            app.handle_key(key(KeyCode::Down));
-        }
-        assert_eq!(app.picker_row(), Some(index));
-        app.handle_key(key(KeyCode::Char(' ')));
-
-        assert!(
-            !app.unused_widgets.contains(&"pomodoro"),
-            "switching a widget on must stop it being advertised as missing"
-        );
     }
 
     #[test]

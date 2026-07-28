@@ -172,19 +172,49 @@ impl TextField {
     /// The window of text to display in a field `width` columns wide, plus the
     /// cursor's column within that window. Scrolls horizontally to keep the
     /// cursor visible in a field narrower than its contents.
+    ///
+    /// **Both figures are display cells, not characters** — invariant 9, and it
+    /// is not pedantry here either. This measured in `chars()` until it was
+    /// reviewed: a field 6 columns wide holding `北京市中心` saw five characters,
+    /// decided they fit, and returned ten cells of text and a cursor column of
+    /// five. The text drew over whatever was beside it and the caret landed in
+    /// the middle of a glyph. Everything a reader types into these prompts is a
+    /// place name or a path, which is exactly where non-Latin text turns up.
     pub fn visible(&self, width: usize) -> (String, usize) {
         if width == 0 {
             return (String::new(), 0);
         }
         let chars: Vec<char> = self.value.chars().collect();
-        if chars.len() < width {
-            return (self.value.clone(), self.cursor);
+        let cells = |c: char| crate::grid::char_width(c);
+
+        // Walk back from the cursor while the text still fits, keeping one cell
+        // free for the caret itself. Where the old code could subtract indices,
+        // this has to accumulate: a step left is worth one cell or two.
+        let budget = width - 1;
+        let mut start = self.cursor;
+        let mut before = 0usize;
+        while start > 0 {
+            let w = cells(chars[start - 1]);
+            if before + w > budget {
+                break;
+            }
+            before += w;
+            start -= 1;
         }
-        // Keep the cursor inside the window, reserving one column for it.
-        let start = (self.cursor + 1).saturating_sub(width);
-        let end = (start + width).min(chars.len());
-        let window: String = chars[start..end].iter().collect();
-        (window, self.cursor - start)
+
+        // Then fill forward, so a window scrolled to the cursor still shows
+        // whatever follows it.
+        let mut window = String::new();
+        let mut drawn = 0usize;
+        for &c in &chars[start..] {
+            let w = cells(c);
+            if drawn + w > width {
+                break;
+            }
+            window.push(c);
+            drawn += w;
+        }
+        (window, before)
     }
 }
 
@@ -339,27 +369,66 @@ mod tests {
         assert!(col < 5);
     }
 
+    /// Measured in **cells**, which is the property that can actually fail —
+    /// the character-counting version of this test passed throughout, because
+    /// counting characters was the bug.
     #[test]
     fn visible_never_exceeds_the_requested_width() {
-        for len in 0..20usize {
-            let value: String = "abcdefghijklmnopqrst".chars().take(len).collect();
-            let mut field = TextField::with_value(value);
-            for cursor_moves in 0..=len {
-                for _ in 0..cursor_moves {
-                    field.left();
+        // Mixed deliberately: one-cell Latin, two-cell CJK, a combining accent
+        // that is zero-cell, and an emoji.
+        for source in [
+            "abcdefghijklmnopqrst",
+            "北京市中心の天気予報です",
+            "aé日b🦀cd",
+            "🦀🦀🦀🦀🦀🦀",
+        ] {
+            let full: Vec<char> = source.chars().collect();
+            for len in 0..=full.len() {
+                let value: String = full[..len].iter().collect();
+                let mut field = TextField::with_value(value);
+                for cursor_moves in 0..=len {
+                    for _ in 0..cursor_moves {
+                        field.left();
+                    }
+                    for width in 1..12usize {
+                        let (text, col) = field.visible(width);
+                        assert!(
+                            crate::grid::display_width(&text) <= width,
+                            "{source:?} len={len} width={width} drew {} cells",
+                            crate::grid::display_width(&text)
+                        );
+                        assert!(col <= width, "cursor column {col} escaped width {width}");
+                    }
+                    field.end();
                 }
-                for width in 1..8usize {
-                    let (text, col) = field.visible(width);
-                    assert!(
-                        text.chars().count() <= width,
-                        "len={len} width={width} produced {} chars",
-                        text.chars().count()
-                    );
-                    assert!(col <= width, "cursor column {col} escaped width {width}");
-                }
-                field.end();
             }
         }
+    }
+
+    /// The case the review found. Five characters "fit" a six-column field only
+    /// if you count characters; they are ten cells wide.
+    #[test]
+    fn a_field_of_wide_characters_is_measured_in_cells_not_characters() {
+        let field = TextField::with_value("北京市中心");
+        let (text, col) = field.visible(6);
+        assert!(
+            crate::grid::display_width(&text) <= 6,
+            "drew {} cells into 6 columns: {text:?}",
+            crate::grid::display_width(&text)
+        );
+        assert!(col <= 6, "caret at column {col} in a 6-column field");
+    }
+
+    /// A caret one cell wide must never land between the halves of a glyph that
+    /// is two — the column it reports has to be the sum of what precedes it.
+    #[test]
+    fn the_reported_column_is_where_the_text_before_the_cursor_actually_ends() {
+        let mut field = TextField::with_value("日本語");
+        field.home();
+        field.right(); // after 日
+        let (text, col) = field.visible(20);
+        assert_eq!(text, "日本語", "it all fits");
+        assert_eq!(col, 2, "one wide glyph precedes the caret, so two cells");
     }
 
     #[test]

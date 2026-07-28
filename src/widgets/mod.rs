@@ -33,30 +33,6 @@ pub fn is_known_widget(name: &str) -> bool {
     WIDGET_NAMES.contains(&name)
 }
 
-/// Widgets mirador can build that this layout never places, in declaration
-/// order.
-///
-/// A widget missing from a layout is a legitimate choice, not an error, so this
-/// can only ever drive a hint — never a warning and never a default. It exists
-/// because a config written by an earlier version silently lacks every widget
-/// added since, and there is otherwise no way to find out except reading the
-/// release notes.
-pub fn unused_widgets(config: &Config) -> Vec<&'static str> {
-    let placed: Vec<&str> = config
-        .layout
-        .rows
-        .iter()
-        .flat_map(|row| row.panels.iter())
-        .map(|panel| panel.widget.as_str())
-        .collect();
-
-    WIDGET_NAMES
-        .iter()
-        .copied()
-        .filter(|name| !placed.contains(name))
-        .collect()
-}
-
 /// Construct a panel by widget id.
 ///
 /// Returns `Ok(None)` for an unknown name; the config validator rejects those

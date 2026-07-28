@@ -81,6 +81,15 @@ pub struct Prompt {
     /// The first row on screen. Without it the cursor walked off the bottom of
     /// the window and kept going, invisibly.
     offset: usize,
+    /// The rows matching what has been typed, recomputed only when the text
+    /// changes.
+    ///
+    /// This used to be derived on demand — and `render` derived it too, every
+    /// frame, lowercasing all 143 cities and all 143 identifiers each time. The
+    /// absolute cost was small; the shape was the problem. A dialog must
+    /// allocate in proportion to what is on screen, which is ten rows, not in
+    /// proportion to how large the table behind it happens to be.
+    listed: Vec<&'static crate::zones::Place>,
 }
 
 impl Prompt {
@@ -91,7 +100,7 @@ impl Prompt {
         value: &str,
         completion: Completion,
     ) -> Self {
-        Self {
+        let mut prompt = Self {
             label,
             help,
             field: TextField::with_value(value),
@@ -99,7 +108,10 @@ impl Prompt {
             completion,
             selected: 0,
             offset: 0,
-        }
+            listed: Vec::new(),
+        };
+        prompt.refilter();
+        prompt
     }
 
     /// The list rows matching what has been typed so far.
@@ -109,19 +121,28 @@ impl Prompt {
     /// finds every Asian zone, and `kolkata` finds the identifier directly.
     /// Prefix-only matching would answer half these and is the reason a plain
     /// completion was not enough.
-    pub fn matches(&self) -> Vec<&'static crate::zones::Place> {
+    pub fn matches(&self) -> &[&'static crate::zones::Place] {
+        &self.listed
+    }
+
+    /// Recompute [`Prompt::matches`] from the text as it now stands.
+    ///
+    /// Called when the text changes and at no other time — in particular not
+    /// from `render`, which is the whole point.
+    fn refilter(&mut self) {
         let Completion::Places(places) = self.completion else {
-            return Vec::new();
+            self.listed.clear();
+            return;
         };
         let needle = self.field.trimmed().to_lowercase();
-        places
+        self.listed = places
             .iter()
             .filter(|place| {
                 needle.is_empty()
                     || place.city.to_lowercase().contains(&needle)
                     || place.tz.to_lowercase().contains(&needle)
             })
-            .collect()
+            .collect();
     }
 
     /// Refuse the answer and say why, leaving the text in place to be fixed.
@@ -184,10 +205,24 @@ impl Prompt {
             },
             KeyCode::Tab => {
                 self.complete();
+                self.refilter();
+                Outcome::Editing
+            }
+            // Moving within the text is not editing it, so the list is left
+            // alone. Lumped in with typing, these reset the selection: you
+            // scrolled to row thirty, pressed Left to fix a typo, and the
+            // highlight jumped back to the top of the list.
+            //
+            // Home and End are absent because the arms above claim them
+            // whenever there is a list to move through; they reach the field
+            // only when there is not, and then there is no selection to lose.
+            KeyCode::Left | KeyCode::Right => {
+                self.field.handle_key(key);
                 Outcome::Editing
             }
             _ => {
                 self.field.handle_key(key);
+                self.refilter();
                 // Typing narrows the list under the cursor, so a selection two
                 // rows down would otherwise land on something unrelated — or
                 // past the end of what is left.
@@ -367,8 +402,21 @@ impl Prompt {
         );
 
         // A visible cursor, because a text field without one reads as a label.
-        let x = popup.x + 2 + u16::try_from(cursor).unwrap_or(0);
-        frame.set_cursor_position((x.min(popup.x + popup.width - 2), popup.y + 1));
+        //
+        // Every step of this is saturating, and that is not defensive habit.
+        // `centred` clamps the popup to the screen, so on a terminal one column
+        // wide `popup.width` is 1 and the old `popup.x + popup.width - 2`
+        // underflowed — a panic in a debug build and a wrap to 65535 in a
+        // release one. Reachable by resizing the terminal while a prompt is
+        // open, which is exactly when somebody would.
+        let right = popup
+            .x
+            .saturating_add(popup.width.saturating_sub(crate::frame::FRAME_WIDTH));
+        let x = popup
+            .x
+            .saturating_add(2)
+            .saturating_add(u16::try_from(cursor).unwrap_or(u16::MAX));
+        frame.set_cursor_position((x.min(right), popup.y.saturating_add(1)));
     }
 }
 
@@ -562,6 +610,70 @@ mod tests {
         press(&mut p, KeyCode::Backspace);
         assert!(p.error.is_none(), "typing dismisses the complaint");
         assert_eq!(p.value(), "Europe/Lundo", "and the text is still there");
+    }
+
+    /// `centred` clamps the popup to the screen, so a terminal narrower than
+    /// the dialog produced a popup narrower than the arithmetic assumed:
+    /// `popup.x + popup.width - 2` underflowed at width 1. A panic in a debug
+    /// build, a wrap to 65535 in a release one, and reachable by resizing the
+    /// terminal while the prompt is open.
+    #[test]
+    fn a_terminal_too_small_for_the_dialog_does_not_bring_the_dashboard_down() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        for width in 1..8u16 {
+            for height in 1..8u16 {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                let p = Prompt::new("FILE", "help", "some/long/path.ics", Completion::Paths);
+                terminal
+                    .draw(|f| p.render(f, f.area(), &Theme::default()))
+                    .unwrap_or_else(|e| panic!("{width}x{height} failed to draw: {e}"));
+            }
+        }
+    }
+
+    /// And the same for the variant that draws a list under the field.
+    #[test]
+    fn a_list_prompt_survives_a_tiny_terminal_too() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        for width in 1..8u16 {
+            for height in 1..8u16 {
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                let p = Prompt::new("ZONE", "help", "", Completion::Places(crate::zones::PLACES));
+                terminal
+                    .draw(|f| p.render(f, f.area(), &Theme::default()))
+                    .unwrap_or_else(|e| panic!("{width}x{height} failed to draw: {e}"));
+            }
+        }
+    }
+
+    /// Moving the text cursor is not editing the text. Left and Right used to
+    /// fall through to the same arm as typing, which reset the list to the top:
+    /// scroll to row thirty, press Left to fix a typo, lose your place.
+    #[test]
+    fn moving_the_text_cursor_does_not_throw_away_the_list_selection() {
+        let mut p = Prompt::new("ZONE", "help", "", Completion::Places(crate::zones::PLACES));
+        for _ in 0..15 {
+            press(&mut p, KeyCode::Down);
+        }
+        let (selected, offset) = (p.selected, p.offset);
+        assert!(selected > 0, "there is a selection to lose");
+
+        press(&mut p, KeyCode::Left);
+        assert_eq!(p.selected, selected, "Left moved the list");
+        assert_eq!(p.offset, offset, "Left scrolled the list");
+
+        press(&mut p, KeyCode::Right);
+        assert_eq!(p.selected, selected, "Right moved the list");
+
+        // Typing still does reset it, which is the behaviour that was correct.
+        p.handle_key(KeyEvent::from(KeyCode::Char('z')));
+        assert_eq!(p.selected, 0, "typing narrows the list and starts again");
     }
 
     #[test]
