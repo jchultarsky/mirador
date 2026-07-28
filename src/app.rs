@@ -37,6 +37,10 @@ const GLOBAL: &[Binding] = &[
     // narrow for all of them — but a primary, because the alternative is what
     // happened to the resize keys below: shipped, useful, and undiscoverable.
     Binding::primary("m", "arrange"),
+    // Behind `m` for the same reason `m` is behind `w`, and a primary for the
+    // same reason too: six themes ship, and a theme nobody can find is six
+    // files of decoration.
+    Binding::primary("t", "theme"),
     Binding::extra("Shift+Tab", "focus back"),
     Binding::extra("1-9", "jump to panel"),
     Binding::extra("Ctrl+←/→", "resize width"),
@@ -287,6 +291,10 @@ pub struct App {
     today: jiff::civil::Date,
     /// The panel picker, while it is open.
     picker: Option<crate::picker::Picker>,
+    /// The theme picker, while it is open, and the theme to put back if it is
+    /// cancelled. Previewing means the live theme is not the committed one, so
+    /// the dialog cannot be closed without knowing what it replaced.
+    theme_picker: Option<(crate::theme_picker::ThemePicker, crate::theme::Theme)>,
     /// The layout as it stood when arrange mode opened, kept so that `Esc` can
     /// put it back. Moving panels is a bigger, more spatial change than
     /// toggling one on, and being able to try an arrangement and back out of it
@@ -356,6 +364,7 @@ impl App {
             watch: crate::watch::WatchLog::default(),
             today: jiff::Zoned::now().date(),
             picker: None,
+            theme_picker: None,
             arranging: None,
             config_path: None,
             last_resize: None,
@@ -635,6 +644,10 @@ impl App {
         for slot in &self.slots {
             slot.panel.remember(&mut current);
         }
+        // The theme is the shell's, not any panel's, so it is reported here —
+        // but reported the same way, unconditionally, so invariant 17 holds for
+        // it too and picking your config's own theme back retracts the entry.
+        current.theme.clone_from(&self.config.theme.name);
         current.only_changes_from(&self.baseline)
     }
 
@@ -777,6 +790,10 @@ impl App {
 
         // The picker is a real dialog rather than a notice, so it reads keys
         // instead of dismissing on any of them.
+        if self.theme_picker.is_some() {
+            self.handle_theme_picker_key(key);
+            return;
+        }
         if self.picker.is_some() {
             self.handle_picker_key(key);
             return;
@@ -929,6 +946,71 @@ impl App {
         }
     }
 
+    /// Open the theme picker, remembering the theme to put back on `Esc`.
+    ///
+    /// The themes directory sits beside the config, so a `--config` somewhere
+    /// unusual looks for themes beside *it*. With no config path — which is
+    /// only ever the tests — the bundled set is the whole list.
+    fn open_theme_picker(&mut self) {
+        let dir = self
+            .config_path
+            .as_deref()
+            .and_then(crate::themes::user_dir);
+        let picker = crate::theme_picker::ThemePicker::new(
+            self.config.theme.name.as_deref(),
+            dir.as_deref(),
+        );
+        self.theme_picker = Some((picker, self.config.theme.clone()));
+    }
+
+    /// Act on whatever the theme picker made of a keypress.
+    fn handle_theme_picker_key(&mut self, key: KeyEvent) {
+        let Some((picker, original)) = self.theme_picker.as_mut() else {
+            return;
+        };
+        match picker.handle_key(key) {
+            crate::theme_picker::Action::None => {}
+            crate::theme_picker::Action::Preview(name) => {
+                let dir = self
+                    .config_path
+                    .as_deref()
+                    .and_then(crate::themes::user_dir);
+                // A theme that will not load is left as a dead row rather than
+                // reported: the file is the user's own, they have just watched
+                // every other name repaint the screen, and the one that does
+                // nothing is legible enough. Anything louder would put an error
+                // dialog on top of a colour picker.
+                if let Ok(theme) = crate::themes::resolve(&name, dir.as_deref()) {
+                    self.apply_theme(theme);
+                }
+            }
+            crate::theme_picker::Action::Accept => {
+                self.theme_picker = None;
+                // The live theme is already the chosen one, so there is nothing
+                // to apply — only to record. Written here rather than on every
+                // cursor move, so browsing the list costs no writes.
+                self.persist_preferences();
+            }
+            crate::theme_picker::Action::Cancel => {
+                let restore = original.clone();
+                self.theme_picker = None;
+                self.apply_theme(restore);
+            }
+        }
+    }
+
+    /// Swap the live theme, including the colours derived from it.
+    ///
+    /// `gradients` is the one thing that does not read `config.theme` at draw
+    /// time — it is a baked 101-entry ramp, computed once. Forgetting it here
+    /// would leave the cpu and network graphs painted in the previous theme
+    /// while everything around them changed, which looks like a rendering bug
+    /// rather than a missing line.
+    fn apply_theme(&mut self, theme: crate::theme::Theme) {
+        self.config.theme = theme;
+        self.gradients = self.config.theme.gradients();
+    }
+
     /// Turn a widget on or off, rebuilding the dashboard around it.
     fn toggle_widget(&mut self, widget: &str) {
         let before = self.config.layout.clone();
@@ -1031,6 +1113,7 @@ impl App {
                 self.help_scroll = 0;
             }
             KeyCode::Char('w') => self.picker = Some(crate::picker::Picker::new()),
+            KeyCode::Char('t') => self.open_theme_picker(),
             KeyCode::Char('m') => self.enter_arrange(),
             KeyCode::Char(c @ '1'..='9') => {
                 let index = c as usize - '1' as usize;
@@ -1358,6 +1441,9 @@ impl App {
 
         if self.show_help {
             self.render_help(frame, area);
+        }
+        if let Some((picker, _)) = &self.theme_picker {
+            picker.render(frame, area, &self.config.theme);
         }
         if let Some(picker) = &self.picker {
             picker.render(
@@ -2925,6 +3011,107 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// Walk the theme picker down to a named theme and report what it landed on.
+    fn preview_a_theme(app: &mut App) -> String {
+        app.handle_key(key(KeyCode::Char('t')));
+        // Down until the accent actually moves. The list is alphabetical and
+        // starts on `ansi`, whose accent is an ANSI index rather than an RGB
+        // triple, so the first row that differs is a real repaint.
+        let start = app.config.theme.accent;
+        for _ in 0..20 {
+            app.handle_key(key(KeyCode::Down));
+            if app.config.theme.accent != start {
+                break;
+            }
+        }
+        app.config
+            .theme
+            .name
+            .clone()
+            .expect("a previewed theme is a named one")
+    }
+
+    #[test]
+    fn moving_in_the_theme_picker_repaints_before_anything_is_committed() {
+        let mut app = App::new(config_with(&["clocks", "cpu"])).unwrap();
+        let before = app.config.theme.accent;
+        let name = preview_a_theme(&mut app);
+        assert_ne!(
+            app.config.theme.accent, before,
+            "`{name}` was selected but the live theme did not change"
+        );
+        assert!(
+            app.theme_picker.is_some(),
+            "moving must not close the dialog"
+        );
+    }
+
+    /// The graphs read a baked ramp rather than the theme, so a swap that
+    /// forgets it leaves cpu and network painted in the previous palette.
+    #[test]
+    fn a_theme_swap_rebakes_the_gradients_the_graphs_draw_from() {
+        let mut app = App::new(config_with(&["cpu"])).unwrap();
+        let before = app.gradients.clone();
+        preview_a_theme(&mut app);
+        assert_ne!(
+            app.gradients, before,
+            "the graph ramp still holds the previous theme's colours"
+        );
+    }
+
+    #[test]
+    fn esc_puts_back_the_theme_the_picker_opened_on() {
+        let mut app = App::new(config_with(&["clocks", "cpu"])).unwrap();
+        let theme = app.config.theme.clone();
+        let gradients = app.gradients.clone();
+
+        preview_a_theme(&mut app);
+        app.handle_key(key(KeyCode::Esc));
+
+        assert!(app.theme_picker.is_none(), "Esc must close the dialog");
+        assert_eq!(app.config.theme.accent, theme.accent, "theme not restored");
+        assert_eq!(app.gradients, gradients, "gradients not restored");
+    }
+
+    #[test]
+    fn enter_keeps_the_previewed_theme() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let name = preview_a_theme(&mut app);
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(app.theme_picker.is_none());
+        assert_eq!(
+            app.config.theme.name.as_deref(),
+            Some(name.as_str()),
+            "Enter must keep what was on screen"
+        );
+    }
+
+    /// The dialog owns the keyboard while it is open. Otherwise `q` under the
+    /// cursor quits the dashboard mid-browse, which is invariant 2's rule
+    /// applied to a shell dialog rather than a panel.
+    #[test]
+    fn the_theme_picker_takes_the_keyboard_while_it_is_open() {
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        app.handle_key(key(KeyCode::Char('t')));
+        let focus = app.focus;
+
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, focus, "Tab reached the focus ring");
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(
+            app.picker.is_none(),
+            "`w` opened the panel picker underneath"
+        );
+
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(
+            !app.should_quit,
+            "`q` quit the dashboard from inside a dialog"
+        );
+        assert!(app.theme_picker.is_none(), "`q` should close the dialog");
     }
 
     #[test]

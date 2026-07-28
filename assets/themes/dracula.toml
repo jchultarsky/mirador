@@ -1,0 +1,58 @@
+# Dracula — the dark theme, by Zeno Rocha.
+#
+# The most recognisable of the set: a violet-leaning background with six
+# saturated accents that all sit at roughly the same brightness. That evenness
+# is why the signal colours here are unusually loud — nothing in Dracula
+# recedes, so `error` has to be the one that reads first by hue, not weight.
+#
+# Values from the official specification at spec.draculatheme.com.
+
+border         = "selection"
+border_focused = "purple"
+rule           = "selection"
+title          = "purple"
+text           = "reset"
+muted          = "comment"
+label          = "cyan"
+accent         = "purple"
+key            = "pink"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "selection"
+
+[palette]
+selection = "#44475a"
+comment   = "#6272a4"
+red       = "#ff5555"
+orange    = "#ffb86c"
+yellow    = "#f1fa8c"
+green     = "#50fa7b"
+purple    = "#bd93f9"
+cyan      = "#8be9fd"
+pink      = "#ff79c6"
+
+[cpu_gradient]
+start = "#44475a"
+mid   = "#ffb86c"
+end   = "#ff5555"
+
+[rx_gradient]
+start = "#44475a"
+mid   = "#8be9fd"
+end   = "#50fa7b"
+
+[tx_gradient]
+start = "#44475a"
+mid   = "#bd93f9"
+end   = "#ff79c6"
+
+[gain_gradient]
+start = "#44475a"
+mid   = "#50fa7b"
+end   = "#50fa7b"
+
+[loss_gradient]
+start = "#44475a"
+mid   = "#ff5555"
+end   = "#ff5555"

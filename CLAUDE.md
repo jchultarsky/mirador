@@ -115,6 +115,7 @@ themes.rs    `theme = "name"`: bundled themes, inherits, palettes
 config/      mod.rs: paths, loading, validation; widgets.rs: one settings
              struct per panel; layout.rs: the grid
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
+theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
 prompt.rs    the one-line question a panel asks for a path, place or zone,
              with an optional list to choose from
@@ -206,7 +207,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 254 of them, including the ones mirador
+    trip through `toml` discards all 264 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -368,13 +369,64 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
 
 ## Named themes — built
 
-`theme = "name"` resolves through `themes.rs`. Four themes are `include_str!`-
-baked (`default`, `default-light`, `high-contrast`, `ansi`) and anything in
-`<config>/mirador/themes/<name>.toml` is found first, so a bundled theme can be
-replaced without renaming it. `inherits` chains with cycle detection; `[palette]`
+`theme = "name"` resolves through `themes.rs`. Ten themes are `include_str!`-
+baked and anything in `<config>/mirador/themes/<name>.toml` is found first, so a
+bundled theme can be replaced without renaming it.
+
+Four are mirador's own (`default`, `default-light`, `high-contrast`, `ansi`).
+Six are **ports** of palettes from elsewhere — `nord`, `gruvbox`, `dracula`,
+`catppuccin-mocha`, `tokyo-night`, `solarized-dark`. Each file cites the
+upstream source its hex values came from, and that is the point: someone who
+picks `nord` wants Nord. Adjust the *mapping* onto mirador's keys if a palette
+reads badly; never adjust the palette. All six keep `text = "reset"`, so body
+text still follows the terminal's own foreground — invariant 8 is not suspended
+because a theme has a name.
+
+Adding one: write `assets/themes/<name>.toml`, add it to `BUNDLED`. Three things
+will bite, and all three are pinned by tests rather than left to memory — the
+filename must match `[A-Za-z0-9_-]+`, colour keys must come **before**
+`[palette]` and the gradient tables, and a standalone theme must set every one of
+`Theme::KEYS`. `inherits` chains with cycle detection; `[palette]`
 names colours once, and a child redefining a palette entry recolours the keys
 its *parent* set with it — which is why palettes are merged separately from the
 colour keys rather than as each document is read.
+
+**The `t` picker previews as the cursor moves**, which is the whole reason it is
+usable: a theme you cannot see is a theme you cannot choose. That makes `Esc`
+load-bearing — it restores the theme the dialog opened on — and it is why the
+dialog holds `(ThemePicker, Theme)` rather than just the picker.
+
+Two things make live preview cheap. Every theme read in the dashboard happens at
+*draw* time from `config.theme`, so a swap is one field assignment; and the one
+exception, `App::gradients`, is a baked 101-entry ramp that `apply_theme`
+re-derives in the same place. Forget the second and the cpu and network graphs
+stay in the old palette while everything around them changes, which reads as a
+rendering bug rather than a missing line. `a_theme_swap_rebakes_the_gradients_the_graphs_draw_from`
+pins it, and `Gradients` derives `PartialEq` purely so it can.
+
+**The choice is remembered in `state.rs`, not written to the config** — and this
+is a real departure from the `[layout]` precedent, so it is worth the paragraph.
+People *do* curate their theme, which by invariant 16's rule would put it in the
+config. What decides it is the shape of the edit: `theme` may be a string *or*
+an inline `[theme]` table, and swapping a whole table for a scalar is a textual
+rewrite far more dangerous than the single-line `[layout]` edits — which are
+safe only because `layout_edit::apply` can re-parse and verify what it wrote.
+There is no equivalent check for "did this still mean the same thing". So the
+config keeps seeding, `t` records where the user moved, and anyone who wants it
+under version control writes `theme = "nord"` themselves.
+
+The consequence to know about: a config `theme` that seems to be ignored means a
+state file outranking it. The README and the shipped config both say so, because
+the alternative is someone editing a config line that does nothing.
+
+Invariant 17 holds for it by construction — the baseline is `config.theme.name`
+taken before `apply_state_theme`, so picking the theme the config already names
+*retracts* the entry. Note that `a_dashboard_nobody_has_touched_writes_nothing`
+cannot see this field: a default config carries an inline table and so names no
+theme, leaving both sides `None` whether or not `theme` is in
+`only_changes_from`'s hand-written list. `a_theme_matching_the_config_is_not_recorded`
+exists because of that, and it was checked by removing the entry and watching it
+go red.
 
 **Two items from the original design were deliberately not built**, and the
 reasons matter more than the decision:
@@ -746,8 +798,9 @@ going to guess that from reading.
 ## Open work
 
 Nothing. All three gaps named in the original product analysis are built — the
-`.ics` agenda, the watch log, and the on-fire signal — along with named themes,
-arrange mode, and in-panel editing for everything the UI can change.
+`.ics` agenda, the watch log, and the on-fire signal — along with named themes
+and the `t` picker over them, arrange mode, and in-panel editing for everything
+the UI can change.
 
 That is a fact about the *list*, not a claim the program is finished. Two things
 shipped recently have never run in the conditions they were built for, and both

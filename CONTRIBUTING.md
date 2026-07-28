@@ -94,6 +94,31 @@ While a prompt is open your panel must return `true` from
 `Panel::captures_input`, or the first `q` someone types into it will quit the
 dashboard.
 
+## Adding a theme
+
+Write `assets/themes/<name>.toml` and add it to `BUNDLED` in `src/themes.rs`.
+That is the whole change — the `t` picker lists whatever is in `BUNDLED`.
+
+Four things will catch you out, and each has a test rather than a convention:
+
+1. **Colour keys go *before* `[palette]` and before the gradient tables.** TOML
+   assigns every key after a table header to that table, so a colour written
+   below `[palette]` lands inside it and silently sets nothing.
+2. **Set every key in `Theme::KEYS`** unless the theme `inherits` another.
+3. **The filename must be `[A-Za-z0-9_-]+`.** A theme is looked up by name, not
+   by path, so anything else cannot be loaded.
+4. **`text` stays `reset`.** Body text follows the reader's own terminal
+   foreground; pinning it to your palette breaks on the half of terminals not
+   configured the way yours is.
+
+Keep `border` and `muted` distinct, or secondary text ends up as dim as the
+chrome and reads as broken rather than de-emphasised.
+
+If you are porting a palette from elsewhere, take the hex values from its own
+specification and cite the source in a comment at the top of the file. Adjust
+how the palette maps onto mirador's keys as much as you like; do not adjust the
+palette. Someone choosing `nord` wants Nord.
+
 ## Code standards
 
 - `cargo clippy --all-targets -- -D warnings` must pass. The crate enables

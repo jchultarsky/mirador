@@ -28,7 +28,7 @@ const STEPS: usize = 101;
 ///
 /// Baking the ramp once means drawing a frame is array lookups rather than
 /// per-cell interpolation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gradient {
     colors: Box<[Color; STEPS]>,
 }

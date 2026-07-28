@@ -28,6 +28,7 @@ mod task;
 mod textarea;
 mod textfield;
 mod theme;
+mod theme_picker;
 mod themes;
 mod update;
 mod watch;
@@ -67,6 +68,7 @@ KEYS:
     1 - 9                  Jump straight to a panel
     w                      Choose which panels are shown
     m                      Rearrange the panels
+    t                      Choose a theme
     Ctrl+arrows            Resize the focused panel
     ?                      Show all key bindings, and the version
     q / Ctrl+C             Quit
@@ -190,6 +192,7 @@ fn run() -> Result<()> {
     // difference from this, which is what makes a preference retractable.
     let baseline = crate::state::UiState::from_config(&config);
     config.apply_state(&saved);
+    config.apply_state_theme(&saved, &config_path);
 
     let mouse = config.general.mouse;
     // Started before the terminal is taken over, and off unless the config says

@@ -1,0 +1,62 @@
+# Catppuccin Mocha — the darkest of the four Catppuccin flavours.
+#
+# Pastel accents on a soft, slightly warm charcoal. The palette is unusually
+# large, so the mapping below picks from it rather than using all of it: mauve
+# is the documented accent, and the surface/overlay ramp gives three distinct
+# greys for chrome, which most palettes do not.
+#
+# Values from github.com/catppuccin/catppuccin.
+
+border         = "surface1"
+border_focused = "mauve"
+rule           = "surface0"
+title          = "mauve"
+text           = "reset"
+muted          = "overlay0"
+label          = "teal"
+accent         = "mauve"
+key            = "blue"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "surface0"
+
+[palette]
+surface0 = "#313244"
+surface1 = "#45475a"
+overlay0 = "#6c7086"
+subtext0 = "#a6adc8"
+mauve    = "#cba6f7"
+red      = "#f38ba8"
+peach    = "#fab387"
+yellow   = "#f9e2af"
+green    = "#a6e3a1"
+teal     = "#94e2d5"
+sky      = "#89dceb"
+blue     = "#89b4fa"
+lavender = "#b4befe"
+
+[cpu_gradient]
+start = "#313244"
+mid   = "#f9e2af"
+end   = "#f38ba8"
+
+[rx_gradient]
+start = "#45475a"
+mid   = "#89dceb"
+end   = "#a6e3a1"
+
+[tx_gradient]
+start = "#45475a"
+mid   = "#89b4fa"
+end   = "#cba6f7"
+
+[gain_gradient]
+start = "#45475a"
+mid   = "#a6e3a1"
+end   = "#a6e3a1"
+
+[loss_gradient]
+start = "#45475a"
+mid   = "#f38ba8"
+end   = "#f38ba8"
