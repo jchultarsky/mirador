@@ -1029,8 +1029,45 @@ rows come out in order. And every byte-offset slice in the module — `strip_com
 `quoted_value`, `after_key`, `set_number` — indexes at a character boundary by
 construction, so the multi-byte panic that `ical` had cannot happen here.
 
-*Exit:* no arbitrary input to any of the five produces a panic, a hang, or
-unbounded memory. `themes` is the last one.
+**`themes`: done.** Two findings, and both are about the same thing Phase 1
+missed here: it read this module for *correctness* and found the path traversal,
+but never asked what anything **cost**.
+
+**Nothing bounded the size of a theme file.** `ical` got a 10MB cap for exactly
+this and `themes` had none, which matters far more than the size of a theme
+suggests — **the `t` picker re-resolves from disk on every cursor move.** That
+is what makes live preview work, and it puts the cost of reading a theme on an
+arrow key. Measured: an 8MB file took **233ms** to resolve against the ~30µs
+the bundled ones cost, which is not a slow picker but one that appears to have
+hung. `inherits` then multiplies it by up to `MAX_DEPTH`, and the depth check
+runs *after* each file is read — a chain of twenty 2MB files read 34MB before
+refusing on depth. `MAX_THEME_BYTES` is 256KB, more than a hundred times the
+largest bundled theme at 1,788 bytes, and the read is bounded with `take` rather
+than by trusting a length from `metadata` — asking how big a file is and then
+reading it are two different facts, and only one of them bounds the allocation.
+
+**The error message quoted the offending value whole.** A two-megabyte colour
+string produced a two-megabyte error, built and then *discarded* on every cursor
+move in the picker. Same shape as the unbounded headline in `feed`, reached from
+the other end. Clipped to 40 characters, which is still twice any real colour.
+
+Non-findings, recorded because they were checked. Three thousand generated theme
+documents — palette tables shadowing colour keys, `inherits` pointing at itself,
+values of the wrong type, empty and multi-byte colour strings, unclosed
+gradients — produced no panic and no hang. Cycle detection is by name and holds.
+And `parse_color` cannot panic on any input, because ratatui's `Color: FromStr`
+returns a `Result`; the danger there was never the parse, only what the failure
+message did with what it was handed.
+
+*Exit criterion met.* No arbitrary input to any of the five produces a panic, a
+hang, or unbounded memory.
+
+**Phase 2 is complete.** The pattern across all five is worth carrying into
+Phase 4: the interior logic was mostly right, and what was missing was a
+*bound* — on a headline, on a calendar's line count, on a wrapped row, on a
+theme file, on the text an error message quotes back. Four of the five findings
+in the last two modules were reached by asking "what does this cost when the
+input is hostile", not "is this correct".
 
 ### Phase 3 — soak
 
