@@ -463,6 +463,108 @@ mod tests {
             .expect("the bundled default config must always validate");
     }
 
+    /// Every commented-out default in the shipped config is a real key.
+    ///
+    /// `shipped_default_config_parses` proves the *live* keys are real, because
+    /// `deny_unknown_fields` refuses anything that is not a field. It says
+    /// nothing about the commented ones — and those are the ones a user
+    /// uncomments, which makes them the half of the file most likely to be
+    /// acted on and the half nothing was checking. A key renamed in the code
+    /// with its commented example left behind would be found by whoever
+    /// uncommented it, and the error would say their config was wrong.
+    ///
+    /// Each is uncommented on its own rather than all at once, so a failure
+    /// names the line rather than the file, and because some of them are
+    /// alternatives that are not meant to be set together.
+    ///
+    /// This is the mechanical half of Phase 4's "every key reachable and
+    /// documented": a promise that a config keeps working is not worth making
+    /// about a file whose documentation nothing verifies.
+    #[test]
+    fn every_commented_out_default_is_a_key_that_still_exists() {
+        // `# key = value`, with at most one space. An example inside a prose
+        // block is indented further — `#   chime_command = [...]` — and is
+        // illustration rather than a default to uncomment.
+        let is_commented_default = |line: &str| -> Option<String> {
+            let rest = line.strip_prefix('#')?;
+            let rest = rest.strip_prefix(' ').unwrap_or(rest);
+            if rest.starts_with(' ') {
+                return None;
+            }
+            let key = rest.split('=').next()?.trim();
+            let looks_like_a_key = !key.is_empty()
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            (looks_like_a_key && rest.contains('=')).then(|| rest.to_string())
+        };
+
+        let lines: Vec<&str> = DEFAULT_CONFIG.lines().collect();
+        let mut checked = 0;
+        for (index, line) in lines.iter().enumerate() {
+            let Some(uncommented) = is_commented_default(line) else {
+                continue;
+            };
+            checked += 1;
+
+            let mut edited = lines.clone();
+            edited[index] = &uncommented;
+            let text = edited.join("\n");
+
+            let parsed = toml::from_str::<Config>(&text).unwrap_or_else(|e| {
+                panic!(
+                    "line {}: uncommenting `{}` does not parse, so the shipped \
+                     config documents an option that no longer exists: {e}",
+                    index + 1,
+                    line.trim()
+                )
+            });
+            parsed.validate().unwrap_or_else(|e| {
+                panic!(
+                    "line {}: uncommenting `{}` parses but does not validate: {e}",
+                    index + 1,
+                    line.trim()
+                )
+            });
+        }
+
+        // Coverage asserted, not assumed: if the comment style ever changes,
+        // this test would quietly check nothing and still pass.
+        assert!(
+            checked >= 6,
+            "only {checked} commented-out defaults were found; the shipped \
+             config had six, so either they have gone or this no longer \
+             recognises them"
+        );
+    }
+
+    /// The README's compatibility section makes three claims about configs.
+    /// A promise is only worth making if it is checked, so they are checked
+    /// here rather than believed.
+    #[test]
+    fn the_compatibility_promise_about_configs_holds() {
+        // 1. Every option the shipped config documents is accepted. (The live
+        //    keys; the commented ones are
+        //    `every_commented_out_default_is_a_key_that_still_exists`.)
+        toml::from_str::<Config>(DEFAULT_CONFIG).expect("the shipped config parses");
+
+        // 2. An unknown key is refused rather than ignored, and the message
+        //    names the key — "it names the key and the line" is in the README.
+        let err = toml::from_str::<Config>("[weather]\nunits = \"metric\"\nunts = \"metric\"\n")
+            .expect_err("an unknown key must be refused, not ignored");
+        let message = err.to_string();
+        assert!(
+            message.contains("unts"),
+            "the error must name the key the user got wrong: `{message}`"
+        );
+
+        // 3. A config that sets nothing at all is valid, which is what makes
+        //    "delete anything you do not want to override" true.
+        let bare: Config = toml::from_str("").expect("an empty config is valid");
+        bare.validate()
+            .expect("an empty config must validate, since every key has a default");
+    }
+
     #[test]
     fn the_rust_default_layout_matches_the_shipped_one() {
         let shipped: Config = toml::from_str(DEFAULT_CONFIG).expect("must parse");

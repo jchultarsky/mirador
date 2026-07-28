@@ -1092,7 +1092,55 @@ documented, every data file (`todos.toml`, notes, `watchlist.toml`,
 `zones.toml`, `state.toml`, `update-check.toml`) either forward-compatible or
 migrated, and `migrate.rs` covering every rename ever shipped.
 
-*Exit:* a compatibility statement in the README that is true.
+**Done.** The audit found the formats in better shape than expected and one
+real defect, and the useful part is which of the three sub-questions had a
+mechanical answer.
+
+**No option that ever shipped has been removed.** Checked by extracting every
+key from `assets/default_config.toml` at all twenty-two release tags and
+diffing: 78 keys, none lost. So `migrate.rs` covering "every rename ever
+shipped" was already true — its four rules are all pre-`0.1.0`, and there has
+been nothing to migrate since.
+
+Two cautions about that check, because it was wrong twice before it was right.
+The first version used `awk` with `[ \t]`, which BSD awk does not read as a tab,
+and it produced *zero* keys for every tag — an empty diff that looked exactly
+like "nothing was removed". The second correctly found two keys that appeared to
+have vanished, `calendar.chime_command` and `agenda.chime_command`; both were
+artifacts of counting `#   chime_command = [...]` *examples inside a prose block*
+and attributing them to whatever section header came before. A commented default
+in this file is written `# key = value` with one space, and an illustration is
+indented further; the rule that tells them apart is what makes the audit mean
+anything.
+
+**The commented-out defaults were documentation nothing verified.**
+`deny_unknown_fields` proves every *live* key is real — a stale one would fail to
+parse — but says nothing about the six commented ones, which are precisely the
+ones a user uncomments. `every_commented_out_default_is_a_key_that_still_exists`
+uncomments each on its own and parses the result, so a key renamed in the code
+with its example left behind fails here rather than on somebody's config.
+
+**The one defect: `state.toml` used `deny_unknown_fields`.** One key from a newer
+mirador made an older one discard *every* preference in the file rather than the
+key it did not know. `UiState` gained fields at `0.9.0` and again at `0.15.0`, so
+two versions against one synced config directory hit it twice already. The old
+behaviour was recorded as deliberate — "silently keeping half a file is worse" —
+and that reasoning does not survive contact with this particular file: nobody
+hand-writes it, so there is no typo for strictness to catch, and an older binary
+drops the unknown value on its next save regardless. Ignoring it is strictly less
+loss. Now the only strict one is `update-check.toml`, which is a cache; the worst
+a stale one costs is one extra version check.
+
+Everything else was already right. `todos.toml`, the notes file and
+`watchlist.toml` have not changed shape since `0.1.0` — verified by diffing the
+structs against the `v0.1.0` tree, not by reading them — and none of the data
+files refuse an unknown key.
+
+*Exit met:* the README has a **Compatibility** section, and its claims are
+pinned by tests rather than asserted — `the_compatibility_promise_about_configs_holds`
+for the config half and `a_task_file_survives_a_version_in_either_direction`
+for the data half. A promise nothing checks is the same shape as a test that
+cannot fail.
 
 ### Phase 5 — cut 1.0.0
 

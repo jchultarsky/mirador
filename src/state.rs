@@ -27,8 +27,24 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// The persisted preferences, all optional.
+///
+/// **Unknown keys are ignored rather than refused**, which is a departure from
+/// every other file mirador parses and is deliberate. Elsewhere
+/// `deny_unknown_fields` earns its place by catching a typo in something a
+/// person wrote; nobody writes this file by hand, so there is no typo to catch
+/// and the strictness bought nothing.
+///
+/// What it cost was real. This struct gained fields at 0.9.0 and again at
+/// 0.15.0, and `deny_unknown_fields` meant a file written by the newer version
+/// made the older one discard **all** of it — theme, sort order, units and
+/// pomodoro lengths — rather than just the key it did not recognise. Two
+/// mirador versions on one synced config directory is enough to hit it.
+///
+/// Ignoring the key is strictly less loss: an older binary would drop the
+/// unknown value on its next save either way, and now it stops dropping the
+/// other nine with it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct UiState {
     /// `u` in the weather panel.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,16 +287,56 @@ mod tests {
         );
     }
 
+    /// A key from a newer mirador costs that key and nothing else.
+    ///
+    /// This used to assert the opposite: `deny_unknown_fields` rejected the
+    /// whole file, so one unrecognised key discarded every preference in it.
+    /// That was recorded as deliberate, and it was the wrong call for a file
+    /// mirador writes itself — the struct gained fields at 0.9.0 and 0.15.0, so
+    /// anyone running two versions against one config directory lost the lot,
+    /// twice. Settled under Phase 4, where the promise being made is that a
+    /// data file keeps working.
     #[test]
-    fn a_file_from_a_newer_version_does_not_wedge_an_older_one() {
+    fn a_key_from_a_newer_version_costs_only_that_key() {
         let (path, _g) = dir("unknown-key");
-        std::fs::write(&path, "weather_units = \"metric\"\nfuture_thing = 3\n").unwrap();
-        // `deny_unknown_fields` means the whole file is rejected, which drops
-        // the preferences but still starts. Recorded as a test because the
-        // alternative — silently keeping half a file — is worse, and because
-        // the next person to add a field should know the older binary's
-        // behaviour rather than discover it.
-        assert_eq!(UiState::load(&path), UiState::default());
+        std::fs::write(
+            &path,
+            "weather_units = \"metric\"\ntodo_sort = \"due\"\nfuture_thing = 3\n",
+        )
+        .unwrap();
+
+        let loaded = UiState::load(&path);
+        assert_eq!(
+            loaded.weather_units.as_deref(),
+            Some("metric"),
+            "a preference the older binary understands must survive"
+        );
+        assert_eq!(loaded.todo_sort.as_deref(), Some("due"));
+        assert_ne!(
+            loaded,
+            UiState::default(),
+            "one unknown key must not empty the file"
+        );
+    }
+
+    /// The real shape of the problem, rather than an invented key: a file
+    /// carrying every field 0.15.0 added, read by something that predates them.
+    #[test]
+    fn the_fields_added_after_0_9_0_do_not_cost_the_ones_before_them() {
+        let (path, _g) = dir("version-skew");
+        std::fs::write(
+            &path,
+            "weather_units = \"imperial\"\n\
+             theme = \"nord\"\n\
+             agenda_file = \"/tmp/x.ics\"\n\
+             weather_location = \"Boston\"\n\
+             something_from_1_2_0 = true\n",
+        )
+        .unwrap();
+
+        let loaded = UiState::load(&path);
+        assert_eq!(loaded.weather_units.as_deref(), Some("imperial"));
+        assert_eq!(loaded.theme.as_deref(), Some("nord"));
     }
 
     #[test]

@@ -587,6 +587,46 @@ mod tests {
             "and that the optional fields really are optional"
         );
     }
+
+    /// The README's compatibility section promises a task file keeps working in
+    /// both directions. Both are checked here rather than asserted there.
+    ///
+    /// `Task` has not changed shape since `0.1.0`, so the backward half is a
+    /// statement about history — pinned so that adding a *required* field, which
+    /// is the one change that would break every existing file, fails here rather
+    /// than on somebody's tasks.
+    #[test]
+    fn a_task_file_survives_a_version_in_either_direction() {
+        // As 0.1.0 would have written it: only the three fields that have
+        // always been required, and none of the optional ones.
+        let ancient = "\
+[[task]]
+id = 1
+title = \"Renew the domain\"
+created = \"2026-08-01\"
+";
+        let parsed: TaskFile =
+            toml::from_str(ancient).expect("a task file from 0.1.0 must still open");
+        assert_eq!(parsed.tasks.len(), 1);
+        assert_eq!(parsed.tasks[0].title, "Renew the domain");
+
+        // And from a mirador newer than this one: an unknown field is ignored
+        // rather than refusing the file. `TaskFile` deliberately does not set
+        // `deny_unknown_fields` — unlike the config, nobody hand-writes a typo
+        // here that a refusal would helpfully catch, and refusing would mean a
+        // newer mirador's file locks an older one out of every task in it.
+        let from_the_future = "\
+[[task]]
+id = 1
+title = \"Renew the domain\"
+created = \"2026-08-01\"
+energy_level = \"high\"
+";
+        let parsed: TaskFile =
+            toml::from_str(from_the_future).expect("an unknown field must not cost the whole file");
+        assert_eq!(parsed.tasks.len(), 1, "the task itself must survive");
+        assert_eq!(parsed.tasks[0].title, "Renew the domain");
+    }
     use jiff::civil::date;
 
     fn today() -> Date {

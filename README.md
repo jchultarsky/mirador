@@ -959,6 +959,34 @@ disk, and renamed over the original — so an interrupted save or a full disk ca
 never truncate your tasks. The same goes for your notes, your watchlist and the
 config itself.
 
+## Compatibility
+
+**A config or data file that works today will keep working.** That is a promise
+about the files mirador reads, and it is worth being precise about what it
+covers.
+
+**Your config.** No option that has ever shipped in a released version has been
+removed — every key in every `mirador.toml` written since `0.1.0` is still
+accepted, checked against all twenty-two releases. Options are added, never
+renamed out from under you. The four keys that predate `0.1.0` are handled by
+`mirador --migrate-config`, which edits the file in place and tells you what it
+changed.
+
+Unknown keys in the config are an *error* rather than a warning, on purpose: a
+silently ignored setting is a setting you think you have set. If mirador refuses
+your config, it names the key and the line.
+
+**Your data files.** `todos.toml`, your notes and `watchlist.toml` have not
+changed shape since `0.1.0`. All of them — plus `zones.toml` and `state.toml` —
+ignore keys they do not recognise, so a file written by a newer mirador still
+opens in an older one with the settings it understands intact. The one exception
+is `update-check.toml`, which is a cache: the worst a stale one costs is a single
+extra version check.
+
+**What this does not promise.** Running an older mirador after a newer one may
+drop a preference the older version has no idea about — it cannot write back
+what it never understood. Nothing else is lost, and nothing is corrupted.
+
 ## Contributing
 
 Bug reports, feature requests and pull requests are welcome. See
