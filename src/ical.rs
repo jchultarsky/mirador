@@ -74,7 +74,15 @@ pub struct Calendar {
 pub fn parse(text: &str, tz: &TimeZone, from: &Zoned, until: &Zoned) -> Calendar {
     let mut calendar = Calendar::default();
 
-    for block in vevents(&unfold(text)) {
+    let lines = unfold(text);
+    if lines.len() >= MAX_LINES {
+        calendar.skipped.push(format!(
+            "this calendar has more than {MAX_LINES} lines; only the first \
+             {MAX_LINES} were read"
+        ));
+    }
+
+    for block in vevents(&lines) {
         match event_from(&block, tz) {
             Ok(Some((event, recurrence, exceptions))) => {
                 calendar
@@ -95,6 +103,22 @@ pub fn parse(text: &str, tz: &TimeZone, from: &Zoned, until: &Zoned) -> Calendar
     calendar
 }
 
+/// Most content lines read from one file.
+///
+/// The agenda panel already refuses a `.ics` over 10MB, and that bound turns out
+/// not to bound what matters: the cost here is per *line*, not per byte. Every
+/// line becomes a `String` in a `Vec`, and a `String` is 24 bytes before it holds
+/// anything — so a 10MB file of bare newlines produced **240MB** of `Vec` before
+/// a single event was parsed. Measured, at a flat 24x whatever the size.
+///
+/// RFC 5545 folds at 75 octets, so a maximally-folded 10MB calendar holds about
+/// 138,000 lines and a typical one perhaps 300,000. This admits every real
+/// calendar that fits under the byte cap and holds the `Vec` itself to under
+/// 10MB. Hitting it is reported rather than swallowed, on the same principle as
+/// `Calendar::skipped`: a calendar quietly missing half its entries is worse than
+/// one that says it could not read them.
+const MAX_LINES: usize = 400_000;
+
 /// Undo RFC 5545 line folding.
 ///
 /// A long line is split with CRLF followed by a space or tab, and the
@@ -104,6 +128,9 @@ pub fn parse(text: &str, tz: &TimeZone, from: &Zoned, until: &Zoned) -> Calendar
 fn unfold(text: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for raw in text.split('\n') {
+        if lines.len() >= MAX_LINES {
+            break;
+        }
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         match line.strip_prefix([' ', '\t']) {
             Some(rest) if !lines.is_empty() => {
@@ -142,15 +169,36 @@ fn vevents(lines: &[String]) -> Vec<Vec<&str>> {
             current = None;
             continue;
         }
-        if line.len() > 6 && line[..6].eq_ignore_ascii_case("BEGIN:") {
+        if starts_with_ci(line, "BEGIN:") {
             nested += 1;
-        } else if line.len() > 4 && line[..4].eq_ignore_ascii_case("END:") {
+        } else if starts_with_ci(line, "END:") {
             nested = nested.saturating_sub(1);
         } else if nested == 0 {
             block.push(line);
         }
     }
     blocks
+}
+
+/// Case-insensitively, does `line` begin with `prefix` and carry something more?
+///
+/// Compares **bytes**, which is the whole point. This was written as
+/// `line.len() > 6 && line[..6].eq_ignore_ascii_case("BEGIN:")`, and slicing a
+/// `&str` at a byte offset panics when that offset falls inside a character —
+/// so any line in a `VEVENT` with a multi-byte character straddling byte 4 or 6
+/// brought the dashboard down. `日本語日本語` does it, and so does `abcé`.
+///
+/// A calendar is somebody else's file, and international text in one is not an
+/// edge case. The Phase 1 pass over this module tested it at *scale* — two
+/// thousand recurring events, twenty thousand nested components — and never
+/// varied the alphabet, which is why the property tests at the foot of this file
+/// generate content rather than volume.
+///
+/// `prefix` is ASCII at every call site; the byte comparison is only correct
+/// because of that, and there is a test.
+fn starts_with_ci(line: &str, prefix: &str) -> bool {
+    line.len() > prefix.len()
+        && line.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
 }
 
 /// One `NAME;PARAM=VALUE:VALUE` line.
@@ -607,12 +655,27 @@ impl Recurrence {
                 }
             }
 
+            // The fallible setters, not `days`/`weeks`/`months`/`years`. Those
+            // **panic** when the figure is outside what a `Span` can hold, and
+            // `INTERVAL` comes straight out of the file: `FREQ=DAILY` with
+            // `INTERVAL=999999999` is 999 million days against a limit of about
+            // seven million, and it brought the dashboard down.
+            //
+            // Deliberately not a constant of our own. Encoding jiff's bounds
+            // here would be a second copy of a number that belongs to a
+            // dependency, and would go quietly wrong the first time that
+            // dependency changed it — the same reasoning as the TOML nesting
+            // bound in `themes`. Ask jiff instead, and treat a refusal as a rule
+            // that has run out of road.
             let step = Span::new();
             let step = match freq {
-                Freq::Daily => step.days(i64::from(*interval)),
-                Freq::Weekly => step.weeks(i64::from(*interval)),
-                Freq::Monthly => step.months(i64::from(*interval)),
-                Freq::Yearly => step.years(i64::from(*interval)),
+                Freq::Daily => step.try_days(i64::from(*interval)),
+                Freq::Weekly => step.try_weeks(i64::from(*interval)),
+                Freq::Monthly => step.try_months(i64::from(*interval)),
+                Freq::Yearly => step.try_years(i64::from(*interval)),
+            };
+            let Ok(step) = step else {
+                break;
             };
             match cursor.checked_add(step) {
                 Ok(next) => cursor = next,
@@ -658,6 +721,336 @@ pub fn today(tz: &TimeZone) -> Date {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Phase 2: the untrusted-input boundary
+    //
+    // A `.ics` file is somebody else's, and this module is the largest thing in
+    // mirador that reads one. The tests above check that it reads *correct*
+    // calendars correctly. These check the other half — that no input at all,
+    // however malformed, produces a panic, a hang, or unbounded memory.
+    //
+    // The generator is deliberately hand-rolled and deterministic. `proptest`
+    // and `arbitrary` both do this better, and neither is worth a dependency
+    // and a build-time cost for one module: what matters here is the *corpus*,
+    // not the shrinking, because the fragments below are chosen from how this
+    // parser actually works rather than sampled from all possible bytes.
+    // -----------------------------------------------------------------------
+
+    /// xorshift64*, so a failing seed can be re-run by hand.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+
+        fn pick<'a, T>(&mut self, from: &'a [T]) -> &'a T {
+            &from[self.below(from.len())]
+        }
+    }
+
+    /// Fragments a line can be built from.
+    ///
+    /// Every entry is here because of something in the parser: the multi-byte
+    /// strings for the byte-slicing panic that `starts_with_ci` now prevents,
+    /// the quoted colons for `Property::parse`'s quote tracking, the enormous
+    /// `COUNT` and `INTERVAL` for the expansion bound, the lone `BEGIN:` and
+    /// `END:` for the nesting counter.
+    const FRAGMENTS: &[&str] = &[
+        "BEGIN:VEVENT",
+        "END:VEVENT",
+        "BEGIN:VALARM",
+        "END:VALARM",
+        "BEGIN:",
+        "END:",
+        "BEGIN",
+        "END",
+        "DTSTART:20260601T120000Z",
+        "DTSTART;VALUE=DATE:20260601",
+        "DTSTART;TZID=\"GMT+01:00\":20260601T120000",
+        "DTSTART;TZID=Nowhere/Nothing:20260601T120000",
+        "DTSTART:not-a-date",
+        "DTSTART:",
+        "DTEND:20260601T130000Z",
+        "DTEND:19700101T000000Z",
+        "DURATION:PT1H",
+        "DURATION:P999999999D",
+        "DURATION:garbage",
+        "SUMMARY:ok",
+        "SUMMARY:日本語日本語",
+        "SUMMARY:abcé",
+        "SUMMARY:a\\,b\\;c\\nd",
+        "LOCATION:🦀🦀🦀",
+        "RRULE:FREQ=DAILY",
+        "RRULE:FREQ=SECONDLY;COUNT=999999999",
+        "RRULE:FREQ=DAILY;INTERVAL=0",
+        "RRULE:FREQ=DAILY;INTERVAL=999999999",
+        "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU",
+        "RRULE:FREQ=YEARLY;UNTIL=99991231T235959Z",
+        "RRULE:FREQ=NONSENSE",
+        "RRULE:",
+        "EXDATE:20260601T120000Z",
+        "EXDATE:nonsense",
+        "abcé",
+        "ab日本",
+        "日本語日本語",
+        "  folded continuation",
+        "\tfolded with a tab",
+        ":",
+        ";",
+        "=",
+        "\"",
+        "\"unclosed",
+        "",
+        "\u{0}\u{1}\u{7f}",
+        "X-WR-CALNAME:x",
+    ];
+
+    /// Build one calendar of up to `lines` lines from the fragments.
+    fn generate(rng: &mut Rng, lines: usize) -> String {
+        let mut out = String::new();
+        for _ in 0..lines {
+            let fragment = *rng.pick(FRAGMENTS);
+            // Occasionally repeat a fragment, which is how a real broken file
+            // goes wrong — a loop in an exporter, not one odd byte.
+            let repeat = match rng.below(20) {
+                0 => 40,
+                1 => 5,
+                _ => 1,
+            };
+            for _ in 0..repeat {
+                out.push_str(fragment);
+                out.push_str(if rng.below(4) == 0 { "\n" } else { "\r\n" });
+            }
+        }
+        out
+    }
+
+    fn utc_window() -> (TimeZone, Zoned, Zoned) {
+        let tz = TimeZone::UTC;
+        let from: Zoned = "2026-01-01T00:00:00[UTC]".parse().expect("from");
+        let until: Zoned = "2027-01-01T00:00:00[UTC]".parse().expect("until");
+        (tz, from, until)
+    }
+
+    /// No generated calendar may panic, and none may take long enough to be
+    /// felt. The dashboard re-reads its `.ics` on a tick, so "slow" here is a
+    /// hang by another name.
+    #[test]
+    #[ignore = "measures memory amplification; not an assertion"]
+    fn probe_memory_amplification() {
+        // The worst case for `unfold`: a file that is nothing but line endings,
+        // so every byte of input becomes a `String` in the returned Vec.
+        for mb in [1usize, 5, 10] {
+            let text = "\n".repeat(mb * 1024 * 1024);
+            let lines = unfold(&text);
+            let vec_bytes = lines.len() * std::mem::size_of::<String>();
+            let heap: usize = lines.iter().map(String::capacity).sum();
+            println!(
+                "{mb} MB of newlines -> {} lines, {} MB of Vec + {} MB of strings = {:.1}x",
+                lines.len(),
+                vec_bytes / 1024 / 1024,
+                heap / 1024 / 1024,
+                (vec_bytes + heap) as f64 / (mb * 1024 * 1024) as f64
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "the wide sweep; the committed test is a subset that fits CI"]
+    fn probe_wide_sweep() {
+        let (tz, from, until) = utc_window();
+        let mut worst = std::time::Duration::ZERO;
+        let mut worst_seed = 0u64;
+        for seed in 1..=40_000u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let lines = 1 + rng.below(300);
+            let text = generate(&mut rng, lines);
+            let start = std::time::Instant::now();
+            let calendar = parse(&text, &tz, &from, &until);
+            let elapsed = start.elapsed();
+            if elapsed > worst {
+                worst = elapsed;
+                worst_seed = seed;
+                println!(
+                    "seed {seed}: {elapsed:?}, {} events, {} skipped, {} bytes in",
+                    calendar.events.len(),
+                    calendar.skipped.len(),
+                    text.len()
+                );
+            }
+        }
+        println!("worst of 40,000: seed {worst_seed} at {worst:?}");
+    }
+
+    #[test]
+    fn no_generated_calendar_panics_or_stalls() {
+        let (tz, from, until) = utc_window();
+        let mut worst = std::time::Duration::ZERO;
+        let mut worst_seed = 0u64;
+
+        for seed in 1..=600u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let text = generate(&mut rng, 60);
+
+            let start = std::time::Instant::now();
+            let calendar = parse(&text, &tz, &from, &until);
+            let elapsed = start.elapsed();
+
+            if elapsed > worst {
+                worst = elapsed;
+                worst_seed = seed;
+            }
+            // Expansion is bounded, so the output must be too — whatever the
+            // input asked for.
+            assert!(
+                calendar.events.len() <= MAX_STEPS * 40,
+                "seed {seed} expanded to {} events",
+                calendar.events.len()
+            );
+        }
+
+        assert!(
+            worst < std::time::Duration::from_millis(500),
+            "seed {worst_seed} took {worst:?} to parse"
+        );
+    }
+
+    /// The same, on input that is not iCalendar at all — the case of pointing
+    /// `[agenda].file` at the wrong thing, which is far more likely than a
+    /// hostile calendar.
+    #[test]
+    fn arbitrary_bytes_are_not_a_calendar_and_must_not_be_a_crash() {
+        let (tz, from, until) = utc_window();
+        for seed in 1..=300u64 {
+            let mut rng = Rng(seed.wrapping_mul(0xD1B5_4A32_D192_ED03));
+            // Printable and not, including the characters that steer the parser.
+            let text: String = (0..2_000)
+                .map(|_| {
+                    let choices = [
+                        'a', 'Z', '0', ':', ';', '=', '"', ',', '\\', '\n', '\r', ' ', '\t', 'é',
+                        '日', '🦀', '\u{0}', '\u{7f}',
+                    ];
+                    *rng.pick(&choices)
+                })
+                .collect();
+            let calendar = parse(&text, &tz, &from, &until);
+            // Nothing to assert about the contents; the assertion is that we
+            // got here at all.
+            assert!(calendar.events.len() < 1_000_000);
+        }
+    }
+
+    /// Every fragment on its own, inside a `VEVENT` — so a failure names the
+    /// line that caused it rather than a seed.
+    #[test]
+    fn every_fragment_survives_on_its_own_inside_an_event() {
+        let (tz, from, until) = utc_window();
+        for fragment in FRAGMENTS {
+            let text =
+                format!("BEGIN:VEVENT\r\nDTSTART:20260601T120000Z\r\n{fragment}\r\nEND:VEVENT\r\n");
+            let result = std::panic::catch_unwind(|| {
+                parse(&text, &tz, &from, &until);
+            });
+            assert!(
+                result.is_ok(),
+                "the line {fragment:?} brought the parser down"
+            );
+        }
+    }
+
+    /// The specific shape that was live: a line inside a `VEVENT` whose fourth
+    /// or sixth byte falls inside a character. `line[..6]` panicked on it.
+    #[test]
+    fn a_line_of_international_text_inside_an_event_does_not_panic() {
+        let (tz, from, until) = utc_window();
+        // Every offset at which a multi-byte character can straddle byte 4 or 6.
+        for pad in 0..8usize {
+            for tail in ["é", "日", "🦀"] {
+                let line = format!("{}{tail}", "a".repeat(pad));
+                let text =
+                    format!("BEGIN:VEVENT\r\nDTSTART:20260601T120000Z\r\n{line}\r\nEND:VEVENT\r\n");
+                let result = std::panic::catch_unwind(|| {
+                    parse(&text, &tz, &from, &until);
+                });
+                assert!(result.is_ok(), "{line:?} ({} bytes) panicked", line.len());
+            }
+        }
+    }
+
+    /// The byte cap in the agenda panel does not bound memory, because the cost
+    /// of reading a calendar is per *line*: every line becomes a `String` in a
+    /// `Vec`, and a `String` is 24 bytes before it holds anything. A 10MB file
+    /// of bare newlines produced 240MB of `Vec` before an event was parsed.
+    #[test]
+    fn a_calendar_of_nothing_but_line_endings_does_not_eat_the_machine() {
+        let (tz, from, until) = utc_window();
+        let text = "\n".repeat(2 * 1024 * 1024);
+
+        let lines = unfold(&text);
+        assert!(
+            lines.len() <= MAX_LINES,
+            "{} lines read from a file with no content in it",
+            lines.len()
+        );
+
+        // And the reader is told, rather than quietly losing the rest.
+        let calendar = parse(&text, &tz, &from, &until);
+        assert!(
+            calendar.skipped.iter().any(|s| s.contains("more than")),
+            "truncation was silent: {:?}",
+            calendar.skipped
+        );
+    }
+
+    /// A calendar that fits is read whole — a bound that clips real calendars
+    /// would be worse than the problem it solves.
+    #[test]
+    fn an_ordinary_calendar_is_read_to_the_end() {
+        use std::fmt::Write as _;
+
+        let (tz, from, until) = utc_window();
+        let mut text = String::from("BEGIN:VCALENDAR\r\n");
+        for day in 1..=28 {
+            let _ = write!(
+                text,
+                "BEGIN:VEVENT\r\nDTSTART:202606{day:02}T120000Z\r\n\
+                 SUMMARY:day {day}\r\nEND:VEVENT\r\n"
+            );
+        }
+        text.push_str("END:VCALENDAR\r\n");
+
+        let calendar = parse(&text, &tz, &from, &until);
+        assert_eq!(calendar.events.len(), 28, "events were lost");
+        assert!(calendar.skipped.is_empty(), "{:?}", calendar.skipped);
+    }
+
+    /// `starts_with_ci` compares bytes, which is only correct because every
+    /// prefix it is given is ASCII.
+    #[test]
+    fn the_prefix_test_is_case_insensitive_and_never_splits_a_character() {
+        assert!(starts_with_ci("BEGIN:VEVENT", "BEGIN:"));
+        assert!(starts_with_ci("begin:vevent", "BEGIN:"));
+        assert!(starts_with_ci("BeGiN:x", "begin:"));
+        assert!(
+            !starts_with_ci("BEGIN:", "BEGIN:"),
+            "needs something after it"
+        );
+        assert!(!starts_with_ci("BEGI", "BEGIN:"));
+        assert!(
+            !starts_with_ci("日本語日本語", "BEGIN:"),
+            "and does not panic"
+        );
+        assert!(!starts_with_ci("abcé", "END:"));
+    }
 
     use jiff::civil::date;
 
