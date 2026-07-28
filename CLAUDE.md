@@ -560,6 +560,22 @@ is not, because it is the one people quote back at you.
 
 ### Phase 1 — finish the adversarial review
 
+**`themes`: done.** One finding and one non-finding.
+
+A theme name was used as a path component without checking, so
+`theme = "../../elsewhere"` read and parsed a file outside the themes
+directory. Nothing escalates — the config and anything it reaches belong to the
+user — but a name whose meaning depends on where the config happens to live is
+not a name, and the failure messages quote whatever it reached. Letters, digits,
+dash and underscore now, which admits every bundled name and excludes
+separators, `..` and the empty string. `inherits` goes through the same door.
+
+The non-finding is worth as much: `substitute` recurses through nested tables,
+and the bound on that recursion is the TOML parser's, not this module's. Fifty
+thousand nested inline tables are refused before they ever become a `Table`.
+Pinned by a test, because the bound lives in a dependency and would leave with
+it.
+
 **`quote`: done, and clean.** No defects. Worth recording *why*, because the
 reasons are load-bearing and easy to remove by accident:
 

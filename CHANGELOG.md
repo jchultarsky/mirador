@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A theme name is a name, not a path.** `theme = "../../elsewhere"` resolved,
+  reading and parsing a file outside your themes directory. Nothing escalated —
+  the config and anything it could reach are yours — but a name whose meaning
+  depends on where your config sits is not a name.
+
 - **Two mirador windows no longer take each other's saves away.** Every writer
   of a file used the same `.tmp` name, so whoever renamed second found it gone.
   Measured with eight concurrent writers: **2,100 of 2,400 saves failed** — and

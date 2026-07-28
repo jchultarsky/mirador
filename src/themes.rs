@@ -120,8 +120,34 @@ pub fn resolve(name: &str, themes_dir: Option<&Path>) -> Result<Theme> {
         .map(|theme| theme.named(name))
 }
 
+/// Whether a theme name is a name rather than a path.
+///
+/// `theme = "../../elsewhere"` used to resolve, reading and parsing a file
+/// outside the themes directory. Nothing is escalated by it — the config is the
+/// user's own, and so is anything it could reach — but a theme name is not a
+/// path and letting it act like one means error messages quoting arbitrary
+/// files, and a name whose meaning depends on where the config happens to live.
+///
+/// Letters, digits, dash and underscore. That admits every bundled name and
+/// every convention a theme is likely to use; it excludes separators, `..`, and
+/// the empty string.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Read one theme document, preferring the user's copy.
 fn read(name: &str, themes_dir: Option<&Path>) -> Result<toml::Table> {
+    if !is_plain_name(name) {
+        bail!(
+            "`{name}` is not a theme name. Use letters, digits, dashes and \
+             underscores — a theme is looked up by name in your themes \
+             directory, not by path."
+        );
+    }
+
     if let Some(path) = themes_dir.map(|dir| dir.join(format!("{name}.toml")))
         && path.exists()
     {
@@ -198,6 +224,11 @@ fn check_palette_ordering(name: &str, table: &toml::Table) -> Result<()> {
 /// Only strings that are palette *keys* change; everything else is left for the
 /// colour parser to accept or reject, so a typo still produces "`brss` is not a
 /// colour" rather than being silently dropped.
+/// Recursion here is bounded by the TOML parser rather than by anything below:
+/// a document nested deeply enough to matter is refused before it becomes a
+/// `Table`. Checked with fifty thousand nested inline tables, which `toml`
+/// rejects outright. Worth knowing, because the bound lives in a dependency and
+/// would leave with it.
 fn substitute(table: &mut toml::Table, palette: &BTreeMap<String, toml::Value>) {
     for (_, value) in table.iter_mut() {
         // Taken by value and put back, because a palette hit replaces the whole
@@ -240,6 +271,55 @@ mod tests {
 
     fn write(dir: &Path, name: &str, body: &str) {
         std::fs::write(dir.join(format!("{name}.toml")), body).expect("writing a theme");
+    }
+
+    /// A theme name is a name, not a path. `theme = "../../elsewhere"` used to
+    /// resolve — reading and parsing a file outside the themes directory.
+    /// Nothing escalates, since the config and anything it reaches are the
+    /// user's own, but a name whose meaning depends on where the config sits is
+    /// not a name, and the error messages quote whatever it reached.
+    #[test]
+    fn a_theme_name_cannot_reach_outside_the_themes_directory() {
+        let (dir, _g) = themes_dir("traversal");
+        let outside = dir.parent().expect("has a parent").join("outside.toml");
+        std::fs::write(&outside, "accent = \"#010203\"\n").expect("write");
+
+        for name in ["../outside", "/etc/passwd", "sub/theme", "..", ""] {
+            let err = resolve(name, Some(&dir))
+                .err()
+                .unwrap_or_else(|| panic!("`{name}` was accepted as a theme name"));
+            let message = format!("{err:#}");
+            assert!(
+                message.contains("not a theme name") || message.contains("no theme called"),
+                "`{name}` refused for the wrong reason: {message}"
+            );
+        }
+
+        // And an ordinary name still works.
+        write(&dir, "nord", "accent = \"#88c0d0\"\n");
+        assert!(resolve("nord", Some(&dir)).is_ok());
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    /// The palette substitution recurses through nested tables, and the bound
+    /// on that recursion lives in the TOML parser rather than here — a document
+    /// nested deeply enough to overflow a stack never becomes a `Table` at all.
+    /// Pinned because the bound would leave with the dependency.
+    #[test]
+    fn a_deeply_nested_theme_is_refused_before_it_can_be_walked() {
+        let (dir, _g) = themes_dir("deep");
+        let depth = 50_000;
+        let mut deep = String::from("accent = \"#010203\"\n\nnest = ");
+        deep.push_str(&"{ a = ".repeat(depth));
+        deep.push('1');
+        deep.push_str(&" }".repeat(depth));
+        deep.push('\n');
+        write(&dir, "deep", &deep);
+
+        assert!(
+            resolve("deep", Some(&dir)).is_err(),
+            "{depth} levels of nesting were walked rather than refused"
+        );
     }
 
     #[test]
