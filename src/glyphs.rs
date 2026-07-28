@@ -123,13 +123,23 @@ fn pad_to(line: &mut String, target: u16) {
 }
 
 /// Columns `text` will occupy at `scale`.
+///
+/// Saturating rather than wrapping. The arithmetic is `u16` and every factor
+/// comes from the caller, so a string of about ten thousand characters overflows
+/// and panics in a debug build. Nothing passes one — the two callers hand it
+/// `"00:00:00"` and a formatted clock — but a width that reports "wider than the
+/// terminal" for absurd input is the right answer, and `fitting_scale` then
+/// returns `None` and the panel falls back, which is what it does anyway.
 pub fn width_of(text: &str, scale: u16) -> u16 {
     let scale = scale.max(1);
     let count = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
     if count == 0 {
         return 0;
     }
-    count * CELL_W * scale + (count - 1) * GAP
+    count
+        .saturating_mul(CELL_W)
+        .saturating_mul(scale)
+        .saturating_add(count.saturating_sub(1).saturating_mul(GAP))
 }
 
 /// The largest scale at which `text` fits in `available` columns, or `None` if
@@ -143,6 +153,12 @@ pub fn fitting_scale(text: &str, available: u16, max_scale: u16) -> Option<u16> 
 /// Render text in the utility face: uppercase, normally spaced.
 ///
 /// `utility("next hours")` becomes `NEXT HOURS`.
+///
+/// **The result can be wider than the input**, so measure it rather than the
+/// argument. Uppercasing is not a one-to-one map: `ß` becomes `SS` and `ﬄ`
+/// becomes `FFL`, so ten characters in can be thirty cells out. Every caller
+/// today either passes a literal or truncates afterwards; the one that took
+/// unbounded text is bounded at its source now, in `feed`.
 ///
 /// This face used to be letterspaced — `N E X T  H O U R S` — on the theory
 /// that tracking separates a label from data without leaning on colour. In

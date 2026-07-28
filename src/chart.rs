@@ -191,6 +191,13 @@ impl<'a> BrailleGraph<'a> {
     /// The most recent samples are kept: a graph narrower than the history
     /// shows the right-hand end of it, which is the part anyone cares about.
     pub fn render(&self, area: Rect, buf: &mut Buffer) {
+        // Clip to the buffer before touching it. Indexing a `Buffer` out of
+        // bounds panics, and every ratatui widget clamps for exactly this
+        // reason — a graph handed an area larger than the screen should draw
+        // what fits, not bring the dashboard down. No caller does that today;
+        // the panels take their rects from the layout, which is derived from
+        // the frame. This is here so that a future one cannot.
+        let area = area.intersection(buf.area);
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -310,6 +317,41 @@ mod tests {
 
     fn c(r: u8, g: u8, b: u8) -> Color {
         Color::Rgb(r, g, b)
+    }
+
+    /// Indexing a `Buffer` out of bounds panics. Nothing passes an oversized
+    /// area today — the panels take their rects from the layout — but a graph
+    /// asked to draw outside the screen should draw what fits.
+    #[test]
+    fn an_area_larger_than_the_buffer_is_clipped_rather_than_panicking() {
+        let gradient = Gradient::new(c(0, 0, 0), None, Some(c(255, 0, 0)));
+        let data: Vec<u64> = (0..200).collect();
+
+        for (bw, bh) in [(1u16, 1u16), (10, 4), (40, 12)] {
+            for (aw, ah) in [(1u16, 1u16), (40, 12), (500, 200)] {
+                let mut buf = Buffer::empty(Rect::new(0, 0, bw, bh));
+                BrailleGraph::new(&data, 199, &gradient).render(Rect::new(0, 0, aw, ah), &mut buf);
+            }
+        }
+
+        // And an area that starts outside the buffer entirely.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
+        BrailleGraph::new(&data, 199, &gradient).render(Rect::new(50, 50, 10, 4), &mut buf);
+    }
+
+    /// Values and a scale at the top of `u64` must not wrap or divide badly.
+    #[test]
+    fn saturated_values_still_draw() {
+        let gradient = Gradient::new(c(0, 0, 0), None, Some(c(255, 0, 0)));
+        for (data, max) in [
+            (vec![u64::MAX; 60], u64::MAX),
+            (vec![u64::MAX; 60], 1),
+            (vec![0u64; 60], u64::MAX),
+            (vec![0u64; 60], 0),
+        ] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 20, 4));
+            BrailleGraph::new(&data, max, &gradient).render(Rect::new(0, 0, 20, 4), &mut buf);
+        }
     }
 
     #[test]

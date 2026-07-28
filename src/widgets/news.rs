@@ -406,7 +406,12 @@ fn fetch_loop(
                 Ok(mut found) => {
                     found.truncate(per_feed);
                     for mut story in found {
-                        story.source.clone_from(name);
+                        // Bounded for the same reason the feed's own fields are:
+                        // `masthead` uppercases this on every frame, so an
+                        // over-long name — this one comes from the config rather
+                        // than from the feed, but still — would be re-allocated
+                        // sixty times a minute.
+                        story.source = name.chars().take(crate::feed::MAX_SOURCE).collect();
                         stories.push(story);
                     }
                 }

@@ -734,6 +734,48 @@ filled once per tick.
 Also bounded the `.ics` read at 10MB, matching what `ureq` already enforces on
 the network side. Reading a calendar costs several times its size.
 
+**`chart`, `samples` and `glyphs`: done.** Five findings, and the interesting
+thing about them is the split: four were *latent* — a hole in a public function
+that no current caller can reach — and one was live, in a module these three
+led to rather than in any of them.
+
+Latent, all now closed because the guards cost a line each:
+
+- `samples::push_bounded` spun for ever on a capacity of 0. `buffer.len() >= 0`
+  is always true for a `usize`, and `pop_front` on an empty deque returns `None`
+  without breaking anything. Unreachable through `capacity`, which floors at 1,
+  and both callers go through it.
+- `chart::BrailleGraph::render` panicked when handed an area larger than the
+  buffer, because indexing a `Buffer` out of bounds does. Every ratatui widget
+  clamps; this one did not. Panels take their rects from the layout, so nothing
+  passes one today.
+- `glyphs::width_of` overflows `u16` at about ten thousand characters and panics
+  in a debug build. Its two callers pass `"00:00:00"` and a formatted clock.
+- `glyphs::utility` can make text *wider*: uppercasing is not one-to-one, so `ß`
+  becomes `SS` and `ﬄ` becomes `FFL` — ten characters in, thirty cells out.
+  Measuring the argument instead of the result is therefore wrong. Documented on
+  the function rather than "fixed", because the behaviour is correct.
+
+Live, and the one that mattered: **`feed` bounded nothing it parsed.** Following
+`utility` back to its one caller that takes text mirador did not write —
+`news::masthead` — led to the parser, where a story's title, link and source had
+no length limit at all. Everything downstream runs per *frame*: the title is
+wrapped on every draw and the source uppercased on every draw. Measured before
+fixing, a 2 MB headline wrapped to 40,000 lines and cost **72 ms a frame**, and
+`ureq`'s body cap allows five times that. A feed is the one input to this program
+somebody else writes, and it could decide how much work the dashboard did.
+Titles are clipped to 400 characters at parse, links to 1,000, source names to
+80 — all far above anything real, and a test pins that an ordinary headline is
+untouched.
+
+That is Phase 2's exit criterion for `feed`, reached from Phase 1.
+
+Non-findings, recorded because they were checked rather than assumed: the graph
+survives `u64::MAX` data against a `u64::MAX` scale, data far above its scale,
+and a scale of zero; `level()` is safe against NaN and infinity because
+`f64::max` returns the non-NaN operand and an infinite cast saturates; and
+`lerp` cannot leave `0..=255`, because `step` is clamped to `span` first.
+
 **`arrange` and `selection`: done.** Two findings, both in code that had a test
 sitting next to it which could not fail.
 
@@ -788,7 +830,7 @@ exists to make impossible.
 One pass covered the code written on 27 July and found a hang and two per-frame
 allocation faults. The rest of the program has not had the same treatment.
 
-Not yet reviewed: `chart`, `samples`, `glyphs`, `theme_picker`.
+Not yet reviewed: `theme_picker`, which is newer than this list.
 
 *Exit:* every module reviewed, findings fixed or recorded with a reason.
 
