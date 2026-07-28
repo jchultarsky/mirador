@@ -964,10 +964,19 @@ rows = [
     const UNPARSABLE_MUTATIONS: usize = 3;
 
     /// Mutations of the shipped config *text*, which is the half a person edits.
+    ///
+    /// Normalised to LF first, and that is not decoration. This repository has
+    /// no `.gitattributes`, so a Windows checkout writes the file with CRLF —
+    /// and then `"crlf"` below, which replaces every `\n`, produces `\r\r\n`
+    /// and stops being the mutation it is named after. The asymmetry that hides
+    /// this is worth knowing: **rustc normalises CRLF to LF inside string
+    /// literals, and `include_str!` does not**, so `SAMPLE` is LF on every
+    /// platform while this file is whatever git wrote. Windows CI found it; the
+    /// same two mutations pass locally either way.
     fn text_mutations() -> Vec<(&'static str, String)> {
-        let shipped = include_str!("../assets/default_config.toml");
+        let shipped = &include_str!("../assets/default_config.toml").replace("\r\n", "\n");
         vec![
-            ("shipped", shipped.to_string()),
+            ("shipped", shipped.clone()),
             ("crlf", shipped.replace('\n', "\r\n")),
             ("crlf-mixed", shipped.replacen('\n', "\r\n", 40)),
             ("no-trailing-newline", shipped.trim_end().to_string()),

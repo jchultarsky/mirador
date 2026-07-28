@@ -984,6 +984,19 @@ the edges of their type. Its coverage is asserted *exactly*, because three of
 the mutations are invalid TOML on purpose and a sweep that quietly stopped
 parsing its own fixtures would pass while testing nothing.
 
+**That exact assertion promptly failed on Windows, and the reason is a trap
+worth keeping.** This repository has no `.gitattributes`, so a Windows checkout
+writes `assets/default_config.toml` with CRLF — and a mutation that replaces
+every `\n` then produces `\r\r\n` and stops being the mutation it is named
+after. Two of the eighteen quietly became invalid TOML, so 13 parsed where 15
+were asserted. The asymmetry that hides this is the part to remember:
+**rustc normalises CRLF to LF inside string literals, and `include_str!` does
+not.** So a fixture written as a `const` in the source is LF on every platform
+while one pulled in from a file is whatever git wrote, and two tests that look
+identical are not. Anything built on `include_str!` should normalise first.
+Reproduced locally by converting the fixture before use, which is also how the
+fix was checked — the sweep now passes under either checkout.
+
 **A widget named twice silently destroyed a comment.** Entries are looked up by
 widget name, so a name used twice has no entry that is unambiguously its own:
 rebuilding a row wrote one of the two entries for *both* panels, so the
