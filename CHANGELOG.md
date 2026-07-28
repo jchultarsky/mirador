@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-28
+
+Four adversarial review passes, completing the first phase of the work towards
+1.0. Two of them found crashes, one found a way for a third-party news feed to
+grind the dashboard down, and one found a bug in code three days old.
+
+### Removed
+
+- **The unused-widget notice.** mirador used to name the widgets your layout
+  does not place — once in the status bar at startup, and permanently in the
+  help overlay. The status bar line retired on your first keypress; the overlay
+  section did not, so if you had deliberately switched four panels off you were
+  told about them every time you pressed `?`.
+
+  A dashboard cannot tell "has not discovered this yet" from "decided against
+  it", so a hint aimed at the first reminds the second for ever. `w` is still on
+  the status bar and in the help, so the way to switch a panel on is unchanged;
+  what is gone is being told that you should.
+
+### Changed
+
+- **The default watchlist leads with the major US indexes** — S&P 500, Dow,
+  Nasdaq Composite, Russell 2000 and Nasdaq-100 — keeping `AAPL` and `MSFT` so
+  the panel shows both kinds on a first run. This seeds the watchlist file on a
+  *first run only*, so an existing installation is untouched.
+
+- **News headlines are clipped to 400 characters when read**, links to 1,000 and
+  feed names to 80. See below for why; no real headline comes close.
+
+### Fixed
+
+- **A one-column terminal could bring the dashboard down.** The prompt dialog
+  computed its cursor position as `popup.x + popup.width - 2`, which underflowed
+  once the popup was clamped to a screen narrower than itself. Reachable by
+  resizing your terminal while a prompt is open.
+
+- **A news feed could decide how much work mirador does.** Nothing bounded the
+  text read out of a feed, and everything downstream of a story runs on every
+  frame — the headline is wrapped, the feed name uppercased. A 2 MB headline
+  wrapped to 40,000 lines and cost **72ms a frame**, and the HTTP body limit
+  allows five times that. A feed is the one input to this program that somebody
+  else writes.
+
+- **Place names and paths in non-Latin scripts drew over their own edges.** The
+  text field measured its scroll window in *characters* rather than display
+  cells, so a six-column field holding `北京市中心` decided five characters fit
+  and drew ten cells, with the caret landing in the middle of a glyph.
+
+- **A long line in a note body took the cursor off the screen.** The editor
+  deliberately does not wrap — a soft wrap that moves as you type makes the
+  cursor impossible to follow — and that had quietly come to mean you could keep
+  typing past the right-hand edge and see none of it. It scrolls sideways now.
+
+- **Arrange mode could rescale rows you had not touched.** Pushing a panel off
+  the edge of a thin row grew the total of the layout weights, so a dashboard
+  written as two equal rows became three unequal ones. Layouts written without
+  explicit heights were the ones affected.
+
+- **A list that got shorter left its cursor stranded.** Pressing Up walked the
+  selection down from wherever it had been, one row at a time, with nothing
+  highlighted the whole way. Down had always pulled it back into range; both do
+  now.
+
+- **`Alt` and a letter typed the letter into a note body**, where the task title
+  field had always ignored it.
+
+- **Moving the text cursor in the timezone picker threw away your place in the
+  list.** Left and Right were handled as though you had typed.
+
+- **A panel graph handed an area larger than the screen panicked** rather than
+  drawing what fits, and a sample buffer given a capacity of zero spun for ever.
+  Neither was reachable from any current caller; both are closed.
+
+- **Rearranging a layout written with `[[layout.rows]]` sections** said only
+  "no `[layout]` rows found", about a file that visibly has rows. It now names
+  the form it can rewrite. That form is still the only one mirador edits.
+
 ## [0.15.0] - 2026-07-27
 
 ### Added
@@ -996,7 +1073,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/jchultarsky/mirador/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/jchultarsky/mirador/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/jchultarsky/mirador/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/jchultarsky/mirador/compare/v0.13.0...v0.14.0
