@@ -918,8 +918,54 @@ from all possible bytes. 40,000 generated calendars run clean at a worst case of
 235µs; the committed test runs a subset that fits CI, and `probe_wide_sweep` is
 `#[ignore]`d for the full run.
 
+**`grid::wrap`: done.** Three findings. The module's own arithmetic was the
+smaller half — the larger one was that mirador was handing the same text to
+*ratatui's* wrapper, which crashes on it.
+
+**The live crash: `Paragraph::wrap` indexes past the end of the buffer.** Two
+ways in, both reachable without doing anything unusual. A double-width glyph
+inside a word too long for a **two-cell** area — `"a🌞b"` is enough — and a
+**leading combining mark**, a grapheme with no base character, which throws the
+accounting off at *any* width. It is a panic, not a misdraw: the dashboard dies.
+Reachable from a note, a task's notes, or a fetch error, and emoji in prose is
+ordinary. The height matters as much as the width, which is why nothing had ever
+seen it: the fault lands on a *later* row, so a one-row pane never reaches it.
+
+The fix is that **ratatui never wraps anything mirador did not write**.
+`grid::wrapped` wraps first and the `Paragraph` is given no `Wrap` at all, which
+keeps wrapping in the one module that measures in cells and is tested against a
+corpus of wide glyphs. Four sites moved: the note title and body, the task form's
+message, and the task notes; plus weather's fetch error, which comes off the
+network. Two `Wrap` calls remain on purpose — the help overlay and the delete
+confirmation are code-written ASCII, and the confirmation's one variable line is
+already `truncate`d to the width, so neither ever wraps untrusted text.
+
+`ratatuis_own_wrapper_is_why_this_module_wraps_first` pins the dependency bug the
+way the TOML nesting bound is pinned, and **says in its failure message that a
+fix upstream is good news** rather than something to delete the assertion over.
+
+The other two were in this module, and both are the Phase 1 pattern again:
+
+- **`wrap` and `wrapped_height` had drifted**, in both directions. The height
+  measured an over-long word by subtracting `width` a row at a time, which is
+  only right when every glyph is one cell — `日本語` at width 3 wraps to three
+  rows and measured two, and `中文标题` at width 1 wraps to four and measured
+  eight. A panel sizes itself with one and draws with the other. They are one
+  function with two consumers now, so they agree by construction; the counting
+  path still allocates nothing, which is what a scroll clamp over a whole note
+  body needs.
+- **A blank row after a line consumed exactly.** `wrap("🌞🌞", 1)` came out as
+  three rows, the last one empty — a wasted line under every headline that ends
+  on a boundary. A blank line the author *wrote* still gets its row.
+
+`wrapping_produces_exactly_as_many_rows_as_it_measures` sat directly on top of
+the first of those and passed throughout, because every sample in it was ASCII
+and every width was 8 or more. Not a test that could not fail — a test that was
+never handed the input that would fail it, which is the same thing in practice.
+Both fixes were checked by breaking them on purpose.
+
 *Exit:* no arbitrary input to any of the five produces a panic, a hang, or
-unbounded memory.
+unbounded memory. `layout_edit` and `themes` remain.
 
 ### Phase 3 — soak
 

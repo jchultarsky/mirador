@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use crate::config::NotesConfig;
 use crate::frame::Binding;
@@ -460,14 +460,15 @@ impl NotesPanel {
         ])
         .split(area);
 
+        // Wrapped by `grid` rather than by ratatui, whose own wrapper panics on
+        // text mirador did not write — and a note is exactly that. See
+        // `grid::wrapped`.
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                note.title.clone(),
+            Paragraph::new(crate::grid::wrapped(&note.title, rows[0].width)).style(
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
-            ))
-            .wrap(Wrap { trim: false }),
+            ),
             rows[0],
         );
 
@@ -489,7 +490,8 @@ impl NotesPanel {
         let body = if note.body.trim().is_empty() {
             Paragraph::new(Span::styled("(no body)", Style::default().fg(theme.muted)))
         } else {
-            Paragraph::new(note.body.clone()).style(Style::default().fg(theme.text))
+            Paragraph::new(crate::grid::wrapped(&note.body, rows[2].width))
+                .style(Style::default().fg(theme.text))
         };
         // The reader wraps even though the editor does not: prose written at
         // one width has to be readable at another.
@@ -498,11 +500,7 @@ impl NotesPanel {
         // written as one paragraph — the normal way — reported a single line
         // and would not scroll at all however long it was.
         self.body_area = Some(rows[2]);
-        frame.render_widget(
-            body.wrap(Wrap { trim: false })
-                .scroll((self.body_scroll, 0)),
-            rows[2],
-        );
+        frame.render_widget(body.scroll((self.body_scroll, 0)), rows[2]);
     }
 
     /// The count line above the split, plus the active search if there is one.
@@ -1145,6 +1143,54 @@ mod tests {
                 KeyOutcome::Consumed,
                 "`{key}` is documented but the list ignores it"
             );
+        }
+    }
+
+    /// A note is prose somebody wrote, and prose contains emoji. Handing that
+    /// to ratatui's word wrapper crashes the dashboard — see `grid::wrapped`,
+    /// which is why this panel wraps its own title and body and renders a
+    /// `Paragraph` with no `Wrap`.
+    ///
+    /// This is the guard against putting `.wrap(…)` back. The grid has its own
+    /// test for the wrapping; this one exists because the mistake is made here.
+    #[test]
+    fn a_note_full_of_wide_glyphs_draws_at_every_width() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+
+        let (mut p, _g) = panel("wide-glyphs");
+        add_note(
+            &mut p,
+            "a\u{1F31E}b \u{4E2D}\u{6587}\u{6807}\u{9898}",
+            "\u{0301} \u{1F31E}\u{65E5}\u{65E5}\u{65E5}\u{1F31E}\u{1F31E}a\n\
+             prose with a \u{1F31E} in it and a \u{65E5}\u{672C}\u{8A9E} word",
+        );
+
+        // The height matters as much as the width, and that is not obvious: the
+        // fault is on a later row, so a one-row pane never reaches it. This
+        // test passed against the very bug it exists for until the panes were
+        // given room to wrap into.
+        for width in 1..24u16 {
+            for height in 1..40u16 {
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        p.render(
+                            frame,
+                            frame.area(),
+                            RenderContext {
+                                theme: &config.theme,
+                                gradients: &gradients,
+                                focused: true,
+                                watch: &crate::watch::WatchLog::default(),
+                            },
+                        );
+                    })
+                    .unwrap();
+            }
         }
     }
 

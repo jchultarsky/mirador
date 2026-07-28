@@ -66,71 +66,134 @@ pub fn char_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
 }
 
-/// Break `text` into lines no wider than `width` display cells.
+/// Break `text` into rows of at most `width` cells, handing each to `emit`.
 ///
-/// The companion to [`wrapped_height`], which counts the same rows without
-/// producing them. `wrap(t, w).len()` and `wrapped_height(t, w)` are held equal
-/// by a test — they were written from the same rules and would otherwise drift,
-/// which for a panel that sizes itself from one and draws with the other means
-/// content sitting outside the box it was measured for.
+/// **The single source of the wrapping rules.** [`wrap`] collects what this
+/// yields and [`wrapped_height`] counts it without building anything, so the
+/// two cannot drift. They used to be two transcriptions of the same rules held
+/// equal by a test, and they *had* drifted: `wrapped_height` measured an
+/// over-long word by subtracting `width` a row at a time, which assumes the
+/// overflow can be split at any cell. A double-width glyph cannot be split, so
+/// the two disagreed in both directions the moment a headline was not ASCII —
+/// `日本語` at width 3 wraps to three rows and measured two. A panel that sizes
+/// itself with one and draws with the other then puts content outside the box
+/// it was measured for. The test that was supposed to catch this only ever fed
+/// it ASCII.
 ///
-/// Measured in cells rather than characters, per the rule the whole module
-/// exists for: a headline with an em dash or an accent breaks in the wrong
-/// place otherwise.
-pub fn wrap(text: &str, width: usize) -> Vec<String> {
+/// Rows are emitted as slices of `text`, so nothing here allocates. Measured in
+/// cells rather than characters, per the rule the whole module exists for.
+fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
     if width == 0 {
-        return Vec::new();
+        return;
     }
 
-    let mut out = Vec::new();
+    let mut any = false;
     for line in text.lines() {
-        let mut current = String::new();
+        // Byte offsets into `line`: where the row being built starts, and how
+        // far the words consumed so far reach.
+        let mut start = 0usize;
+        let mut cursor = 0usize;
         let mut used = 0usize;
+        let mut emitted_here = false;
 
         for word in line.split_inclusive(' ') {
             let w = display_width(word);
             if used > 0 && used + w > width {
-                out.push(std::mem::take(&mut current));
+                emit(&line[start..cursor]);
+                (any, emitted_here) = (true, true);
+                start = cursor;
                 used = 0;
             }
-            current.push_str(word);
+            cursor += word.len();
             used += w;
 
-            // A single word longer than the line breaks inside itself, rather
+            // A single word longer than the row breaks inside itself, rather
             // than running off the edge.
             while used > width {
-                let mut keep: String = current
-                    .chars()
-                    .scan(0usize, |taken, c| {
-                        *taken += display_width(&c.to_string());
-                        (*taken <= width).then_some(c)
-                    })
-                    .collect();
-                // Always take at least one character. A glyph wider than the
-                // whole line — any CJK character or emoji in a one-cell column
-                // — otherwise fits nowhere, so nothing is taken, nothing is
-                // consumed, and this loops for ever. That is a hang, not a
-                // slow path: the dashboard freezes and has to be killed.
-                //
-                // The line then exceeds `width` by a cell, which is the honest
-                // outcome. A terminal cannot draw half a wide glyph either.
-                if keep.is_empty() {
-                    keep.extend(current.chars().next());
+                let mut cut = start;
+                let mut taken = 0usize;
+                for c in line[start..cursor].chars() {
+                    let cw = char_width(c);
+                    if taken + cw > width {
+                        break;
+                    }
+                    taken += cw;
+                    cut += c.len_utf8();
                 }
-                let rest = current[keep.len()..].to_string();
-                out.push(keep);
-                current = rest;
-                used = display_width(&current);
+                // Always take at least one character. A glyph wider than the
+                // whole row — any CJK character or emoji in a one-cell column —
+                // otherwise fits nowhere, so nothing is taken, nothing is
+                // consumed, and this loops for ever. That is a hang, not a slow
+                // path: the dashboard freezes and has to be killed.
+                //
+                // The row then exceeds `width` by a cell, which is the honest
+                // outcome. A terminal cannot draw half a wide glyph either.
+                if cut == start {
+                    match line[start..cursor].chars().next() {
+                        Some(c) => cut += c.len_utf8(),
+                        None => break,
+                    }
+                }
+                emit(&line[start..cut]);
+                (any, emitted_here) = (true, true);
+                start = cut;
+                used = display_width(&line[start..cursor]);
             }
         }
-        out.push(current);
+
+        // The remainder — but only if there is one. Emitting it unconditionally
+        // appended a blank row whenever the break above consumed the line
+        // exactly, which is what an over-long run of wide glyphs always does:
+        // `wrap("🌞🌞", 1)` came out as three rows, the last one empty. A
+        // genuinely empty source line still gets its row, hence `emitted_here`.
+        if start < cursor || !emitted_here {
+            emit(&line[start..cursor]);
+            any = true;
+        }
     }
-    // `wrapped_height` floors at one row, on the grounds that an empty line
-    // still occupies one. These two are held equal by a test, so this has to
-    // agree — and `"".lines()` yields nothing at all.
-    if out.is_empty() {
-        out.push(String::new());
+
+    // An empty string has no lines at all, and still occupies one row.
+    if !any {
+        emit("");
     }
+}
+
+/// Break `text` into lines no wider than `width` display cells.
+///
+/// The companion to [`wrapped_height`], which counts the same rows without
+/// producing them. Both are [`break_lines`] with a different consumer, so
+/// `wrap(t, w).len()` and `wrapped_height(t, w)` agree by construction rather
+/// than by a test that has to remember to try a wide glyph.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    break_lines(text, width, |line| out.push(line.to_string()));
+    out
+}
+
+/// `text` wrapped to `width` and rejoined, ready for a `Paragraph` that must
+/// **not** be given `Wrap`.
+///
+/// This exists because ratatui's own word wrapper panics on text mirador did
+/// not write. `Paragraph::new("a🌞b").wrap(…)` rendered two cells wide indexes
+/// past the end of the buffer and brings the whole dashboard down, and a
+/// leading combining mark — a grapheme with no base character — does the same
+/// at any width. Both are reachable from a note, a task's notes, or a fetch
+/// error: emoji in prose is ordinary, and the panic is a crash rather than a
+/// misdraw.
+///
+/// So the rule is that ratatui never wraps anything a user or a server wrote.
+/// Wrapping here first means its wrapper never runs, and the wrapping is the
+/// one in this module, which is measured in cells and tested against a corpus
+/// of wide glyphs and combining marks.
+pub fn wrapped(text: &str, width: u16) -> String {
+    let width = usize::from(width);
+    let mut out = String::with_capacity(text.len());
+    break_lines(text, width, |line| {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    });
     out
 }
 
@@ -142,35 +205,20 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 /// longer than the box, and then it is short by exactly the amount that
 /// matters.
 ///
-/// Matches `Paragraph::new(text).wrap(Wrap { trim: false })`, whose own
-/// `line_count` is private. An empty line still occupies a row.
+/// Counts the rows [`wrap`] would produce, without producing them — the whole
+/// point, since a scroll clamp runs against a note's entire body and must not
+/// allocate in proportion to it. An empty line still occupies a row.
+///
+/// This used to be documented as matching `Paragraph::wrap`, whose own
+/// `line_count` is private. It no longer needs to: nothing is handed to
+/// ratatui's wrapper any more (see [`wrapped`]), so the thing worth agreeing
+/// with is mirador's own wrapping, which is what gets drawn.
 pub fn wrapped_height(text: &str, width: u16) -> u16 {
     if width == 0 {
         return 0;
     }
-    let width = usize::from(width);
     let mut rows: usize = 0;
-
-    for line in text.lines() {
-        let mut used = 0usize;
-        let mut rows_here = 1usize;
-        for word in line.split_inclusive(' ') {
-            let w = display_width(word);
-            if used > 0 && used + w > width {
-                rows_here += 1;
-                used = w;
-            } else {
-                used += w;
-            }
-            // A single word longer than the line wraps within itself.
-            while used > width {
-                rows_here += 1;
-                used -= width;
-            }
-        }
-        rows += rows_here;
-    }
-
+    break_lines(text, usize::from(width), |_| rows += 1);
     u16::try_from(rows.max(1)).unwrap_or(u16::MAX)
 }
 
@@ -428,9 +476,19 @@ fn fit(text: &str, width: u16, align: Align) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::widgets::{Paragraph, Wrap};
 
     /// The two must agree: a panel sizes itself with one and draws with the
     /// other, so a disagreement puts content outside the box measured for it.
+    ///
+    /// They are one function with two consumers now, so this cannot fail by
+    /// drift any more — but it could once, and for a long time it did not
+    /// notice. Every sample was ASCII, and the bug was that `wrapped_height`
+    /// measured an over-long word by subtracting `width` a row at a time, which
+    /// is only right when every glyph is one cell. The wide glyphs and the
+    /// widths below 8 are the part of this test that ever had a chance.
     #[test]
     fn wrapping_produces_exactly_as_many_rows_as_it_measures() {
         let samples = [
@@ -440,9 +498,19 @@ mod tests {
             "a supercalifragilisticexpialidociousandthensomeword in a line",
             "Europa Clipper returns its first images — and they are extraordinary",
             "line one\nline two is a good deal longer than the first one is",
+            // A headline is somebody else's text, and it is not always Latin.
+            "\u{4E2D}\u{6587}\u{6807}\u{9898}",
+            "\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{30CB}\u{30E5}\u{30FC}\u{30B9}\u{3067}\u{3059}",
+            "a\u{1F31E}b\u{1F31E}c",
+            "\u{1F31E}\u{1F31E}\u{1F31E}\u{1F31E}",
+            "mixed \u{4E2D}\u{6587} and english \u{1F31E} together",
+            // A combining mark with no base character, which is a grapheme all
+            // the same and measures zero cells.
+            "\u{0301}\u{0301}leading marks",
+            "blank\n\nline in the middle",
         ];
         for text in samples {
-            for width in 8..40u16 {
+            for width in 1..40u16 {
                 assert_eq!(
                     u16::try_from(wrap(text, usize::from(width)).len()).unwrap(),
                     wrapped_height(text, width),
@@ -450,6 +518,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// An over-long run of wide glyphs consumes the row exactly, and the
+    /// remainder is then empty. Emitting it anyway appended a blank row that
+    /// nothing asked for — `wrap("🌞🌞", 1)` came out as three rows, the last
+    /// one empty, which in the news panel is a wasted line at the bottom of
+    /// every headline that ends on a boundary.
+    #[test]
+    fn a_row_consumed_exactly_leaves_no_blank_behind() {
+        assert_eq!(wrap("\u{1F31E}\u{1F31E}", 1), ["\u{1F31E}", "\u{1F31E}"]);
+        assert_eq!(wrap("abcdef", 3), ["abc", "def"]);
+        assert_eq!(wrap("\u{65E5}\u{672C}", 2), ["\u{65E5}", "\u{672C}"]);
+
+        // But a blank line the author actually wrote still gets its row.
+        assert_eq!(wrap("a\n\nb", 4), ["a", "", "b"]);
+        assert_eq!(wrap("", 4), [""]);
+        assert_eq!(wrap("\n", 4), [""]);
     }
 
     /// A glyph wider than the whole line fits nowhere, so "take as many
@@ -476,6 +561,99 @@ mod tests {
                 assert_eq!(joined, text, "at {width}");
             }
         }
+    }
+
+    /// The corpus that crashes ratatui: narrow and wide glyphs at every offset,
+    /// spaces, newlines, and a combining mark with no base character.
+    ///
+    /// Deterministic and hand-rolled for the same reason as `ical`'s — what
+    /// matters is that every fragment is in it because of something the
+    /// wrapper does, not that the bytes are random.
+    fn crashing_corpus() -> Vec<String> {
+        let alphabet = ["a", "\u{1F31E}", "\u{65E5}", " ", "\n", "\u{0301}"];
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        (0..600)
+            .map(|_| {
+                let len = (next() % 9) as usize + 1;
+                (0..len)
+                    .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn renders_without_panicking(paragraph: impl Fn() -> Paragraph<'static>, width: u16) -> bool {
+        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            terminal
+                .draw(|frame| frame.render_widget(paragraph(), frame.area()))
+                .unwrap();
+        }))
+        .is_ok()
+    }
+
+    /// The reason [`wrapped`] exists, pinned rather than described.
+    ///
+    /// ratatui's own word wrapper indexes past the end of the buffer and
+    /// panics, which for a dashboard is a crash rather than a misdraw. Two ways
+    /// in: a double-width glyph inside a word too long for a two-cell area, and
+    /// a leading combining mark, which throws the accounting off at any width.
+    /// Neither needs unusual input — emoji in a note is ordinary.
+    ///
+    /// **If this test starts failing, ratatui has fixed it.** That is good
+    /// news, and the thing to do is check whether `wrapped` can go, not to
+    /// delete the assertion. The bound lives in a dependency and would leave
+    /// with it.
+    #[test]
+    fn ratatuis_own_wrapper_is_why_this_module_wraps_first() {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let straddles_a_two_cell_row = renders_without_panicking(
+            || Paragraph::new("a\u{1F31E}b").wrap(Wrap { trim: false }),
+            2,
+        );
+        let leading_combining_mark = renders_without_panicking(
+            || {
+                Paragraph::new("\u{0301} \u{1F31E}\u{65E5}\u{65E5}\u{65E5}\u{1F31E}\u{1F31E}a")
+                    .wrap(Wrap { trim: false })
+            },
+            8,
+        );
+        std::panic::set_hook(hook);
+
+        assert!(
+            !straddles_a_two_cell_row && !leading_combining_mark,
+            "ratatui no longer panics here (two-cell row: {}, combining mark: {}). \
+             Check whether `grid::wrapped` is still needed before removing this.",
+            !straddles_a_two_cell_row,
+            !leading_combining_mark
+        );
+    }
+
+    /// And the fix: the same corpus, wrapped here and handed to a `Paragraph`
+    /// with no `Wrap`, draws at every width without bringing the dashboard
+    /// down.
+    #[test]
+    fn pre_wrapping_survives_what_crashes_ratatui() {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let mut crashed = Vec::new();
+        for text in crashing_corpus() {
+            for width in 1..12u16 {
+                let wrapped_text = wrapped(&text, width);
+                if !renders_without_panicking(|| Paragraph::new(wrapped_text.clone()), width) {
+                    crashed.push(format!("{text:?} at {width}"));
+                }
+            }
+        }
+        std::panic::set_hook(hook);
+        assert!(crashed.is_empty(), "still panics: {crashed:?}");
     }
 
     #[test]

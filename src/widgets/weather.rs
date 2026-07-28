@@ -19,7 +19,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use serde::Deserialize;
 
 use crate::config::WeatherConfig;
@@ -890,25 +890,31 @@ impl Panel for WeatherPanel {
         let Some(reading) = state.data.take() else {
             // Nothing has ever landed. Only here is the panel genuinely empty.
             let lines = match &state.error {
-                Some(message) => vec![
-                    Line::from(Span::styled(
+                Some(message) => {
+                    let muted = Style::default().fg(theme.muted);
+                    let mut lines = vec![Line::from(Span::styled(
                         "Weather unavailable",
                         Style::default()
                             .fg(theme.error)
                             .add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(Span::styled(
-                        message.clone(),
-                        Style::default().fg(theme.muted),
-                    )),
-                    Line::from(Span::styled("r to retry", Style::default().fg(theme.muted))),
-                ],
+                    ))];
+                    // Wrapped here rather than by ratatui: the message comes
+                    // from the network stack, and ratatui's own wrapper panics
+                    // on text mirador did not write. See `grid::wrapped`.
+                    lines.extend(
+                        crate::grid::wrap(message, usize::from(area.width))
+                            .into_iter()
+                            .map(|row| Line::from(Span::styled(row, muted))),
+                    );
+                    lines.push(Line::from(Span::styled("r to retry", muted)));
+                    lines
+                }
                 None => vec![Line::from(Span::styled(
                     "Fetching weather\u{2026}",
                     Style::default().fg(theme.muted),
                 ))],
             };
-            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+            frame.render_widget(Paragraph::new(lines), area);
             return;
         };
 

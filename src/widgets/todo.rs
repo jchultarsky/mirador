@@ -827,14 +827,17 @@ impl TodoPanel {
         }
 
         // Hint or validation error.
-        let message = match &form.error {
-            Some(err) => Span::styled(err.clone(), Style::default().fg(theme.error)),
-            None => Span::styled(
-                hint_for(form.field).to_string(),
-                Style::default().fg(theme.muted),
-            ),
+        // Wrapped by `grid` rather than by ratatui — a save error carries text
+        // from the operating system, and ratatui's wrapper panics on text
+        // mirador did not write. See `grid::wrapped`.
+        let (message, style) = match &form.error {
+            Some(err) => (err.as_str(), Style::default().fg(theme.error)),
+            None => (hint_for(form.field), Style::default().fg(theme.muted)),
         };
-        frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: true }), rows[6]);
+        frame.render_widget(
+            Paragraph::new(crate::grid::wrapped(message, rows[6].width)).style(style),
+            rows[6],
+        );
 
         frame.render_widget(
             Paragraph::new(Span::styled(
@@ -1111,8 +1114,8 @@ impl Panel for TodoPanel {
                 .and_then(|t| t.notes.clone())
         {
             frame.render_widget(
-                Paragraph::new(Span::styled(notes, Style::default().fg(theme.muted)))
-                    .wrap(Wrap { trim: true }),
+                Paragraph::new(crate::grid::wrapped(&notes, rows[3].width))
+                    .style(Style::default().fg(theme.muted)),
                 rows[3],
             );
         }
