@@ -18,12 +18,22 @@ use serde::{Deserialize, Deserializer};
 
 use crate::chart::Gradient;
 
+/// The most of an unusable value worth quoting back.
+///
+/// A colour is at most a couple of dozen characters, so anything past this is
+/// not a typo to point at. The message otherwise embeds whatever was in the
+/// file: a two-megabyte string produced a two-megabyte error, built — and then
+/// discarded — on **every cursor move in the `t` picker**, which re-resolves
+/// from disk to preview. Same shape as the unbounded headline in `feed`.
+const MAX_QUOTED: usize = 40;
+
 /// Parse a `Color` from its string form, reporting a useful error on failure.
 fn parse_color<E: serde::de::Error>(raw: &str) -> Result<Color, E> {
     raw.parse::<Color>().map_err(|_| {
         serde::de::Error::custom(format!(
-            "`{raw}` is not a colour; use a name (`red`, `light-blue`), \
-             a hex string (`#ff8800`), a 256-colour index (`12`), or `reset`"
+            "`{}` is not a colour; use a name (`red`, `light-blue`), \
+             a hex string (`#ff8800`), a 256-colour index (`12`), or `reset`",
+            crate::grid::truncate(raw, MAX_QUOTED)
         ))
     })
 }

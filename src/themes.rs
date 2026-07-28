@@ -82,6 +82,21 @@ const BUNDLED: &[(&str, &str)] = &[
 /// Cycles are caught by name, so this only bounds the honest-but-silly case.
 const MAX_DEPTH: usize = 16;
 
+/// The largest theme file mirador will read.
+///
+/// The largest bundled theme is 1,788 bytes, so this is more than a hundred
+/// times the biggest real one — the point is to have a bound at all, not to
+/// have a tight one.
+///
+/// It matters more than the size of a theme suggests, because **the `t` picker
+/// re-resolves from disk on every cursor move**. That is what makes live preview
+/// work, and it puts the cost of reading a theme on an arrow key: measured, an
+/// 8MB file took 233ms to resolve, which is a visibly stuck picker rather than
+/// the ~30µs the bundled ones cost. `inherits` then multiplies it by up to
+/// [`MAX_DEPTH`], and the depth check happens *after* each file is read, so a
+/// chain of large files is read in full before being refused.
+const MAX_THEME_BYTES: u64 = 256 * 1024;
+
 /// The names that ship, for error messages.
 pub fn bundled_names() -> Vec<&'static str> {
     BUNDLED.iter().map(|(name, _)| *name).collect()
@@ -185,8 +200,7 @@ fn read(name: &str, themes_dir: Option<&Path>) -> Result<toml::Table> {
     if let Some(path) = themes_dir.map(|dir| dir.join(format!("{name}.toml")))
         && path.exists()
     {
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading theme {}", path.display()))?;
+        let raw = read_bounded(&path)?;
         return toml::from_str(&raw).with_context(|| format!("parsing theme {}", path.display()));
     }
 
@@ -205,6 +219,34 @@ fn read(name: &str, themes_dir: Option<&Path>) -> Result<toml::Table> {
          `{name}.toml` in {where_to_put_it}.",
         known.join(", ")
     )
+}
+
+/// Read a theme file, refusing one larger than [`MAX_THEME_BYTES`].
+///
+/// Bounded with `take` rather than by checking the length first, so the refusal
+/// costs one buffer of the limit rather than a copy of the file: asking the
+/// filesystem how big something is and then trusting the answer while reading it
+/// is two different facts, and only one of them bounds the allocation.
+fn read_bounded(path: &Path) -> Result<String> {
+    use std::io::Read;
+
+    let file =
+        std::fs::File::open(path).with_context(|| format!("reading theme {}", path.display()))?;
+    let mut raw = String::new();
+    file.take(MAX_THEME_BYTES + 1)
+        .read_to_string(&mut raw)
+        .with_context(|| format!("reading theme {}", path.display()))?;
+
+    if raw.len() as u64 > MAX_THEME_BYTES {
+        bail!(
+            "theme {} is larger than {}KB, which is far past anything a theme \
+             needs — the largest one mirador ships is under 2KB. Check it is \
+             the file you meant.",
+            path.display(),
+            MAX_THEME_BYTES / 1024
+        );
+    }
+    Ok(raw)
 }
 
 /// Catch colour keys that have fallen inside `[palette]`.
@@ -293,6 +335,60 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A theme file is read on **every cursor move in the `t` picker**, which
+    /// re-resolves from disk to preview. Before the cap an 8MB file took 233ms
+    /// to resolve against the ~30µs the bundled ones cost, which is a picker
+    /// that appears to have hung; `inherits` then multiplies it by up to
+    /// `MAX_DEPTH`, and the depth check runs *after* each file is read, so a
+    /// chain of large files is read in full before being refused.
+    #[test]
+    fn a_theme_file_far_larger_than_any_real_one_is_refused() {
+        let (dir, _guard) = themes_dir("oversized");
+        let mut text = String::from("text = \"reset\"\n");
+        while text.len() as u64 <= MAX_THEME_BYTES {
+            text.push_str("# padding padding padding padding padding padding\n");
+        }
+        std::fs::write(dir.join("oversized.toml"), &text).unwrap();
+
+        let err = resolve("oversized", Some(&dir)).expect_err("an oversized theme is refused");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("larger than"),
+            "say what is wrong: `{message}`"
+        );
+
+        // And the bound is not so tight that an ordinary theme trips it: every
+        // bundled theme is orders of magnitude below it.
+        for (name, raw) in BUNDLED {
+            assert!(
+                raw.len() as u64 <= MAX_THEME_BYTES / 8,
+                "bundled theme `{name}` is {} bytes, close enough to the cap to \
+                 make it a real risk",
+                raw.len()
+            );
+        }
+    }
+
+    /// The error quoted whatever was in the file, so a two-megabyte value
+    /// produced a two-megabyte message — built and discarded on every cursor
+    /// move in the picker. Same shape as the unbounded headline in `feed`.
+    #[test]
+    fn an_unusable_value_is_not_quoted_back_in_full() {
+        let (dir, _guard) = themes_dir("longvalue");
+        let huge = "z".repeat(100_000);
+        std::fs::write(dir.join("longvalue.toml"), format!("accent = \"{huge}\"\n")).unwrap();
+
+        let err = resolve("longvalue", Some(&dir)).expect_err("not a colour");
+        let message = format!("{err:#}");
+        assert!(
+            message.len() < 1_000,
+            "the message is {} bytes long",
+            message.len()
+        );
+        // Still useful: it names the key and says what a colour looks like.
+        assert!(message.contains("is not a colour"), "`{message}`");
     }
 
     fn themes_dir(name: &str) -> (PathBuf, TempDir) {
