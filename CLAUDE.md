@@ -1290,16 +1290,17 @@ and had to be added back was the one that did not.
   255) and its own prerelease detection from the semver hyphen, which is why
   the hand-written versions of both were dropped when it took the file over.
 
-- **Windows runs**, confirmed by the owner on 25 July 2026 — so all three
-  shipped targets have now been started, not merely built. Treat it as the
-  least-travelled of the three rather than as unknown: macOS and Linux are used
-  daily and Windows has been checked once.
+- **Windows runs**, confirmed by the owner on 25 July 2026 and again on
+  28 July — so all three shipped targets have been started, not merely built.
+  Treat it as the least-travelled of the three rather than as unknown: macOS and
+  Linux are used daily and Windows has been checked twice.
 
-  That run also came through the **PowerShell installer** (`irm … | iex`) in
-  the default Windows terminal, which is the first real-world exercise of that
-  path — everything else about the installers had only been checked from macOS.
-  `mirador-update` is installed alongside by the same installer but has not been
-  run on Windows; the macOS one has.
+  Both runs came through the **PowerShell installer** (`irm … | iex`) in the
+  default Windows terminal, which is the only real-world exercise of that path —
+  everything else about the installers has only been checked from macOS. The
+  second run also exercised **`mirador-update` on Windows**, which until then had
+  been installed alongside by the same installer and never run there. Every
+  shipped binary on every shipped target has now been executed at least once.
 
   `aarch64-pc-windows-msvc` is deliberately absent because `ring`, reached
   through `ureq`'s TLS, does not build for it. musl is absent for the same
