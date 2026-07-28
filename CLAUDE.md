@@ -970,8 +970,54 @@ and every width was 8 or more. Not a test that could not fail — a test that wa
 never handed the input that would fail it, which is the same thing in practice.
 Both fixes were checked by breaking them on purpose.
 
+**`layout_edit`: done.** Two findings, and the pass is mostly a lesson about
+which *axis* a sweep varies.
+
+Phase 1's `no_mutation_of_the_shipped_config_produces_a_wrong_file` runs
+eighty-eight mutations — of the **desired layout**, against one fixed piece of
+text. The text is the half a person edits by hand, and it was never varied at
+all. That is the `ical` shape exactly: tested at scale on one axis, never on the
+alphabet or the shape of the other. `no_mutation_of_the_config_text_produces_a_wrong_file`
+is the missing half — CRLF, tabs, no spaces around `=`, CJK and emoji and
+combining marks and RTL text in the comments, quotes inside comments, numbers at
+the edges of their type. Its coverage is asserted *exactly*, because three of
+the mutations are invalid TOML on purpose and a sweep that quietly stopped
+parsing its own fixtures would pass while testing nothing.
+
+**A widget named twice silently destroyed a comment.** Entries are looked up by
+widget name, so a name used twice has no entry that is unambiguously its own:
+rebuilding a row wrote one of the two entries for *both* panels, so the
+surviving comment captioned a panel it did not describe and the other was gone.
+The layout came out correct, which is why the round-trip check passed it — **a
+shape comparison cannot see a lost comment**, and comments surviving is the
+entire reason this module edits text instead of reserialising. Neither the
+picker (a toggle) nor arrange mode can produce a duplicate, so the file is
+hand-written; refusing is what this module already does when it cannot edit
+confidently.
+
+The refusal is **as narrow as the problem**, and that is the part worth keeping.
+Only a rebuild reuses an entry, so the check sits in `panel_lines` rather than at
+the top of `apply`: a plain `Ctrl+arrow` resize rewrites digits on the lines they
+are already on, touches no entry, and still works in a file like this. Both
+directions are pinned — remove the guard and
+`a_widget_named_twice_is_refused_rather_than_losing_a_comment` fails; widen it to
+the top of `apply` and `a_resize_still_works_even_where_a_rebuild_would_not`
+fails. Checked by doing both.
+
+**`after_key` spun for ever on an empty key.** `find("")` matches at the cursor
+and consumes nothing. Unreachable — all four callers pass literals — and guarded
+anyway, for the same reason as `samples::push_bounded` at capacity zero: one
+line, and a hang is the one failure a dashboard cannot recover from.
+
+Non-findings, recorded because they were checked rather than assumed. Edits are
+sorted by anchor and applied in reverse, and an insertion anchored where a
+deleted row's span begins looked like it could collide; it does not, and the
+rows come out in order. And every byte-offset slice in the module — `strip_comment`,
+`quoted_value`, `after_key`, `set_number` — indexes at a character boundary by
+construction, so the multi-byte panic that `ical` had cannot happen here.
+
 *Exit:* no arbitrary input to any of the five produces a panic, a hang, or
-unbounded memory. `layout_edit` and `themes` remain.
+unbounded memory. `themes` is the last one.
 
 ### Phase 3 — soak
 
