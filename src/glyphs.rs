@@ -142,12 +142,24 @@ pub fn width_of(text: &str, scale: u16) -> u16 {
         .saturating_add(count.saturating_sub(1).saturating_mul(GAP))
 }
 
-/// The largest scale at which `text` fits in `available` columns, or `None` if
-/// even scale 1 will not fit.
-pub fn fitting_scale(text: &str, available: u16, max_scale: u16) -> Option<u16> {
+/// The largest scale at which `text` fits in `columns` by `rows`, or `None` if
+/// even scale 1 will not.
+///
+/// **Both dimensions are searched together, and that is the whole point.** This
+/// took only a width, and its two callers then filtered the answer by height —
+/// which rejects rather than retries. A shorter string fits a *bigger* scale,
+/// and every scale is `CELL_H` rows taller than the last, so dropping a
+/// character could take the text from "fits at scale 2" to "scale 3 is wide
+/// enough but too tall" and fall all the way back to plain text.
+///
+/// That was a real, reported bug: pressing `s` on the clock to hide the seconds
+/// made the time *smaller*, because `HH:MM` earned scale 3 where `HH:MM:SS` had
+/// been held to scale 2, and scale 3 did not fit the rows. Stepping down one
+/// scale is the obvious behaviour and what the callers always meant.
+pub fn fitting_scale(text: &str, columns: u16, rows: u16, max_scale: u16) -> Option<u16> {
     (1..=max_scale.max(1))
         .rev()
-        .find(|scale| width_of(text, *scale) <= available)
+        .find(|scale| width_of(text, *scale) <= columns && CELL_H.saturating_mul(*scale) <= rows)
 }
 
 /// Render text in the utility face: uppercase, normally spaced.
@@ -396,21 +408,63 @@ mod tests {
         assert!(!BigText::new("x", 1).rows.join("").contains('█'));
     }
 
+    /// `TALL` is more rows than any scale here needs, so these cases are about
+    /// width alone.
+    const TALL: u16 = u16::MAX;
+
     #[test]
     fn fitting_scale_picks_the_largest_that_fits() {
         let text = "12:34";
         let w2 = width_of(text, 2);
-        assert_eq!(fitting_scale(text, w2, 4), Some(2));
-        assert_eq!(fitting_scale(text, w2 - 1, 4), Some(1));
-        assert_eq!(fitting_scale(text, 0, 4), None);
+        assert_eq!(fitting_scale(text, w2, TALL, 4), Some(2));
+        assert_eq!(fitting_scale(text, w2 - 1, TALL, 4), Some(1));
+        assert_eq!(fitting_scale(text, 0, TALL, 4), None);
         // Never exceeds the requested ceiling.
-        assert_eq!(fitting_scale(text, 10_000, 3), Some(3));
+        assert_eq!(fitting_scale(text, 10_000, TALL, 3), Some(3));
+    }
+
+    /// The height half, which did not exist and is the reported bug.
+    ///
+    /// A caller that maximised on width and then *filtered* by height rejected
+    /// where it should have stepped down — and since a shorter string earns a
+    /// bigger scale, hiding the seconds on the clock made the time smaller
+    /// instead of larger.
+    #[test]
+    fn fitting_scale_steps_down_rather_than_giving_up_when_it_is_too_tall() {
+        let text = "12:34";
+        // Wide enough for scale 3, tall enough only for scale 2.
+        let wide = width_of(text, 3);
+        assert_eq!(fitting_scale(text, wide, TALL, 3), Some(3));
+        assert_eq!(fitting_scale(text, wide, CELL_H * 3, 3), Some(3));
+        assert_eq!(
+            fitting_scale(text, wide, CELL_H * 3 - 1, 3),
+            Some(2),
+            "one row short of scale 3 means scale 2, not plain text"
+        );
+        assert_eq!(fitting_scale(text, wide, CELL_H, 3), Some(1));
+        assert_eq!(fitting_scale(text, wide, CELL_H - 1, 3), None);
+
+        // The property the bug violated: a shorter string never fits worse than
+        // a longer one in the same box.
+        for columns in 0..140u16 {
+            for rows in 0..40u16 {
+                let long = fitting_scale("12:34:56", columns, rows, 3);
+                let short = fitting_scale("12:34", columns, rows, 3);
+                if let Some(long) = long {
+                    assert!(
+                        short.is_some_and(|short| short >= long),
+                        "`12:34:56` fits at {long} in {columns}x{rows} but `12:34` \
+                         gives {short:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
     fn fitting_scale_result_always_fits() {
         for available in 0..120u16 {
-            if let Some(scale) = fitting_scale("12:34", available, 5) {
+            if let Some(scale) = fitting_scale("12:34", available, TALL, 5) {
                 assert!(width_of("12:34", scale) <= available);
             }
         }

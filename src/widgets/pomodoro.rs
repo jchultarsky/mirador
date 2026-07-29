@@ -546,8 +546,12 @@ impl Panel for PomodoroPanel {
 /// numerals, so those are never what gets pushed off the bottom — the numerals
 /// give way first, being the part with room to shrink.
 fn clock_scale(time: &str, width: u16, budget: u16) -> Option<u16> {
-    glyphs::fitting_scale(time, width, MAX_SCALE)
-        .filter(|s| BigText::new(time, *s).height <= budget.max(1))
+    // Both dimensions at once. Filtering a width-only answer by height rejects
+    // where it should step down, and this panel's text changes length as the
+    // timer runs — `25:00` down to `9:59` earns a bigger scale, which could then
+    // be too tall and drop the whole thing to plain text mid-session. Same
+    // defect as the clock's, found with it.
+    glyphs::fitting_scale(time, width, budget.max(1), MAX_SCALE)
 }
 
 /// Rows the time will occupy at `scale`. One, when it falls back to text.

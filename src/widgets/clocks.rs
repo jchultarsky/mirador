@@ -400,10 +400,12 @@ impl Panel for ClocksPanel {
         };
         let clock_budget = area.height.saturating_sub(date_rows + zone_rows).max(1);
 
-        let fits = |text: &str| {
-            glyphs::fitting_scale(text, area.width, MAX_CLOCK_SCALE)
-                .filter(|scale| BigText::new(text, *scale).height <= clock_budget)
-        };
+        // Width and height together: filtering a width-only answer by height
+        // rejects instead of stepping down a scale, and a *shorter* string earns
+        // a bigger one. That is how hiding the seconds used to make the clock
+        // smaller rather than larger.
+        let fits =
+            |text: &str| glyphs::fitting_scale(text, area.width, clock_budget, MAX_CLOCK_SCALE);
 
         let (time_text, small_seconds) = match (self.show_seconds, fits(&full)) {
             (true, Some(_)) => (full.clone(), None),
@@ -585,6 +587,77 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Reported as #103: pressing `s` to hide the seconds made the time render
+    /// in small text instead of block numerals.
+    ///
+    /// The cause was in `glyphs::fitting_scale`, which took only a width; the
+    /// caller then *filtered* that answer by height, which rejects instead of
+    /// stepping down a scale. `HH:MM` is narrower than `HH:MM:SS`, so it earned
+    /// a bigger scale — and a bigger scale is `CELL_H` rows taller, so at some
+    /// panel sizes it no longer fit the rows and fell all the way back to plain
+    /// text. Hiding a character made the clock smaller.
+    ///
+    /// Swept rather than pinned at one size, because the original was found at
+    /// 68x11 and nothing would have led anyone to try that size on purpose.
+    #[test]
+    fn hiding_the_seconds_never_shrinks_the_clock() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+
+        let draws_block_numerals = |panel: &mut ClocksPanel, w: u16, h: u16| -> bool {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|frame| {
+                    panel.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..h).any(|y| {
+                (0..w).any(|x| {
+                    buffer
+                        .cell((x, y))
+                        .is_some_and(|cell| cell.symbol() == "\u{2588}")
+                })
+            })
+        };
+
+        let mut shrank = Vec::new();
+        for width in 20..72u16 {
+            for height in 6..24u16 {
+                let (mut with, _a) = panel_from_named("secs-on", ClocksConfig::default());
+                with.show_seconds = true;
+                let (mut without, _b) = panel_from_named("secs-off", ClocksConfig::default());
+                without.show_seconds = false;
+
+                if draws_block_numerals(&mut with, width, height)
+                    && !draws_block_numerals(&mut without, width, height)
+                {
+                    shrank.push((width, height));
+                }
+            }
+        }
+
+        assert!(
+            shrank.is_empty(),
+            "at {} panel sizes, hiding the seconds dropped the clock to plain \
+             text; first few: {:?}",
+            shrank.len(),
+            &shrank[..shrank.len().min(6)]
+        );
     }
 
     /// A panel seeded from `config`, with a zone file of its very own.
