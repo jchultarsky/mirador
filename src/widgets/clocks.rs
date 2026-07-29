@@ -636,7 +636,7 @@ mod tests {
         };
 
         let mut shrank = Vec::new();
-        for width in 20..72u16 {
+        for width in 20..104u16 {
             for height in 6..24u16 {
                 let (mut with, _a) = panel_from_named("secs-on", ClocksConfig::default());
                 with.show_seconds = true;
