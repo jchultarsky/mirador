@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-07-29
+
+A hotfix for one reported bug, and a second one of the same shape found beside
+it.
+
+### Fixed
+
+- **Hiding the seconds on the clock made the time render in small text.**
+  Pressing `s` to drop the seconds should make the numerals larger if anything;
+  instead the clock could fall back to plain text entirely.
+
+  The scale search took only a width, and the callers filtered its answer by
+  height afterwards — which rejects rather than stepping down a size. Because a
+  shorter string fits a *bigger* scale, and each scale is five rows taller than
+  the last, `HH:MM` could earn a scale that was wide enough but too tall, and
+  lose its block numerals altogether. Reproduced at ordinary sizes: any terminal
+  around 74-110 columns by 15-17 rows with the clock panel given the width.
+  **Present since 0.1.0.** Reported by @abusch in
+  [#103](https://github.com/jchultarsky/mirador/issues/103).
+
+- **The pomodoro timer could lose its numerals partway through a session**, for
+  the same reason and in the same helper. A focus period over 99 minutes renders
+  `180:00` and counts down to `99:59`, and the shorter string could earn a scale
+  too tall to draw. Found while fixing the clock rather than reported.
+
 ## [0.16.0] - 2026-07-28
 
 Four adversarial review passes, completing the first phase of the work towards
@@ -1073,7 +1098,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/jchultarsky/mirador/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/jchultarsky/mirador/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/jchultarsky/mirador/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/jchultarsky/mirador/compare/v0.14.0...v0.14.1
