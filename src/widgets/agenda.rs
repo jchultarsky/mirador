@@ -35,6 +35,13 @@ use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::ical;
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 
+/// The status shown while a reload is in flight.
+///
+/// Named rather than repeated because `tick` has to recognise it: a reload that
+/// has landed must take its own message down, and only its own. A path put up
+/// by `o` has to survive the next background read.
+const RELOADING: &str = "reloading…";
+
 const BINDINGS: &[Binding] = &[
     Binding::primary("f", "file"),
     Binding::primary("r", "reload"),
@@ -218,7 +225,7 @@ impl AgendaPanel {
                 }
                 self.set_path(path);
                 self.asking = None;
-                self.status = Some("reloading…".into());
+                self.status = Some(RELOADING.into());
             }
         }
     }
@@ -525,6 +532,17 @@ impl Panel for AgendaPanel {
             // One copy, at the one moment the data can have changed.
             self.shown = self.snapshot();
             self.note_new_entries();
+            // The generation only moves when a read lands, so this is where a
+            // reload finishes. Taking the message down here rather than on the
+            // next keypress matters because a dashboard is read without being
+            // touched: left up, an idle panel claims to be mid-operation, which
+            // reads as a hang rather than as a stale label.
+            //
+            // Only its own message. A path put up by `o` has to survive the
+            // next background read.
+            if self.status.as_deref() == Some(RELOADING) {
+                self.status = None;
+            }
         }
         moved
     }
@@ -606,7 +624,7 @@ impl Panel for AgendaPanel {
             }
             KeyCode::Char('r') => {
                 self.ask_for_reload();
-                self.status = Some("reloading…".into());
+                self.status = Some(RELOADING.into());
             }
             KeyCode::Char('o') => {
                 self.status = Some(current_path(&self.path).display().to_string());
@@ -1068,5 +1086,53 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         assert!(wide.contains("meeting room"), "got `{wide}`");
+    }
+
+    /// A panel pointed at nothing. The reader thread finds no file and says so,
+    /// which is all these two need — they are about the status line, not the
+    /// calendar.
+    fn idle_panel() -> AgendaPanel {
+        AgendaPanel::new(&AgendaConfig::default(), PathBuf::from("/nonexistent.ics"))
+    }
+
+    /// Pretend a read has just landed, the way the reader thread does.
+    fn land_a_read(panel: &mut AgendaPanel) {
+        panel
+            .generation
+            .store(panel.seen + 1, std::sync::atomic::Ordering::Release);
+        panel.tick();
+    }
+
+    /// The bug: `reloading…` was set when the reload was *asked for* and cleared
+    /// only by the next keypress, so a panel nobody touched went on claiming to
+    /// be mid-operation after the reload had landed. Measured at 83 seconds in a
+    /// real terminal, with the reloaded events already on screen above it.
+    ///
+    /// This is the whole point of a dashboard you leave open: the reader is not
+    /// pressing keys, so "cleared on the next keypress" is "never".
+    #[test]
+    fn a_landed_reload_takes_its_own_message_down() {
+        let mut panel = idle_panel();
+        panel.status = Some(RELOADING.into());
+        land_a_read(&mut panel);
+        assert_eq!(
+            panel.status, None,
+            "a reload that has landed must stop saying it is reloading"
+        );
+    }
+
+    /// The other half, and the reason `tick` matches on the message rather than
+    /// clearing whatever is there: `o` puts the calendar's path up, and a
+    /// background re-read must not wipe it out from under the reader.
+    #[test]
+    fn a_path_shown_by_o_survives_a_background_read() {
+        let mut panel = idle_panel();
+        panel.status = Some("/home/someone/calendar.ics".into());
+        land_a_read(&mut panel);
+        assert_eq!(
+            panel.status.as_deref(),
+            Some("/home/someone/calendar.ics"),
+            "a read landing must not clear a status it did not put up"
+        );
     }
 }

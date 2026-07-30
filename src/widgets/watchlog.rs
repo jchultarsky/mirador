@@ -40,18 +40,28 @@ pub struct WatchLogPanel {
     scroll: ListState,
     /// Entries drawn last frame, so `tick` can answer honestly.
     drawn: usize,
-    /// Whether a calendar is configured, so the empty panel can say that one
-    /// of the two things it watches is not switched on.
-    watching_calendar: bool,
 }
 
 impl WatchLogPanel {
-    pub fn new(config: &crate::config::Config) -> Self {
+    /// Takes no configuration, and that is the point.
+    ///
+    /// It used to take `&Config`, for one `bool` recording whether the agenda
+    /// had a file. Reading another panel's settings is the coupling this design
+    /// avoids: the value was true or false for ever from the moment it was
+    /// read, so a calendar set later through `f` was never noticed. Panels stay
+    /// independent, so the log describes what it watches rather than reporting
+    /// on a panel it cannot see.
+    pub fn new() -> Self {
         Self {
             scroll: ListState::default(),
             drawn: 0,
-            watching_calendar: config.agenda.file.is_some(),
         }
+    }
+}
+
+impl Default for WatchLogPanel {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -175,18 +185,27 @@ impl Panel for WatchLogPanel {
                  a task falling overdue, an entry appearing in your calendar.",
                 theme.muted,
             );
-            if !self.watching_calendar {
-                lines.push(Line::from(""));
-                // Milder than it was, and correctly so: the day always turns,
-                // so the panel is no longer inert without a calendar — it is
-                // merely watching one thing fewer.
-                explain(
-                    &mut lines,
-                    "No calendar set, so that last one cannot happen. Press f \
-                     on the agenda panel to add one.",
-                    theme.muted,
-                );
-            }
+            lines.push(Line::from(""));
+            // Says where calendar entries come from, and asserts nothing about
+            // whether you have one. The previous wording — "No calendar set, so
+            // that last one cannot happen. Press f on the agenda panel to add
+            // one." — was decided once at construction, so setting a calendar
+            // with `f` left this panel telling you to set the calendar you had
+            // just set, until a restart.
+            //
+            // Not fixed by re-deriving the flag, because a *correct* version of
+            // that sentence is still the wrong shape. A hint aimed at someone
+            // who has not set a calendar reaches someone who decided against one
+            // just as often, and the dashboard cannot tell them apart — the
+            // reasoning that retired the unused-widget notice. A statement of
+            // where the entries come from is useful to the first reader and
+            // merely true for the second.
+            explain(
+                &mut lines,
+                "Calendar entries come from [agenda].file, which f on the \
+                 agenda panel sets.",
+                theme.muted,
+            );
             frame.render_widget(Paragraph::new(lines), area);
             self.drawn = 0;
             return;
@@ -246,6 +265,74 @@ mod tests {
         }
     }
 
+    /// Render the empty panel and read the words back off the screen.
+    fn empty_panel_text(config: &crate::config::Config) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let gradients = config.theme.gradients();
+        let mut panel = WatchLogPanel::new();
+        let (w, h) = (60u16, 14u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: false,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The empty panel must not claim anything about whether a calendar is set,
+    /// because it cannot know: panels are independent, and the agenda owns its
+    /// own path.
+    ///
+    /// The bug this replaces: the wording was chosen from `config.agenda.file`
+    /// once at construction, so setting a calendar with `f` left the log saying
+    /// "No calendar set... Press f on the agenda panel to add one" — telling you
+    /// to do the thing you had just done — until a restart.
+    ///
+    /// Re-deriving the flag would have fixed the staleness and kept the wrong
+    /// shape. A hint aimed at someone who has not set a calendar reaches someone
+    /// who decided against one just as often, and this dashboard cannot tell
+    /// them apart; that is what retired the unused-widget notice.
+    ///
+    /// The obvious test — render with and without `agenda.file` and assert the
+    /// text matches — was written first and **deleted**, because it cannot fail:
+    /// `WatchLogPanel::new` takes no configuration, so nothing about the agenda
+    /// can reach this panel to differ in the first place. It passed with the old
+    /// wording pasted back in, which is the tell. The assertion below is the one
+    /// that goes red when the claim returns, and it was checked by restoring the
+    /// old sentence and watching it fail.
+    #[test]
+    fn the_empty_panel_still_says_where_calendar_entries_come_from() {
+        let text = empty_panel_text(&crate::config::Config::default());
+        assert!(
+            text.contains("[agenda].file"),
+            "the empty log should name the setting; got:\n{text}"
+        );
+        assert!(
+            !text.contains("No calendar set"),
+            "the empty log must not assert whether a calendar is set; got:\n{text}"
+        );
+    }
+
     /// The frame carries no counter, and that is a decision rather than an
     /// omission. Every other list panel here has one — `4 open`, `2 today` —
     /// so the obvious "improvement" is to give this one `3 new`. That number is
@@ -254,10 +341,7 @@ mod tests {
     /// fails, the question to ask is not how to fix the test.
     #[test]
     fn the_panel_never_offers_a_counter() {
-        assert_eq!(
-            WatchLogPanel::new(&crate::config::Config::default()).counter(),
-            None
-        );
+        assert_eq!(WatchLogPanel::new().counter(), None);
     }
 
     /// The log is read, never edited. A key that dismissed an entry would make
@@ -265,7 +349,7 @@ mod tests {
     /// obligation this panel is designed to avoid.
     #[test]
     fn nothing_dismisses_acknowledges_or_clears_an_entry() {
-        let mut panel = WatchLogPanel::new(&crate::config::Config::default());
+        let mut panel = WatchLogPanel::new();
         panel.drawn = 5;
         for code in [
             KeyCode::Char('d'),
