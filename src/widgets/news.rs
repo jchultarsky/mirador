@@ -346,7 +346,30 @@ impl Panel for NewsPanel {
         }
 
         self.drawn = items.len();
-        frame.render_stateful_widget(List::new(items), body, &mut self.selected);
+        // The cursor `o` acts on has to be visible, or the link in the footer
+        // belongs to no story the reader can identify. Same marker and weight as
+        // `todo`, `notes` and `stocks`, and it recedes with focus like they do.
+        //
+        // This is navigation, not unread state: it shows where the keyboard is
+        // pointing and goes away with the focus. The panel still carries no
+        // count and nothing to dismiss, which is what keeps it clear of the
+        // unread-badge feature this dashboard turned down.
+        //
+        // Note these rows are multi-line — a masthead plus a wrapped title —
+        // unlike the one-line rows the other three panels draw. `List` puts the
+        // symbol on a row's first line and indents the rest to match, which is
+        // what makes a wrapped title still line up under its own masthead.
+        frame.render_stateful_widget(
+            List::new(items)
+                .highlight_symbol(if ctx.focused { "▸ " } else { "  " })
+                .highlight_style(if ctx.focused {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.muted)
+                }),
+            body,
+            &mut self.selected,
+        );
 
         // A `(text, style)` pair rather than a `Span`, because the link case is
         // multi-line and a `Span` holding newlines renders as one line with the
@@ -530,6 +553,69 @@ fn read_feed(url: &str) -> anyhow::Result<Vec<Story>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #114: the panel kept a cursor that `j`/`k` moved and `o` acted on, and
+    /// drew no highlight at all — so the link in the footer belonged to a story
+    /// the reader could not identify. Every other list panel shows one.
+    #[test]
+    fn the_selected_story_is_visibly_marked() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = vec![
+            story("NASA", "First story, the one selected", 10),
+            story("PHYS.ORG", "Second story", 20),
+        ];
+        panel.selected.select(Some(1));
+
+        let draw = |panel: &mut NewsPanel, focused: bool| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(46, 12)).unwrap();
+            terminal
+                .draw(|frame| {
+                    panel.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..12)
+                .map(|y| {
+                    (0..46)
+                        .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let focused = draw(&mut panel, true);
+        assert!(
+            focused.contains('\u{25B8}'),
+            "the focused panel must mark which story the cursor is on:\n{focused}"
+        );
+
+        // And it recedes with focus, like the other panels' markers do, rather
+        // than leaving a stale pointer on an unfocused panel.
+        let unfocused = draw(&mut panel, false);
+        assert!(
+            !unfocused.contains('\u{25B8}'),
+            "an unfocused panel should not keep pointing:\n{unfocused}"
+        );
+    }
 
     /// #108: `o` truncated the URL to the panel width, so the reader could
     /// neither read nor copy it — and the terminal linkified the visible text,
