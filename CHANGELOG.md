@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Arrange mode can move a row, not just a panel.** `Shift+↑`/`↓` (or `J`/`K`)
+  moves the whole row the focused panel sits in. Before this, a new row was only
+  ever created by pushing a panel off the top or bottom edge, so a panel alone in
+  a *middle* row could not travel at all — `Down` merged it into its neighbour
+  and the row count fell. Going from `[clocks] [watchlog] [notes] [cpu]` to
+  `[clocks] [notes] [watchlog] [cpu]` was not expressible with any sequence of
+  keys. Moving a panel between rows still merges, exactly as before.
+  [#100](https://github.com/jchultarsky/mirador/issues/100).
+
 ## [0.17.1] - 2026-07-30
 
 ### Fixed

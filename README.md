@@ -296,6 +296,10 @@ space around afterwards, and that is written too.
 The last panel cannot be switched off, because a layout with nothing in it is
 rejected at startup and would leave you with a config that will not open.
 
+`Shift+↑` and `Shift+↓` move the whole row the focused panel is in, which is
+how you reorder rows rather than move a panel between them. Plain `↑`/`↓` still
+moves the panel itself, merging it into the neighbouring row.
+
 `mirador --migrate-config` is still there for keys renamed between versions,
 and leaves a backup beside the original.
 

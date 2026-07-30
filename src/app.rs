@@ -845,6 +845,23 @@ impl App {
     fn handle_arrange_key(&mut self, key: KeyEvent) {
         use crate::arrange::Direction;
 
+        // Shift moves the whole row rather than the panel, which is the same
+        // escalation the clock panel uses: the bare key moves the small thing,
+        // the shifted key moves the thing it sits in. Claimed before the plain
+        // arrows below, or `Shift+Down` would fall through and merge the panel.
+        //
+        // Not `Ctrl+arrows`, which #100 proposed: those already resize inside
+        // this mode, advertised in the legend and pinned by
+        // `ctrl_arrows_still_resize_inside_arrange_mode`.
+        let shifted = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Up if shifted => return self.move_focused_row(false),
+            KeyCode::Char('K') => return self.move_focused_row(false),
+            KeyCode::Down if shifted => return self.move_focused_row(true),
+            KeyCode::Char('J') => return self.move_focused_row(true),
+            _ => {}
+        }
+
         let direction = match key.code {
             KeyCode::Left | KeyCode::Char('h') => Some(Direction::Left),
             KeyCode::Right | KeyCode::Char('l') => Some(Direction::Right),
@@ -911,6 +928,33 @@ impl App {
 
         // Focus follows the panel by name, so the moved panel keeps the
         // highlight wherever it lands and nothing here has to chase it.
+        if let Err(e) = self.rebuild_panels() {
+            self.config.layout = before;
+            let _ = self.rebuild_panels();
+            self.layout_error = Some(format!("{e:#}"));
+            return;
+        }
+        self.layout_error = None;
+        self.layout_dirty = true;
+    }
+
+    /// Move the row the focused panel sits in, up or down.
+    ///
+    /// Shares `move_focused`'s recovery: a layout the panels cannot be rebuilt
+    /// from is put back and reported, rather than leaving the dashboard in a
+    /// state the config cannot describe.
+    fn move_focused_row(&mut self, down: bool) {
+        let Some(&(row, _)) = self.positions.get(self.focus) else {
+            return;
+        };
+        let before = self.config.layout.clone();
+        if crate::arrange::move_row(&mut self.config.layout, row, down).is_none() {
+            return;
+        }
+
+        // Focus follows the panel by name, as it does for a panel move, so the
+        // highlight stays on whatever the reader was moving even though every
+        // panel in the row changed its flat index.
         if let Err(e) = self.rebuild_panels() {
             self.config.layout = before;
             let _ = self.rebuild_panels();
@@ -1484,12 +1528,19 @@ impl App {
             // terminal: knowing how to get out of a mode beats knowing every
             // trick inside it.
             let mut used = crate::grid::display_width(" ARRANGE");
+            // Both vertical hints were shortened when `Shift+↑↓` was added in
+            // #100: a sixth entry does not fit beside the old wording at an
+            // ordinary 110 columns, and dropping one was not an option —
+            // the help overlay carries only the *global* keys, so this legend
+            // is the only place any of these are documented. A key that ships
+            // undiscoverable is the mistake the resize keys already made once.
             for (key, action) in [
                 ("←→↑↓", "move"),
                 ("Enter", "keep"),
                 ("Esc", "cancel"),
+                ("Shift+↑↓", "move row"),
                 ("Ctrl+arrows", "resize"),
-                ("↑↓ at the edge", "opens a new row"),
+                ("↑↓ at edge", "new row"),
             ] {
                 // Dropped whole rather than clipped: half a hint reads as a
                 // rendering fault, where a missing one just reads as a narrow
@@ -1955,8 +2006,16 @@ mod tests {
         let bar = status_bar_at(&mut app, 110);
         assert!(bar.contains("ARRANGE"), "the mode names itself: {bar}");
         assert!(
-            bar.contains("opens a new row"),
+            bar.contains("new row"),
             "and says rows can be opened: {bar}"
+        );
+        // #100 added `Shift+↑↓`, and this legend is the only place the mode's
+        // keys are written down — the help overlay carries global keys only. So
+        // an ordinary terminal has to show every one of them, which is what
+        // forced both vertical hints to be shortened rather than one dropped.
+        assert!(
+            bar.contains("move row"),
+            "and says a row can be moved: {bar}"
         );
     }
 
@@ -2129,6 +2188,66 @@ mod tests {
         assert_eq!(
             app.slots[app.focus].widget, moving,
             "the highlight went with the panel"
+        );
+    }
+
+    /// #100, tested through the shell rather than through `arrange::move_row`.
+    ///
+    /// The arithmetic having its own tests is not enough — #106 shipped a
+    /// correct helper that was simply never called, and two unit tests passed
+    /// throughout. This presses the key.
+    #[test]
+    fn shift_arrows_move_the_whole_row_in_arrange_mode() {
+        let mut app = App::new(resizable()).expect("builds");
+        // `resizable` is [clocks, calendar] over [cpu]. Focus the lone panel in
+        // the second row — before #100 it could only ever merge upward.
+        app.focus = 2;
+        let moving = app.slots[2].widget.clone();
+        assert_eq!(moving, "cpu", "fixture changed under this test");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+
+        assert_eq!(
+            app.config.layout.rows.len(),
+            2,
+            "moving a row must not merge it away"
+        );
+        assert_eq!(
+            app.config.layout.rows[0].panels[0].widget, "cpu",
+            "the cpu row should now be first"
+        );
+        assert_eq!(
+            app.slots[app.focus].widget, moving,
+            "the highlight went with the panel"
+        );
+        assert!(app.arranging.is_some(), "and the mode stayed open");
+    }
+
+    /// `J`/`K` are the same gesture without a modifier, matching the clock
+    /// panel. Bare `j`/`k` must still move the *panel*, or the shifted pair
+    /// would have quietly replaced the plain one.
+    #[test]
+    fn capital_and_plain_movement_keys_do_different_things() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.focus = 2;
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('K')));
+        assert_eq!(
+            app.config.layout.rows[0].panels[0].widget, "cpu",
+            "K should have moved the row"
+        );
+
+        // And the plain key still merges, which is the behaviour #100 was
+        // careful not to take away.
+        let mut app = App::new(resizable()).expect("builds");
+        app.focus = 2;
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(
+            app.config.layout.rows.len(),
+            1,
+            "plain k should still merge the panel into the row above"
         );
     }
 
