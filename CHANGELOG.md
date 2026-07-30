@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--reset-config`, a way out of a config that has gone past fixing.** Writes
+  the shipped defaults and copies the old file to `config.toml.bak` first. The
+  name sounds harmless and the effect is not, so it says what it is about to do
+  and waits for a `y`; piped somewhere with no terminal to ask on, it refuses
+  rather than assuming, and `--yes` is there for scripts that mean it. An
+  existing backup is never overwritten — resetting twice is exactly what a stuck
+  reader does, and with a fixed name the second run would have replaced the real
+  config with the defaults written by the first.
+  [#111](https://github.com/jchultarsky/mirador/issues/111).
+
+### Fixed
+
+- **The agenda kept saying `reloading…` after the reload had finished.** The
+  status was cleared only by the next keypress, so a panel nobody touched went
+  on claiming to be mid-operation — measured at 83 seconds with the reloaded
+  events already on screen. A dashboard is read without being touched, so
+  "cleared on the next keypress" was, for anyone glancing at it, never.
+  [#120](https://github.com/jchultarsky/mirador/issues/120).
+- **The watch log told you to set a calendar you had already set.** It read
+  `[agenda].file` once at construction, so a calendar added later with `f` was
+  never noticed and the panel went on advertising `f` until a restart. It now
+  says where calendar entries come from and asserts nothing about whether you
+  have one. [#119](https://github.com/jchultarsky/mirador/issues/119).
+
 ## [0.16.3] - 2026-07-30
 
 ### Fixed

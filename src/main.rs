@@ -35,7 +35,8 @@ mod watch;
 mod widgets;
 mod zones;
 
-use std::path::PathBuf;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -60,6 +61,8 @@ OPTIONS:
         --print-config     Print the default config to stdout and exit
         --config-path      Print the resolved config path and exit
         --migrate-config   Update a config written by an older version
+        --reset-config     Replace the config with the defaults, keeping a copy
+    -y, --yes              Do not ask for confirmation
     -h, --help             Print this help and exit
     -V, --version          Print the version and exit
 
@@ -88,6 +91,9 @@ struct Args {
     print_config: bool,
     show_config_path: bool,
     migrate_config: bool,
+    reset_config: bool,
+    /// Skip the confirmation `--reset-config` would otherwise ask for.
+    assume_yes: bool,
     help: bool,
     version: bool,
 }
@@ -104,6 +110,8 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
             "--print-config" => args.print_config = true,
             "--config-path" => args.show_config_path = true,
             "--migrate-config" => args.migrate_config = true,
+            "--reset-config" => args.reset_config = true,
+            "-y" | "--yes" => args.assume_yes = true,
             "-c" | "--config" => {
                 let value = iter.next().ok_or_else(|| {
                     anyhow::anyhow!("`{arg}` needs a path, e.g. `{arg} ~/mirador.toml`")
@@ -132,6 +140,57 @@ fn main() -> ExitCode {
     }
 }
 
+/// `--reset-config`: replace the config with the defaults, keeping the old one.
+///
+/// The confirmation is the point of this function rather than an afterthought.
+/// The name sounds harmless and the effect is not — `[layout]` is the part
+/// people curate, and someone reaching for this because mirador will not start
+/// may have one salvageable typo and an evening's arrangement.
+///
+/// It refuses rather than assuming when it cannot ask: piped into a script with
+/// no `--yes`, "no answer" must not read as "go ahead". A prompt written to a
+/// terminal nobody is watching is the same silent overwrite with extra steps.
+fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
+    let exists = path.try_exists().unwrap_or(false);
+
+    if !assume_yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "refusing to reset {} without a confirmation.\n\nThere is no \
+                 terminal to ask on, so re-run with `--yes` if you mean it.",
+                path.display()
+            );
+        }
+        if exists {
+            println!("This replaces {} with the defaults.", path.display());
+            println!("Your current config will be copied alongside it first.");
+        } else {
+            println!("There is no config at {}.", path.display());
+            println!("This writes the defaults there.");
+        }
+        print!("Go ahead? [y/N] ");
+        std::io::stdout().flush().context("writing the prompt")?;
+
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading your answer")?;
+        // Anything but an explicit yes is a no, including an empty line. The
+        // default has to be the outcome that loses nothing.
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Left {} alone.", path.display());
+            return Ok(());
+        }
+    }
+
+    let backup = Config::reset(path)?;
+    println!("Wrote the default config to {}.", path.display());
+    if let Some(backup) = backup {
+        println!("Your previous config is at {}.", backup.display());
+    }
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = parse_args(std::env::args().skip(1))?;
 
@@ -154,6 +213,14 @@ fn run() -> Result<()> {
         };
         println!("{}", path.display());
         return Ok(());
+    }
+
+    if args.reset_config {
+        let path = match args.config.clone() {
+            Some(p) => p,
+            None => Config::default_path()?,
+        };
+        return reset_config(&path, args.assume_yes);
     }
 
     if args.migrate_config {
@@ -277,6 +344,18 @@ mod tests {
         assert!(parse(&["--print-config"]).unwrap().print_config);
         assert!(parse(&["--config-path"]).unwrap().show_config_path);
         assert!(parse(&["--migrate-config"]).unwrap().migrate_config);
+        assert!(parse(&["--reset-config"]).unwrap().reset_config);
+        assert!(parse(&["-y"]).unwrap().assume_yes);
+        assert!(parse(&["--yes"]).unwrap().assume_yes);
+    }
+
+    /// `--yes` only ever *removes* a question. On its own it must not be
+    /// mistaken for a request to reset anything.
+    #[test]
+    fn yes_on_its_own_resets_nothing() {
+        let args = parse(&["--yes"]).unwrap();
+        assert!(args.assume_yes);
+        assert!(!args.reset_config);
     }
 
     #[test]
@@ -321,6 +400,8 @@ mod tests {
             "--print-config",
             "--config-path",
             "--migrate-config",
+            "--reset-config",
+            "--yes",
             "--help",
             "--version",
         ] {
