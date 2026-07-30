@@ -54,6 +54,44 @@ pub fn move_panel(
     }
 }
 
+/// Move the whole row at `row` one place up or down, returning where it landed.
+///
+/// `None` means the move was refused: the row is already at the edge it was
+/// pushed at.
+///
+/// **The gap this fills (#100).** `move_panel` moves panels, and a new row is
+/// only ever created by promoting one off the top or bottom edge. So a panel
+/// alone in a *middle* row could never travel — `Down` merged it into the row
+/// below and `close_if_empty` deleted the row it left, dropping the row count.
+/// Going from `[clocks] [watchlog] [notes] [cpu]` to
+/// `[clocks] [notes] [watchlog] [cpu]` was not expressible with any sequence of
+/// keys. Found by the owner rearranging a tall vertical monitor, whose first
+/// reading was that four rows was a cap; it is not, and nothing limits the
+/// count.
+///
+/// This is additive rather than a change to what the arrows already do. Merging
+/// a panel into a neighbouring row stays exactly as it was — the issue calls
+/// that "the right reading of *move this panel into that row*" — and moving a
+/// row is a separate gesture on a separate key.
+///
+/// Swapping whole [`LayoutRow`] entries is what carries each row's `height`
+/// with it. Swapping only the panel lists would leave every row's height where
+/// it was and silently resize both, which is the failure
+/// `a_move_never_changes_what_the_weights_add_up_to` was rewritten to catch:
+/// what matters is not the total but that an untouched row keeps its *share*.
+pub fn move_row(layout: &mut Layout, row: usize, down: bool) -> Option<usize> {
+    if row >= layout.rows.len() {
+        return None;
+    }
+    let target = if down {
+        (row + 1 < layout.rows.len()).then_some(row + 1)?
+    } else {
+        row.checked_sub(1)?
+    };
+    layout.rows.swap(row, target);
+    Some(target)
+}
+
 /// Move a panel to the row above or below, or off the edge into a row of its
 /// own.
 fn vertical(layout: &mut Layout, row: usize, column: usize, down: bool) -> Option<(usize, usize)> {
@@ -416,5 +454,78 @@ mod tests {
                 heights(&l)
             );
         }
+    }
+
+    /// The move #100 was filed for: a panel alone in a middle row travelling
+    /// down past its neighbour, which no sequence of keys could express.
+    #[test]
+    fn a_row_can_travel_past_its_neighbour() {
+        let mut l = layout(&[
+            (10, &[("clocks", 10)]),
+            (10, &[("watchlog", 10)]),
+            (10, &[("notes", 10)]),
+            (10, &[("cpu", 10)]),
+        ]);
+
+        assert_eq!(move_row(&mut l, 1, true), Some(2));
+        assert_eq!(
+            shape(&l),
+            vec![vec!["clocks"], vec!["notes"], vec!["watchlog"], vec!["cpu"]],
+            "the watch log should have swapped with the notes row"
+        );
+        assert_eq!(l.rows.len(), 4, "moving a row must not change the count");
+    }
+
+    /// A row carries its own height. Swapping the panel lists alone would leave
+    /// the heights behind and silently resize both rows — and the reader who
+    /// tuned them never asked for that.
+    #[test]
+    fn a_row_takes_its_height_with_it() {
+        let mut l = layout(&[
+            (30, &[("clocks", 10)]),
+            (10, &[("watchlog", 10)]),
+            (60, &[("notes", 10)]),
+        ]);
+
+        move_row(&mut l, 0, true);
+        assert_eq!(
+            heights(&l),
+            vec![10, 30, 60],
+            "each row's height should have travelled with it"
+        );
+    }
+
+    /// Both refusals, and neither may quietly do something else instead.
+    #[test]
+    fn a_row_at_the_edge_has_nowhere_to_go() {
+        let mut l = layout(&[(10, &[("clocks", 10)]), (10, &[("notes", 10)])]);
+        let before = shape(&l);
+
+        assert_eq!(move_row(&mut l, 0, false), None, "the top row cannot rise");
+        assert_eq!(move_row(&mut l, 1, true), None, "the last cannot sink");
+        assert_eq!(
+            move_row(&mut l, 9, true),
+            None,
+            "nor can a row that is not there"
+        );
+        assert_eq!(shape(&l), before, "a refused move must change nothing");
+    }
+
+    /// Moving a row moves everything in it, not just the panel the cursor is
+    /// on. That is what makes it a *row* move rather than a second way to move
+    /// a panel.
+    #[test]
+    fn a_shared_row_travels_whole() {
+        let mut l = layout(&[
+            (10, &[("clocks", 5), ("weather", 5)]),
+            (10, &[("notes", 10)]),
+        ]);
+
+        assert_eq!(move_row(&mut l, 0, true), Some(1));
+        assert_eq!(
+            shape(&l),
+            vec![vec!["notes"], vec!["clocks", "weather"]],
+            "both panels should have moved together"
+        );
     }
 }

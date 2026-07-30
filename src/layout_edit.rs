@@ -58,9 +58,28 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
     let duplicates = duplicated_widgets(&map);
     let pairing = pair_rows(&map, desired);
 
+    let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
+
+    // Rows reordered. Nothing below can express that: every other edit changes
+    // a row where it already sits, so a pairing that crosses over would leave
+    // the rows in their original order and the check at the end would throw the
+    // whole edit away. That is what #100 hit the moment `Shift+↑↓` could move a
+    // row — the move worked on screen and could not be saved.
+    //
+    // Handled by rewriting the rows region as a whole, each row emitted from
+    // its captured text so its comments and formatting travel with it. Kept to
+    // the case that needs it: any layout whose rows stay in order goes through
+    // the per-row edits below, so an ordinary resize still rewrites one number
+    // on one line.
+    if let Some(reordered) = reorder_rows(&lines, &map, &blocks, &duplicates, &pairing, desired)? {
+        let from = map.rows[0].from;
+        let to = map.rows[map.rows.len() - 1].closing_line + 1;
+        out.splice(from..to, reordered);
+        return finish(source, &out, desired);
+    }
+
     // Work back to front so an insertion or deletion cannot shift the line
     // numbers of an edit that has not happened yet.
-    let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
     let mut edits: Vec<Edit> = Vec::new();
 
     // Rows nothing in the new layout claimed. Their panels have already been
@@ -154,6 +173,14 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
         }
     }
 
+    finish(source, &out, desired)
+}
+
+/// Rejoin the edited lines and refuse anything that does not say what was asked.
+///
+/// Both paths through [`apply`] end here, so the round-trip check cannot be
+/// skipped by whichever one is taken.
+fn finish(source: &str, out: &[String], desired: &Layout) -> Result<String> {
     // Rejoined with the ending the file already had. `str::lines()` strips
     // `\r`, so joining with `\n` would quietly convert a CRLF config to LF and
     // rewrite every line in it because one panel moved.
@@ -172,6 +199,104 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
     }
 
     Ok(result)
+}
+
+/// The whole rows region rewritten in the desired order, or `None` when the
+/// rows have not moved and the cheaper per-row edits will do.
+///
+/// A row that has a counterpart in the text is emitted from its own lines, so
+/// its comments, indentation and hand-alignment survive being moved; only its
+/// `height` is corrected and its panels rebuilt when their order changed. A row
+/// with no counterpart is a new one and is written fresh.
+fn reorder_rows(
+    lines: &[&str],
+    map: &LayoutMap,
+    blocks: &HashMap<String, PanelBlock>,
+    duplicates: &HashSet<&str>,
+    pairing: &[Option<usize>],
+    desired: &Layout,
+) -> Result<Option<Vec<String>>> {
+    let paired: Vec<usize> = pairing.iter().flatten().copied().collect();
+    let in_order = paired.windows(2).all(|pair| pair[0] < pair[1]);
+    // Rows still in their original relative order: the per-row path handles it,
+    // and handles it more gently.
+    if in_order {
+        return Ok(None);
+    }
+
+    let mut out = Vec::new();
+    for (want_index, want) in desired.rows.iter().enumerate() {
+        let Some(text_index) = pairing[want_index] else {
+            out.extend(row_block(lines, map, blocks, duplicates, want)?);
+            continue;
+        };
+        let row = &map.rows[text_index];
+
+        // Reusing a row's lines only works when it has lines to reuse: mirador
+        // writes the header, each panel and the closing bracket on their own,
+        // in that order. A hand-compacted row — a whole row on one line — does
+        // not, and slicing it as though it did read backwards and **panicked**,
+        // taking the dashboard down when the move was committed. Found by
+        // driving it; a config written that way loads perfectly well.
+        //
+        // Such a row is refused, not guessed at. Rebuilding it is not the
+        // escape it looks like: a panel's captured entry is its own lines, and
+        // for a compacted row that entry *is* the whole row, so writing it back
+        // inside a fresh block nests the row within itself. Refusing is what
+        // this module already promises for text it cannot edit confidently, and
+        // it costs the reader a message rather than a mangled config.
+        let reusable = row.header_line < row.closing_line
+            && row
+                .panels
+                .iter()
+                .all(|p| p.from > row.header_line && p.line < row.closing_line);
+        if !reusable {
+            bail!(
+                "moving a row needs each row written across several lines, as \
+                 mirador writes them — `{{ height = … , panels = [`, then one \
+                 line per panel, then `] }},`. Row {} is on a single line, so \
+                 its panels have no entries of their own to move.",
+                text_index + 1
+            );
+        }
+
+        // Everything above the row's own `height = …` line, which is its
+        // comments — the explanation someone wrote for this row.
+        out.extend(
+            lines[row.from..row.header_line]
+                .iter()
+                .map(|l| (*l).to_string()),
+        );
+        out.push(set_number(lines[row.header_line], "height", want.height));
+
+        let unchanged_order = row
+            .panels
+            .iter()
+            .map(|panel| panel.widget.as_str())
+            .eq(want.panels.iter().map(|panel| panel.widget.as_str()));
+
+        if unchanged_order {
+            // Reuse the panel lines as they stand, fixing only the widths, so a
+            // row that merely changed place keeps its alignment.
+            let first = row.panels.first().map_or(row.header_line + 1, |p| p.from);
+            let mut cursor = first;
+            for (panel, wanted) in row.panels.iter().zip(&want.panels) {
+                out.extend(lines[cursor..panel.line].iter().map(|l| (*l).to_string()));
+                out.push(set_number(lines[panel.line], "width", wanted.width));
+                cursor = panel.line + 1;
+            }
+            out.extend(
+                lines[cursor..row.closing_line]
+                    .iter()
+                    .map(|l| (*l).to_string()),
+            );
+        } else {
+            let template = row.panels.first().map_or(row.header_line, |p| p.line);
+            out.extend(panel_lines(lines, blocks, duplicates, want, template)?);
+        }
+        out.push(lines[row.closing_line].to_string());
+    }
+    Ok(Some(out))
 }
 
 /// A layout reduced to what this module promises to reproduce.
@@ -228,6 +353,10 @@ struct PanelSite {
 }
 
 struct RowSite {
+    /// The first line of the row's own comments, or `header_line` when it has
+    /// none. Rows are moved whole by #100, and a row's explanation has to travel
+    /// with it for the same reason a panel's does.
+    from: usize,
     /// The line carrying `height = …`, which is also where a row with no panels
     /// gets its first one inserted after.
     header_line: usize,
@@ -437,7 +566,16 @@ fn map_layout(lines: &[&str]) -> Result<LayoutMap> {
         }
 
         if line.contains("panels") && line.contains('[') {
+            // The row's own comments, walked up the same way a panel's are —
+            // never crossing the row that ended above, so a trailing comment
+            // stays with the row it was written under.
+            let floor = rows.last().map_or(0, |r: &RowSite| r.closing_line + 1);
+            let mut from = index;
+            while from > floor && lines[from - 1].trim().starts_with('#') {
+                from -= 1;
+            }
             rows.push(RowSite {
+                from,
                 header_line: index,
                 // Corrected when the closing line is reached. A row whose block
                 // never closes keeps its header here, which produces a span
@@ -1272,6 +1410,132 @@ rows = [
             actual, CITED,
             "the default config now has {actual} comment lines. Update this \
              constant and `CLAUDE.md` invariant 16 — both quote {CITED}."
+        );
+    }
+
+    /// #100: swapping two rows. Before this, `pair_rows` produced a crossed
+    /// pairing, every per-row edit wrote its row where it already was, and the
+    /// round-trip check threw the whole thing away — so the move worked on
+    /// screen and could never be saved.
+    #[test]
+    fn two_rows_can_swap_places() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows.swap(0, 1);
+
+        let edited = apply(SAMPLE, &desired).expect("a row swap must be writable");
+        assert_eq!(
+            shape(&layout_of(&edited)),
+            shape(&desired),
+            "the file must describe the swapped layout"
+        );
+    }
+
+    /// A row's explanation travels with it, which is the whole reason this
+    /// module edits text instead of reserialising. The round-trip check cannot
+    /// see a lost comment — it compares shapes — so this has to be asserted
+    /// directly. Same lesson as the duplicate-widget refusal.
+    #[test]
+    fn a_moved_row_takes_its_comments_with_it() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows.swap(0, 1);
+
+        let edited = apply(SAMPLE, &desired).expect("applies");
+        assert!(
+            edited.contains("Wide enough for two months side by side."),
+            "the calendar's comment was lost:\n{edited}"
+        );
+
+        // And it is still attached to the calendar rather than stranded above
+        // whatever now sits in that position.
+        let lines: Vec<&str> = edited.lines().collect();
+        let comment = lines
+            .iter()
+            .position(|l| l.contains("Wide enough for two months"))
+            .expect("comment present");
+        assert!(
+            lines[comment + 1].contains("calendar"),
+            "the comment came away from its panel:\n{edited}"
+        );
+    }
+
+    /// Heights belong to rows, not to positions. Swapping two rows must carry
+    /// each height along, or the reader's proportions silently change.
+    #[test]
+    fn a_swapped_row_keeps_its_own_height() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows.swap(0, 1);
+
+        let edited = apply(SAMPLE, &desired).expect("applies");
+        let after = layout_of(&edited);
+        assert_eq!(after.rows[0].height, 42, "the todo row kept its 42");
+        assert_eq!(after.rows[1].height, 34, "and the clocks row its 34");
+    }
+
+    /// A row written entirely on one line has no separate lines to reuse.
+    /// Slicing it as though it did read backwards and panicked — found by
+    /// driving a move in a real terminal, where it took the dashboard down at
+    /// the moment the arrangement was committed. A config in that shape loads
+    /// perfectly well, so nothing upstream refuses it.
+    #[test]
+    fn a_row_written_on_one_line_can_still_be_moved() {
+        const COMPACT: &str = r#"[layout]
+rows = [
+  { height = 25, panels = [ { widget = "clocks", width = 100 } ] },
+  { height = 25, panels = [ { widget = "watchlog", width = 100 } ] },
+  { height = 25, panels = [ { widget = "notes", width = 100 } ] },
+  { height = 25, panels = [ { widget = "cpu", width = 100 } ] },
+]
+"#;
+        let mut desired = layout_of(COMPACT);
+        desired.rows.swap(1, 2);
+
+        // The bug was a panic, so reaching an assertion at all is half the test.
+        let error =
+            apply(COMPACT, &desired).expect_err("a compacted row cannot be moved and must say so");
+        let message = format!("{error}");
+        assert!(
+            message.contains("several lines"),
+            "the refusal should name the shape it wants: {message}"
+        );
+    }
+
+    /// The refusal above must stay as narrow as the problem. A compacted config
+    /// still resizes — that path never touches a row's entries — and only the
+    /// row *move* is out of reach. Widening the check would take a working
+    /// feature away from anyone who tidied their config.
+    #[test]
+    fn a_compact_config_can_still_be_resized() {
+        const COMPACT: &str = r#"[layout]
+rows = [
+  { height = 25, panels = [ { widget = "clocks", width = 100 } ] },
+  { height = 25, panels = [ { widget = "notes", width = 100 } ] },
+]
+"#;
+        let mut desired = layout_of(COMPACT);
+        desired.rows[0].height = 40;
+        desired.rows[1].height = 10;
+
+        let edited = apply(COMPACT, &desired).expect("a resize must still work");
+        assert_eq!(shape(&layout_of(&edited)), shape(&desired));
+    }
+
+    /// The reorder path must not steal work from the cheap one. A plain resize
+    /// leaves the rows in order, so it still rewrites numbers in place rather
+    /// than rebuilding the block — which is what keeps a hand-aligned config
+    /// aligned through a held `Ctrl+arrow`.
+    #[test]
+    fn a_resize_does_not_go_through_the_reorder_path() {
+        let mut desired = layout_of(SAMPLE);
+        desired.rows[0].panels[0].width = 30;
+
+        let edited = apply(SAMPLE, &desired).expect("applies");
+        let before: Vec<&str> = SAMPLE.lines().collect();
+        let after: Vec<&str> = edited.lines().collect();
+        assert_eq!(before.len(), after.len(), "no lines added or removed");
+        let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
+        assert_eq!(
+            changed, 1,
+            "a resize should touch exactly one line:\n{edited}"
         );
     }
 }
