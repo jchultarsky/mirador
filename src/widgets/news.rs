@@ -272,14 +272,24 @@ impl Panel for NewsPanel {
 
         let width = usize::from(area.width);
 
-        // One row at the foot for the age, or the link, or a failure.
+        // One row at the foot for the age or a failure — but a link gets as
+        // many as it needs. It used to be truncated to one row, which left the
+        // URL unreadable, uncopyable, and (worse) linkified by the terminal as
+        // far as the ellipsis, so clicking it went somewhere that did not exist.
+        // Bounded at half the panel so a long link cannot swallow the stories.
+        let foot_rows = match &self.showing_link {
+            Some(link) => {
+                crate::grid::wrapped_height(link, area.width).clamp(1, (area.height / 2).max(1))
+            }
+            None => 1.min(area.height),
+        };
         let footer = Rect {
-            y: area.y + area.height.saturating_sub(1),
-            height: 1.min(area.height),
+            y: area.y + area.height.saturating_sub(foot_rows),
+            height: foot_rows,
             ..area
         };
         let body = Rect {
-            height: area.height.saturating_sub(1),
+            height: area.height.saturating_sub(foot_rows),
             ..area
         };
 
@@ -338,12 +348,18 @@ impl Panel for NewsPanel {
         self.drawn = items.len();
         frame.render_stateful_widget(List::new(items), body, &mut self.selected);
 
-        let foot = match (&self.showing_link, &self.failing) {
-            (Some(link), _) => Span::styled(
-                crate::grid::truncate(link, width),
+        // A `(text, style)` pair rather than a `Span`, because the link case is
+        // multi-line and a `Span` holding newlines renders as one line with the
+        // breaks swallowed. `Paragraph::new(String)` splits on them properly.
+        let (foot, foot_style) = match (&self.showing_link, &self.failing) {
+            // Wrapped by `grid`, never handed to ratatui's wrapper, and never
+            // truncated: the whole point is that the reader can read and copy
+            // the entire URL.
+            (Some(link), _) => (
+                crate::grid::wrapped(link, area.width),
                 Style::default().fg(theme.label),
             ),
-            (None, Some(_)) => Span::styled(
+            (None, Some(_)) => (
                 format!(
                     "{} — refresh failing",
                     self.fetched
@@ -351,14 +367,14 @@ impl Panel for NewsPanel {
                 ),
                 Style::default().fg(theme.warning),
             ),
-            (None, None) => Span::styled(
+            (None, None) => (
                 self.fetched
                     .map_or_else(String::new, |at| describe_age(at.elapsed())),
                 Style::default().fg(theme.muted),
             ),
         };
         if footer.height > 0 {
-            frame.render_widget(Paragraph::new(Line::from(foot)), footer);
+            frame.render_widget(Paragraph::new(foot).style(foot_style), footer);
         }
     }
 }
@@ -514,6 +530,69 @@ fn read_feed(url: &str) -> anyhow::Result<Vec<Story>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #108: `o` truncated the URL to the panel width, so the reader could
+    /// neither read nor copy it — and the terminal linkified the visible text,
+    /// which now ended in an ellipsis, so clicking landed on a URL that did not
+    /// exist. The reporter's browser showed the `…` as `%E2%80%A6`.
+    ///
+    /// The property: **every character of the link reaches the screen.**
+    #[test]
+    fn the_whole_link_is_shown_rather_than_truncated() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        use ratatui::crossterm::event::KeyModifiers;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let link = "https://arstechnica.com/security/2026/07/mythos-attack-on-3rd-round-pqc-algorithm-puts-it-out-of-commission/";
+
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = vec![Story {
+            source: "Ars Technica".into(),
+            title: "Mythos attack on 3rd-round PQC algorithm".into(),
+            link: link.into(),
+            published: Zoned::now().checked_sub(jiff::Span::new().minutes(30)).ok(),
+        }];
+        panel.selected.select(Some(0));
+        panel.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        for (width, height) in [(40u16, 14u16), (56, 18), (72, 12), (100, 20)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    panel.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let screen: String = (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                .collect();
+            let squashed: String = screen.chars().filter(|c| !c.is_whitespace()).collect();
+
+            assert!(
+                !squashed.contains('\u{2026}'),
+                "the link was truncated with an ellipsis at {width}x{height}"
+            );
+            assert!(
+                squashed.contains(&link.replace(' ', "")),
+                "the whole link should be on screen at {width}x{height}"
+            );
+        }
+    }
 
     fn story(source: &str, title: &str, minutes_ago: i64) -> Story {
         Story {
