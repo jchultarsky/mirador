@@ -1146,24 +1146,48 @@ cannot fail.
 
 When phases 1–4 are done, and not because a date arrived.
 
-## Feature freeze
+## Feature freeze — lifted 2026-07-30
 
-**New features are frozen ahead of 1.0.0.** Bug fixes, documentation and tests
-only. Anything that adds a panel, a key or a config value waits — the point of
-the freeze is to find out what the last round actually broke, and adding to it
-defeats that.
+**The freeze is over.** Features may land again, in a release *before* 1.0.0.
+The owner lifted it on 2026-07-30. What is written below is what it was for and
+why it was allowed to end, because the reasoning is the part worth keeping —
+the rule itself is now history.
 
-Adversarial review found one hang and two per-frame allocation faults in code
-written the same day, all of them in paths the tests exercised and the tests did
-not catch. That is the argument for the freeze, not an argument against the
-tests: the hang needed a two-cell glyph in a one-cell column, and nothing was
-going to guess that from reading.
+**What it said:** new features frozen ahead of 1.0.0, bug fixes and
+documentation and tests only, anything adding a panel or a key or a config value
+waits. **What it was for:** to find out what the last round actually broke.
+Adversarial review had found one hang and two per-frame allocation faults in
+code written the same day, all in paths the tests exercised and the tests did not
+catch — the hang needed a two-cell glyph in a one-cell column, and nothing was
+going to guess that from reading. Building on top of that would have hidden it.
+
+**Why it ended.** The freeze was a question, not a policy, and the question got
+answered. 0.16.3 was driven end to end in a real terminal — every panel, every
+key, both exit paths, extreme resizes — and soaked for 9h42m. That turned up two
+defects, both stale-state and both small (#119, #120, fixed in #121), plus one
+documentation finding (#118). Nothing structural. A freeze whose purpose is to
+surface breakage stops earning its keep once a full pass comes back that quiet.
+
+**What did not change:** 1.0.0 is still a promise about config compatibility,
+data-file compatibility, and no known crashes or hangs — see the road map above,
+and it is still not cut because a date arrived. **The soak is now a gate rather
+than a habit:** run it once, on the build about to be tagged, and note that no
+soak has yet crossed a real midnight, so the day-rollover watch log entry is
+still unverified outside a test that winds the date back.
+
+One consequence to be deliberate about: several issues were parked as post-1.0
+*because of* the freeze rather than on their own merits — #100, #109, #111 and
+the #117/#118 news design among them. They are candidates again, which is not
+the same as being scheduled. Ask before assuming any of them is in a release.
 
 ## Open work
 
 **Arrange mode cannot move a row, only a panel** —
-[#100](https://github.com/jchultarsky/mirador/issues/100), deferred past 1.0
-because it adds behaviour to a key rather than fixing a defect.
+[#100](https://github.com/jchultarsky/mirador/issues/100). Deferred past 1.0
+because it adds behaviour to a key rather than fixing a defect — which was a
+consequence of the feature freeze, and that freeze has since been lifted. So
+this is a candidate again rather than a settled deferral; it has not been
+scheduled, and nobody has re-argued it on its own merits.
 
 The reason it matters, since that is what this list is for: `promote` is the only
 thing that creates a row, and it is reachable only when the panel is in the
