@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-07-30
+
+### Fixed
+
+- **The news panel did not show which story the cursor was on.** It kept a
+  selection that `j`/`k` moved and that `o` read the link from, and drew no
+  highlight at all — so the link at the foot of the panel belonged to a story
+  you had no way to identify. The task, notes and watchlist panels have always
+  marked their selection; this one never did.
+  [#114](https://github.com/jchultarsky/mirador/issues/114).
+
 ## [0.16.2] - 2026-07-30
 
 The first round of bug reports from people who are not the author, and one
@@ -1127,7 +1138,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.3...HEAD
+[0.16.3]: https://github.com/jchultarsky/mirador/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/jchultarsky/mirador/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/jchultarsky/mirador/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/jchultarsky/mirador/compare/v0.15.0...v0.16.0
