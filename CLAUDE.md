@@ -614,11 +614,18 @@ persistence story rests on. The known cost is that panels of unlike natural
 height in one row waste space; the mitigation is that arrange mode makes it
 easy to group like with like.
 
-**The default stays three rows.** Measured at 120x40 before deciding: nothing
-truncates, all ten panels are legible, and the blank space in the clock is
+**The default is four rows of twelve panels**, and the measurement behind it
+still holds: re-checked at 120x40 on 2026-07-30, nothing truncates, every panel
+is legible and no frame title is clipped. The blank space in the clock is
 inherent to a row sharing its height with weather rather than being waste to
-reclaim. Arrange mode can open and close rows, so the row count is a gesture
-now rather than a number shipped for everyone.
+reclaim. Arrange mode can open, close and now reorder rows, so the row count is a
+gesture rather than a number shipped for everyone.
+
+This paragraph said "three rows … all ten panels" until that re-check. It was
+true when written and quietly stopped being true when the agenda and news panels
+joined the default layout — nothing in the build notices, because no test asserts
+the shipped `[layout]` has any particular size. If you add a panel to
+`assets/default_config.toml`, this is the sentence that goes stale.
 
 **`layout_edit` has two paths and the split matters.** Numbers-only changes are
 still one-line edits, because rebuilding a row would reflow a hand-aligned
@@ -1087,16 +1094,33 @@ input is hostile", not "is this correct".
 
 ### Phase 3 — soak
 
-Nothing here has run for a day. This phase cannot be done by an agent in a
-headless tmux and needs a person with a real terminal:
+Nothing here had run for a day when this was written. Two of the four are done;
+the other two still need a person with a real terminal.
 
-- **Terminal focus reporting** — never verified at all. The watch log's rule
-  line falls back to the last keypress until somebody confirms it, and tmux
-  needs `focus-events on`.
-- **A real midnight** — the day-rollover entry has only met a test that winds
-  the date back.
-- **A full day idle**, watching memory and CPU.
-- **Windows**, which has been started exactly once.
+- **A full day idle — done.** 0.16.3 soaked for 9h42m over 583 samples on
+  2026-07-30: RSS climbed 1.0MB in the first two hours and then moved *once* in
+  the following 2h54m, a single 16KB step. That is allocator settling, not a
+  leak. CPU stayed at the floor and no alert ever fired. A second soak of 0.18.1
+  is what the midnight check below is riding on.
+- **Windows — done.** Started by the owner on 25 and 28 July through the
+  PowerShell installer, including `mirador-update`, and every CI run since builds
+  and tests it. Treat it as the least-travelled of the three targets rather than
+  as unknown.
+- **A real midnight** — still open. The day-rollover entry has only met a test
+  that winds the date back.
+- **Terminal focus reporting** — still open, and **blocked on
+  [#132](https://github.com/jchultarsky/mirador/issues/132)**. It cannot be
+  honestly confirmed while the current behaviour hides its own evidence: the
+  watch log marks itself seen on `FocusGained` as well as `FocusLost`, so
+  returning to the dashboard erases the "since you were here" line in the same
+  instant you look for it. A terminal that reports focus *correctly* makes the
+  feature less visible, not more, so "I saw no rule line" cannot distinguish
+  working from broken. Fix #132 first, then verify.
+
+**The midnight check wants two independent witnesses**, for exactly that reason:
+the clock's own date line flipping, *and* a watch log entry reading
+`<Day> <n> <Month> began`. With one witness, "did not happen" and "happened and
+was erased" look identical.
 
 *Exit:* the list of unverified behaviour is empty.
 
@@ -1193,39 +1217,40 @@ still unverified outside a test that winds the date back.
 
 One consequence to be deliberate about: several issues were parked as post-1.0
 *because of* the freeze rather than on their own merits — #100, #109, #111 and
-the #117/#118 news design among them. They are candidates again, which is not
-the same as being scheduled. Ask before assuming any of them is in a release.
+the #117/#118 news design among them. **All four shipped the same day the freeze
+lifted**, across 0.17.0, 0.17.1, 0.18.0 and 0.18.1, which is the evidence that
+the parking was the freeze talking rather than the merits.
+
+The habit is still worth keeping, though: ask before assuming a parked issue is
+in a release. #117 is the case in point — it was filed with a chosen direction,
+and by the time it was built #118 had changed the panel underneath it enough to
+reverse that choice. **A design decision made before a related change may not
+survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**Arrange mode cannot move a row, only a panel** —
-[#100](https://github.com/jchultarsky/mirador/issues/100). Deferred past 1.0
-because it adds behaviour to a key rather than fixing a defect — which was a
-consequence of the feature freeze, and that freeze has since been lifted. So
-this is a candidate again rather than a settled deferral; it has not been
-scheduled, and nobody has re-argued it on its own merits.
+**The watch log erases its own "since you were here" line** —
+[#132](https://github.com/jchultarsky/mirador/issues/132), the one open issue.
+`mark_seen()` fires on `FocusGained` as well as `FocusLost`, so returning to the
+dashboard sets "last looked" to *now* and the line marking what arrived while you
+were away is gone in the instant you look for it. Better terminal support makes
+the feature *less* visible, not more; it survives only on a window that never
+took focus. The comment above the call shows it was reasoned about rather than
+overlooked, which is why this wants a decision rather than a patch — mark on
+`FocusLost` only, or render once with the previous value first.
 
-The reason it matters, since that is what this list is for: `promote` is the only
-thing that creates a row, and it is reachable only when the panel is in the
-**top or bottom** row. So a panel alone in a *middle* row can only ever merge
-into a neighbour — going from `[clocks] [watchlog] [notes] [cpu]` to
-`[clocks] [notes] [watchlog] [cpu]` is not expressible with the current keys at
-all, and the row count falls when you try. Found by the owner rearranging a tall
-vertical monitor, whose first reading was that four rows was a cap. It is not:
-six rows build fine and nothing limits the count.
+It also **blocks Phase 3's focus-reporting check**, because the current
+behaviour hides its own evidence.
 
 Everything else from the original product analysis is built — the `.ics` agenda,
 the watch log, and the on-fire signal — along with named themes and the `t`
-picker over them, arrange mode, and in-panel editing for everything the UI can
-change.
+picker over them, arrange mode with row movement, and in-panel editing for
+everything the UI can change.
 
-That is a fact about the *list*, not a claim the program is finished. Two things
-shipped recently have never run in the conditions they were built for, and both
-are recorded where they live rather than here: terminal focus reporting for the
-watch log's rule line could not be verified at all (a headless tmux has no
-attached client to have focus), and the day-rollover entry has only ever been
-exercised by a test that winds the date back. The first real midnight is the
-first real test of it.
+That is a fact about the *list*, not a claim the program is finished. The one
+thing shipped that has never run in the conditions it was built for is the
+**day rollover**: it has only ever been exercised by a test that winds the date
+back, and the first real midnight is the first real test of it.
 
 When something goes back on this list, put the *reason* beside it. Every entry
 that was ever useful here said why it mattered; the one that got quietly dropped
@@ -1283,7 +1308,7 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`0.15.0` is released**, on crates.io and as a GitHub release with binaries
+- **`0.18.1` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. This line goes
   stale every release and is worth a glance before you trust anything near it;
   `git tag --list 'v*' | sort -V | tail -1` is the truth. `0.0.0` is still on
