@@ -20,14 +20,35 @@ use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 /// Keys this panel responds to.
+///
+/// **The order of the primaries decides which survive a narrow panel**, because
+/// [`crate::frame::hint_line`] fills the border in order and stops at the first
+/// that will not fit. The clock's border holds about four.
+///
+/// `Shift+↑↓` is a primary and sits above `d`, which is a deliberate swap made
+/// after #109 shipped. Reordering is the thing that issue was filed for — "no
+/// way to change order of TZ list via kbd" — and as an `extra` it appeared only
+/// in the help overlay, so the border advertised `e edit` and said nothing about
+/// the headline capability. The owner went looking for it in a released build
+/// and concluded it had not been implemented. A key nobody can find is a key
+/// that does not exist.
+///
+/// `a add` rather than `a add zone` for the same reason: the four together need
+/// 42 cells against a budget of `width - 8`, which is 43 on the default layout.
+/// The panel is a list of zones and the word buys nothing.
+///
+/// `d remove` is the one that drops at that width, and it is the right one to
+/// lose: `d` deletes in the task, notes and watchlist panels too, so a reader who
+/// has used any of them already knows it. `s` and the move keys are idiosyncratic
+/// to this panel and guessable from nothing. A wider clock shows all five.
 const BINDINGS: &[Binding] = &[
     Binding::primary("s", "seconds"),
-    Binding::primary("a", "add zone"),
+    Binding::primary("a", "add"),
     Binding::primary("e", "edit"),
+    Binding::primary("Shift+↑↓", "move"),
     Binding::primary("d", "remove"),
     Binding::extra("↑ / ↓", "select a clock"),
     Binding::extra("j / k", "select a clock"),
-    Binding::extra("Shift+↑/↓", "move it"),
     Binding::extra("J / K", "move it"),
     Binding::extra("o", "show file path"),
 ];
@@ -1147,5 +1168,70 @@ mod tests {
             ratatui::crossterm::event::KeyModifiers::NONE,
         ));
         assert_eq!(outcome, KeyOutcome::Ignored);
+    }
+
+    /// The move keys have to reach the *border*, not just the help overlay.
+    ///
+    /// They shipped in 0.17.0 as `extra` bindings, which put them in `?` and
+    /// nowhere else — so the border advertised `e edit` and said nothing about
+    /// reordering, which is the thing #109 was filed for. The owner went looking
+    /// for the feature in a released build and concluded it had not been
+    /// implemented. A key nobody can find is a key that does not exist.
+    ///
+    /// Asserted against the width the default layout actually gives this panel,
+    /// because `hint_line` fills the border in order and stops at the first
+    /// binding that will not fit: this passes or fails on the *order* and the
+    /// *wording* of `BINDINGS`, not merely on the primary flag. Lengthening any
+    /// label above `move` pushes it off, which is how it was invisible before.
+    #[test]
+    fn the_move_keys_reach_the_border_at_the_default_width() {
+        // The clock's frame measures 52 cells at 150x42 — checked by rendering
+        // it — and `render_frame` spends `width - 8` of that on hints.
+        const BUDGET: u16 = 52 - 8;
+        let theme = crate::theme::Theme::default();
+        let hint =
+            crate::frame::hint_line(BINDINGS, &theme, BUDGET).expect("the clock has primaries");
+        let drawn: String = hint.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // The move key, not a substring of another hint. The first version of
+        // this test asked whether the border contained "move" — and `remove`
+        // contains `move`, so it passed with the binding demoted back to an
+        // extra. Match the key itself.
+        assert!(
+            drawn.contains("Shift+↑↓"),
+            "reordering is invisible on the border: {drawn:?}"
+        );
+        assert!(
+            drawn.contains("a add") && drawn.contains("e edit"),
+            "adding and editing must survive alongside it: {drawn:?}"
+        );
+    }
+
+    /// And the order is the thing that decides it, independently of any width.
+    /// `move` must be reached before `remove`, or a narrow panel spends its last
+    /// slot on the key every other list panel already teaches.
+    #[test]
+    fn move_is_offered_to_the_border_before_remove() {
+        let primaries: Vec<&str> = BINDINGS
+            .iter()
+            .filter(|b| b.primary)
+            .map(|b| b.action)
+            .collect();
+        // `expect`, not a bare comparison. `position` returns `Option`, and
+        // `None < Some(_)` is true — so comparing them directly passed when the
+        // binding was not a primary at all, which is the exact regression this
+        // is here to catch.
+        let move_at = primaries
+            .iter()
+            .position(|a| *a == "move")
+            .expect("`move` must be a primary, or it never reaches the border");
+        let remove_at = primaries
+            .iter()
+            .position(|a| *a == "remove")
+            .expect("`remove` is still a primary");
+        assert!(
+            move_at < remove_at,
+            "move must come first; got {primaries:?}"
+        );
     }
 }

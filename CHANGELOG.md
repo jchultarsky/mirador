@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The clock's reorder keys were invisible.** `Shift+↑`/`↓` shipped in 0.17.0 as
+  an `extra` binding, which put it in the help overlay and nowhere else — so the
+  panel border advertised `e edit` and said nothing about reordering, the thing
+  [#109](https://github.com/jchultarsky/mirador/issues/109) was actually asked
+  for. It is now a primary and sits above `d remove` on the border. `a add zone`
+  is shortened to `a add` to make room; `d` still deletes and still appears on a
+  wider panel, and it is the key every other list panel already teaches.
+
 ## [0.18.1] - 2026-07-30
 
 ### Changed
