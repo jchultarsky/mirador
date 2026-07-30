@@ -207,7 +207,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 269 of them, including the ones mirador
+    trip through `toml` discards all 281 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -545,6 +545,23 @@ value is trimmed once, at the end. There is a test.
 
 **Headlines only.** Every feed sampled carries 80–384 characters of article
 prose in `<description>`. A headline is a fact; a summary is somebody's work.
+
+**A link is now actionable, and the "no browser" rule was narrowed to get
+there** (#137). It used to read that no browser is launched at all, "the same
+answer this project gave to playing a sound file". That analogy was carrying
+more than it could: the sound decision was about a *dependency chain* — `rodio`
+reaching `cpal` reaching `alsa-sys`, C headers on every Linux builder — and
+spawning a process costs none of that. What actually settled the sound question
+was `chime_command`: **mirador does not pick the program, you name it.**
+`[news].open_command` is the same answer, empty by default, run directly rather
+than through a shell with the link as its own argument.
+
+`y` copies instead, via OSC 52 — a bare escape sequence, the same shape as the
+chime being a raw `\x07`. Base64 is hand-rolled in `clipboard.rs` rather than
+adding a dependency for twenty lines, which is the `quick-xml` over `rss` trade
+again. **It is write-only, so mirador cannot know whether it worked**, and the
+footer says it sent the link rather than claiming it copied one. Verified end to
+end under tmux with `set-clipboard on`, which does receive it.
 
 **The shipped feeds are science, space and technology.** Choosing outlets for
 general or political news is an editorial act this project should not make on

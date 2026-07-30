@@ -24,9 +24,18 @@
 //! You glance at it the way you glance at the weather glass. Break any of those
 //! and this becomes the feature that was turned down.
 //!
-//! Headlines only, never the summary — see [`crate::feed`] for why. And no
-//! browser is launched: `o` shows the link and you copy it yourself, the same
-//! answer this project gave to playing a sound file.
+//! Headlines only, never the summary — see [`crate::feed`] for why.
+//!
+//! **No browser is launched that the reader did not name.** That is a narrowing
+//! of what this note used to say, which was that no browser is launched at all,
+//! "the same answer this project gave to playing a sound file". The analogy was
+//! doing more work than it could carry: the sound decision was about a
+//! *dependency chain* — `rodio` reaching `cpal` reaching `alsa-sys`, C headers
+//! on every Linux builder — and spawning a process costs none of that. What
+//! actually settled the sound question was `[pomodoro].chime_command`: mirador
+//! does not pick the program, you name it. `[news].open_command` is that same
+//! answer, and empty by default, so the shipped dashboard still launches
+//! nothing.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -46,8 +55,10 @@ use crate::frame::{Binding, FRAME_WIDTH};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 
 const BINDINGS: &[Binding] = &[
-    Binding::primary("r", "refresh"),
     Binding::primary("o", "show link"),
+    Binding::primary("y", "copy"),
+    Binding::primary("↵", "open"),
+    Binding::primary("r", "refresh"),
     Binding::extra("↑ / ↓", "select"),
     Binding::extra("j / k", "select"),
 ];
@@ -81,6 +92,13 @@ pub struct NewsPanel {
     selected: ListState,
     /// Set by `o`; the link of whatever is selected.
     showing_link: Option<String>,
+    /// What `Enter` runs, with the link appended. Empty means nothing runs.
+    open_command: Vec<String>,
+    /// What `y` or `Enter` just did, shown in the footer until the next key.
+    ///
+    /// Separate from `failing`, which belongs to the fetch: a clipboard that
+    /// went nowhere says nothing about whether the feeds are readable.
+    action: Option<String>,
     /// Stories drawn last frame, for clamping the selection.
     drawn: usize,
     /// The stories as of the last time the fetch thread published.
@@ -118,6 +136,7 @@ impl NewsPanel {
             .map(|feed| (feed.name.clone(), feed.url.clone()))
             .collect();
         let per_feed = config.per_feed.clamp(1, 20);
+        let open_command = config.open_command.clone();
 
         let shared = (
             Arc::clone(&state),
@@ -149,10 +168,81 @@ impl NewsPanel {
             seen: 0,
             selected: ListState::default(),
             showing_link: None,
+            open_command,
+            action: None,
             drawn: 0,
             shown: Vec::new(),
             fetched: None,
             failing: None,
+        }
+    }
+
+    /// The link of the story the cursor is on, or the top one when it has not
+    /// been placed — the same rule `o` follows, so all three keys act on the
+    /// same story.
+    fn link_under_cursor(&mut self) -> Option<String> {
+        let index = self.selected.selected().unwrap_or(0);
+        let link = self
+            .shown
+            .get(index)
+            .map(|story| story.link.clone())
+            .filter(|link| !link.is_empty())?;
+        self.selected.select(Some(index));
+        Some(link)
+    }
+
+    /// Ask the terminal to put the link on the clipboard.
+    fn copy_link(&mut self) {
+        let Some(link) = self.link_under_cursor() else {
+            return;
+        };
+        self.action = Some(match crate::clipboard::copy(&link) {
+            // Deliberately not "copied". OSC 52 is write-only — the terminal
+            // may ignore it, and many do by default — so mirador cannot know
+            // whether the clipboard changed. What it can say is what it did.
+            Ok(()) => "sent to the clipboard — paste to check".to_string(),
+            Err(e) => format!("could not reach the terminal: {e}"),
+        });
+    }
+
+    /// Run `[news].open_command` with the link appended.
+    fn open_link(&mut self) {
+        let Some(link) = self.link_under_cursor() else {
+            return;
+        };
+        let Some((program, rest)) = self.open_command.split_first() else {
+            // Not an error. Nothing is configured, which is the default and a
+            // perfectly good state to be in; the reader just asked for
+            // something that has not been switched on.
+            self.action = Some("set [news].open_command to open links".to_string());
+            return;
+        };
+
+        // Run directly, never through a shell, so nothing in a URL can be taken
+        // as shell syntax — the same reasoning as `[pomodoro].chime_command`,
+        // and the link goes on as one argument rather than being interpolated.
+        match std::process::Command::new(program)
+            .args(rest)
+            .arg(&link)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                // Just "opened". The program is in the reader's own config, so
+                // naming it here spends the footer on something they already
+                // know — and a configured path can be long enough to wrap.
+                // The failure case below does name it, which is when it matters.
+                self.action = Some("opened".to_string());
+                // Reaped on a thread that can take as long as it likes. A
+                // browser outlives the keypress by a long way, and without this
+                // the zombies pile up one per link.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => self.action = Some(format!("{program}: {e}")),
         }
     }
 
@@ -224,6 +314,7 @@ impl Panel for NewsPanel {
         // Nothing here dismisses, hides or marks a story. There is no state to
         // keep up with, which is the point.
         self.showing_link = None;
+        self.action = None;
         match key.code {
             KeyCode::Char('r') => {
                 if let Ok(mut flag) = self.refresh.lock() {
@@ -239,9 +330,9 @@ impl Panel for NewsPanel {
                 // complaint that issue was filed about: the link was both
                 // unreachable at first press and camouflaged once reached.
                 let index = self.selected.selected().unwrap_or(0);
-                // Shown, not opened. Launching a browser means talking to the
-                // platform — `open`, `xdg-open`, `start` — which is the same
-                // decision as playing a sound file and gets the same answer.
+                // Shown. Opening is `Enter`, and only when the reader has
+                // named a program in `[news].open_command` — mirador still
+                // launches nothing of its own choosing.
                 self.showing_link = self
                     .shown
                     .get(index)
@@ -254,6 +345,8 @@ impl Panel for NewsPanel {
                     self.selected.select(Some(index));
                 }
             }
+            KeyCode::Char('y') => self.copy_link(),
+            KeyCode::Enter => self.open_link(),
             KeyCode::Down | KeyCode::Char('j') => {
                 crate::selection::down(&mut self.selected, 1, self.drawn);
             }
@@ -293,12 +386,12 @@ impl Panel for NewsPanel {
         // URL unreadable, uncopyable, and (worse) linkified by the terminal as
         // far as the ellipsis, so clicking it went somewhere that did not exist.
         // Bounded at half the panel so a long link cannot swallow the stories.
-        let foot_rows = match &self.showing_link {
-            Some(link) => u16::try_from(link_lines(link, area.width).len())
-                .unwrap_or(u16::MAX)
-                .clamp(1, (area.height / 2).max(1)),
-            None => 1.min(area.height),
-        };
+        let foot_rows = footer_rows(
+            self.action.as_deref(),
+            self.showing_link.as_deref(),
+            area.width,
+            area.height,
+        );
         let footer = Rect {
             y: area.y + area.height.saturating_sub(foot_rows),
             height: foot_rows,
@@ -310,28 +403,12 @@ impl Panel for NewsPanel {
         };
 
         if self.shown.is_empty() {
-            let message = match &self.failing {
-                Some(why) => vec![
-                    Line::from(Span::styled(
-                        "Cannot read the feeds",
-                        Style::default()
-                            .fg(theme.error)
-                            .add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(Span::styled(
-                        crate::grid::truncate(why, width),
-                        Style::default().fg(theme.muted),
-                    )),
-                ],
-                None if self.fetched.is_some() => vec![Line::from(Span::styled(
-                    "No stories.",
-                    Style::default().fg(theme.muted),
-                ))],
-                None => vec![Line::from(Span::styled(
-                    "Reading…",
-                    Style::default().fg(theme.muted),
-                ))],
-            };
+            let message = empty_message(
+                self.failing.as_deref(),
+                self.fetched.is_some(),
+                width,
+                theme,
+            );
             frame.render_widget(Paragraph::new(message), body);
             self.drawn = 0;
             return;
@@ -393,6 +470,21 @@ impl Panel for NewsPanel {
         // A `(text, style)` pair rather than a `Span`, because the link case is
         // multi-line and a `Span` holding newlines renders as one line with the
         // breaks swallowed. `Paragraph::new(String)` splits on them properly.
+        // What a key just did outranks everything: it is the answer to a
+        // question the reader asked a moment ago, and it is gone on the next
+        // keypress. The link, the fetch failure and the age are all standing
+        // state that will still be there afterwards.
+        if let Some(action) = &self.action
+            && footer.height > 0
+        {
+            frame.render_widget(
+                Paragraph::new(crate::grid::wrapped(action, area.width))
+                    .style(Style::default().fg(theme.accent)),
+                footer,
+            );
+            return;
+        }
+
         let (foot, foot_style) = match (&self.showing_link, &self.failing) {
             // Wrapped by `grid`, never handed to ratatui's wrapper, and never
             // truncated: the whole point is that the reader can read and copy
@@ -424,6 +516,62 @@ impl Panel for NewsPanel {
         if footer.height > 0 {
             frame.render_widget(Paragraph::new(foot).style(foot_style), footer);
         }
+    }
+}
+
+/// What the panel says when it has no stories.
+///
+/// Three different states, and telling them apart is the point: a failing fetch
+/// is a problem, "no stories" is a quiet day, and "reading" is neither. One
+/// message for all three would leave a reader unable to tell a broken feed from
+/// an empty one.
+fn empty_message(
+    failing: Option<&str>,
+    has_read: bool,
+    width: usize,
+    theme: &crate::theme::Theme,
+) -> Vec<Line<'static>> {
+    match failing {
+        Some(why) => vec![
+            Line::from(Span::styled(
+                "Cannot read the feeds",
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                crate::grid::truncate(why, width),
+                Style::default().fg(theme.muted),
+            )),
+        ],
+        None if has_read => vec![Line::from(Span::styled(
+            "No stories.",
+            Style::default().fg(theme.muted),
+        ))],
+        None => vec![Line::from(Span::styled(
+            "Reading…",
+            Style::default().fg(theme.muted),
+        ))],
+    }
+}
+
+/// How many rows the footer needs.
+///
+/// Each case is measured by the same rule that draws it. A wrapped message sized
+/// as a single row loses its tail, which is the bug #108 fixed for the link and
+/// which was waiting to be reintroduced beside it the moment a second kind of
+/// footer text existed.
+///
+/// Bounded at half the panel either way, so nothing in the footer can swallow
+/// the stories.
+fn footer_rows(action: Option<&str>, link: Option<&str>, width: u16, height: u16) -> u16 {
+    let cap = (height / 2).max(1);
+    match (action, link) {
+        (Some(action), _) => crate::grid::wrapped_height(action, width).clamp(1, cap),
+        (None, Some(link)) => u16::try_from(link_lines(link, width).len())
+            .unwrap_or(u16::MAX)
+            .clamp(1, cap),
+        (None, None) => 1.min(height),
     }
 }
 
@@ -994,6 +1142,105 @@ mod tests {
             panel.selected.selected(),
             Some(0),
             "and mark the story it belongs to"
+        );
+    }
+
+    /// `Enter` must not launch anything when nothing is configured. That is the
+    /// default state, and mirador shipping a browser launch nobody asked for is
+    /// the decision this feature was careful not to reverse.
+    #[test]
+    fn enter_launches_nothing_until_a_command_is_named() {
+        let mut panel = loaded_panel();
+        assert!(panel.open_command.is_empty(), "the default is empty");
+
+        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(
+            panel.action.as_deref(),
+            Some("set [news].open_command to open links"),
+            "it should say how to switch it on, not fail silently"
+        );
+    }
+
+    /// And when one *is* named, the link goes on as a separate argument. Never
+    /// interpolated into a string and never through a shell — a URL is full of
+    /// characters a shell would take an interest in.
+    #[test]
+    fn a_named_command_runs_with_the_link_as_its_own_argument() {
+        let mut panel = loaded_panel();
+        // `true` exists everywhere and ignores its arguments, so this checks the
+        // spawn path without depending on a browser.
+        panel.open_command = vec!["true".into()];
+
+        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!(
+            panel.action.as_deref(),
+            Some("opened"),
+            "the spawn should have succeeded; got {:?}",
+            panel.action
+        );
+    }
+
+    /// A command that is not there has to say so rather than looking like it
+    /// worked. The reader named it; only they can fix it.
+    #[test]
+    fn a_command_that_does_not_exist_reports_itself() {
+        let mut panel = loaded_panel();
+        panel.open_command = vec!["mirador-no-such-program".into()];
+
+        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+        let said = panel.action.clone().unwrap_or_default();
+        assert!(
+            said.starts_with("mirador-no-such-program:"),
+            "the failure should name the program: {said:?}"
+        );
+    }
+
+    /// `y` reports what mirador did, not what the terminal did. OSC 52 is
+    /// write-only, so "copied" would be a claim nothing can stand behind — many
+    /// terminals refuse the sequence and tmux needs `set-clipboard on`.
+    #[test]
+    fn copying_does_not_claim_more_than_it_knows() {
+        let mut panel = loaded_panel();
+        panel.handle_key(KeyEvent::from(KeyCode::Char('y')));
+
+        let said = panel.action.clone().unwrap_or_default();
+        assert!(
+            !said.starts_with("copied"),
+            "the terminal may have ignored it; do not assert success: {said:?}"
+        );
+        assert!(
+            said.contains("clipboard"),
+            "but it should say what was attempted: {said:?}"
+        );
+    }
+
+    /// All three keys act on the same story, so the link that is copied or
+    /// opened is the one the cursor marks — #114's complaint, one layer up.
+    #[test]
+    fn copy_and_open_act_on_the_story_the_cursor_marks() {
+        let mut panel = loaded_panel();
+        // The cursor is bounded by what was drawn, so the panel has to have been
+        // drawn before it can move at all.
+        draw(&mut panel, 46, 20);
+        panel.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        let marked = panel.selected.selected().expect("cursor placed");
+
+        panel.handle_key(KeyEvent::from(KeyCode::Char('o')));
+        assert_eq!(
+            panel.showing_link.as_deref(),
+            Some(panel.shown[marked].link.as_str()),
+            "`o` shows the marked story"
+        );
+
+        panel.open_command = vec!["true".into()];
+        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(
+            panel.selected.selected(),
+            Some(marked),
+            "`Enter` must not move the cursor to a different story"
         );
     }
 
