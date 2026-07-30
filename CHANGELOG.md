@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-07-30
+
+The first round of bug reports from people who are not the author, and one
+defect found while confirming one of them.
+
+### Fixed
+
+- **Hiding the seconds left them showing in the zone table.** `s` is bound to
+  "seconds" and the clock is one panel, but the secondary zone list formatted
+  from `[clocks].time_format` and never consulted the setting — so `s` gave you
+  a clock with no seconds directly above a table that still had them. Your own
+  format survives it: the seconds specifier is removed from *your* format rather
+  than swapped for a fixed one, so `%I:%M:%S %p` stays a 12-hour clock. Reported
+  by email; [#106](https://github.com/jchultarsky/mirador/issues/106).
+
+- **The `+1d` / `-1d` day marker was silently truncated out of the zone table.**
+  The column held the time *and* the marker in nine cells, and `02:43:48 +1d` is
+  twelve — so the marker was cut every time a zone was on a different date,
+  which is every time it matters. It is the half of that row that carries the
+  warning, and the reason it exists is that a day boundary is the thing people
+  get wrong. Found while confirming the above, not reported;
+  [#107](https://github.com/jchultarsky/mirador/issues/107).
+
+- **Pressing `o` on a news story cut the URL off.** It was truncated to the panel
+  width, so the link could not be read or copied — and the terminal linkified the
+  visible text, which now ended in an ellipsis, so clicking it went to a URL that
+  does not exist. The footer now takes the rows the whole link needs. Reported by
+  email; [#108](https://github.com/jchultarsky/mirador/issues/108).
+
 ## [0.16.1] - 2026-07-29
 
 A hotfix for one reported bug, and a second one of the same shape found beside
@@ -1098,7 +1127,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.2...HEAD
+[0.16.2]: https://github.com/jchultarsky/mirador/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/jchultarsky/mirador/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/jchultarsky/mirador/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/jchultarsky/mirador/compare/v0.14.1...v0.15.0
