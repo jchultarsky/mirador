@@ -298,6 +298,12 @@ rejected at startup and would leave you with a config that will not open.
 `mirador --migrate-config` is still there for keys renamed between versions,
 and leaves a backup beside the original.
 
+If a config has gone past fixing, `mirador --reset-config` writes the shipped
+defaults over it and copies the old one to `config.toml.bak` first. It says what
+it is about to do and waits for a `y`, and it will not run at all without a
+terminal to ask on unless you add `--yes`. An existing backup is never
+overwritten, so resetting twice still leaves your original recoverable.
+
 ## The panels
 
 Twelve widgets, each answering one question. Put the ones you want in the

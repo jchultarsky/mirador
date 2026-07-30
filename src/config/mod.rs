@@ -173,6 +173,43 @@ impl Config {
         Ok(Self::default_data_dir()?.join("todos.toml"))
     }
 
+    /// Replace the config at `path` with the shipped defaults, keeping the old
+    /// one. Returns where the old one went, or `None` if there was no file to
+    /// keep.
+    ///
+    /// **This destroys work**, which is why it takes a backup rather than
+    /// overwriting and why the caller is expected to have asked first. The
+    /// reader reaching for it is usually stuck rather than finished: `[layout]`
+    /// is the part people curate by hand, and a config broken by one typo still
+    /// holds an evening's arrangement.
+    ///
+    /// Backups follow `migrate`'s convention — `config.toml.bak` beside the
+    /// original — with one deliberate difference: an existing backup is never
+    /// clobbered. Resetting twice is exactly what a stuck user does, and with a
+    /// fixed name the second run would replace their real config with the
+    /// defaults written by the first, which is the one outcome this whole
+    /// function exists to prevent.
+    pub fn reset(path: &Path) -> Result<Option<PathBuf>> {
+        let backup = match path.try_exists() {
+            Ok(true) => {
+                let to = free_backup_path(path);
+                std::fs::copy(path, &to).with_context(|| {
+                    format!("backing up {} to {}", path.display(), to.display())
+                })?;
+                Some(to)
+            }
+            // Nothing to keep. Writing the defaults is still the right outcome:
+            // the reader asked for a config they can edit, and not having one is
+            // a reason to write it rather than to refuse.
+            Ok(false) => None,
+            Err(e) => anyhow::bail!("could not check whether {} exists: {e}", path.display()),
+        };
+
+        crate::store::write_atomic(path, DEFAULT_CONFIG)
+            .with_context(|| format!("writing default config to {}", path.display()))?;
+        Ok(backup)
+    }
+
     /// Platform data directory for mirador's own files.
     fn default_data_dir() -> Result<PathBuf> {
         let dir =
@@ -404,6 +441,30 @@ impl Config {
     }
 }
 
+/// A backup path beside `path` that nothing is using yet.
+///
+/// `config.toml.bak` first, matching `migrate`, then `.bak.2`, `.bak.3` and so
+/// on. The counter is not tidiness: without it a second reset would overwrite
+/// the first backup with the defaults the first reset had just written, and the
+/// user's real config would be gone with no way back.
+///
+/// Racy in principle — the name is checked and then written — but the loser of
+/// that race is a person running two resets at the same instant, and the bound
+/// stops a directory of stale backups from making this loop for ever.
+fn free_backup_path(path: &Path) -> PathBuf {
+    let first = path.with_extension("toml.bak");
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..1000 {
+        let candidate = path.with_extension(format!("toml.bak.{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
 /// Turn a parse failure into an error that says how to fix it.
 ///
 /// The common case by far is a config written by an older version: mirador
@@ -453,6 +514,89 @@ fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch directory named for the calling test, so the reset tests do
+    /// not share files with each other or with a parallel run.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mirador-reset-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resetting_writes_the_defaults_and_keeps_the_old_config() {
+        let dir = scratch("keeps");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "theme = \"nord\"\n# an evening's work\n").unwrap();
+
+        let backup = Config::reset(&path)
+            .unwrap()
+            .expect("a backup must be kept");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "theme = \"nord\"\n# an evening's work\n",
+            "the backup must be the config that was replaced, byte for byte"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The failure this guards is the one a stuck user actually walks into:
+    /// reset once, still stuck, reset again. With a fixed `.bak` name the
+    /// second run would copy the *defaults* over the backup and the real config
+    /// would be gone for good.
+    #[test]
+    fn a_second_reset_does_not_destroy_the_first_backup() {
+        let dir = scratch("twice");
+        let path = dir.join("config.toml");
+        let original = "theme = \"nord\"\n# irreplaceable\n";
+        std::fs::write(&path, original).unwrap();
+
+        let first = Config::reset(&path).unwrap().expect("first backup");
+        let second = Config::reset(&path).unwrap().expect("second backup");
+
+        assert_ne!(first, second, "the second reset must not reuse the name");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            original,
+            "the user's real config must still be recoverable after two resets"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&second).unwrap(),
+            DEFAULT_CONFIG,
+            "the second backup is what the first reset wrote"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Asking for a config where there is none is a reason to write one, not to
+    /// fail: the reader wants something to edit either way.
+    #[test]
+    fn resetting_with_no_config_yet_writes_one_and_reports_no_backup() {
+        let dir = scratch("absent");
+        let path = dir.join("config.toml");
+
+        assert!(Config::reset(&path).unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whatever it writes has to be a config mirador can actually load —
+    /// otherwise the recovery command leaves the user exactly as stuck.
+    #[test]
+    fn what_a_reset_writes_is_a_loadable_config() {
+        let dir = scratch("loadable");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "this is not = = valid toml\n").unwrap();
+
+        Config::reset(&path).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        toml::from_str::<Config>(&text).expect("a reset config must load");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn shipped_default_config_parses() {
