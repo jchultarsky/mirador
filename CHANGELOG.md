@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A story's link no longer hides in plain sight.** `o` drew it in the same
+  verdigris every masthead wears, so it was camouflaged by repetition and
+  appeared without drawing the eye. It is now brass — the dashboard's attention
+  colour — and prefixed `↳`, with wrapped lines aligned under it.
+  [#117](https://github.com/jchultarsky/mirador/issues/117).
+
+### Fixed
+
+- **`o` did nothing until you moved the cursor.** The selection starts empty, so
+  on a freshly focused news panel the key was silently ignored while the border
+  advertised `o show link` regardless. It now shows the top story's link and
+  marks the story it came from.
+
 ## [0.18.0] - 2026-07-30
 
 ### Added

@@ -231,16 +231,28 @@ impl Panel for NewsPanel {
                 }
             }
             KeyCode::Char('o') => {
-                let stories = &self.shown;
+                // The top story when the cursor has not been placed. The
+                // selection starts empty, so `o` used to do nothing at all on a
+                // freshly focused panel — the border advertises `o show link`
+                // unconditionally, and the key silently ignored the first press.
+                // Found while measuring for #117, and it compounded the
+                // complaint that issue was filed about: the link was both
+                // unreachable at first press and camouflaged once reached.
+                let index = self.selected.selected().unwrap_or(0);
                 // Shown, not opened. Launching a browser means talking to the
                 // platform — `open`, `xdg-open`, `start` — which is the same
                 // decision as playing a sound file and gets the same answer.
                 self.showing_link = self
-                    .selected
-                    .selected()
-                    .and_then(|index| stories.get(index))
+                    .shown
+                    .get(index)
                     .map(|story| story.link.clone())
                     .filter(|link| !link.is_empty());
+                // Mark the story the link came from. #114's point exactly: a
+                // link belonging to no story the reader can identify is the
+                // thing that made the footer confusing in the first place.
+                if self.showing_link.is_some() {
+                    self.selected.select(Some(index));
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 crate::selection::down(&mut self.selected, 1, self.drawn);
@@ -282,9 +294,9 @@ impl Panel for NewsPanel {
         // far as the ellipsis, so clicking it went somewhere that did not exist.
         // Bounded at half the panel so a long link cannot swallow the stories.
         let foot_rows = match &self.showing_link {
-            Some(link) => {
-                crate::grid::wrapped_height(link, area.width).clamp(1, (area.height / 2).max(1))
-            }
+            Some(link) => u16::try_from(link_lines(link, area.width).len())
+                .unwrap_or(u16::MAX)
+                .clamp(1, (area.height / 2).max(1)),
             None => 1.min(area.height),
         };
         let footer = Rect {
@@ -385,9 +397,15 @@ impl Panel for NewsPanel {
             // Wrapped by `grid`, never handed to ratatui's wrapper, and never
             // truncated: the whole point is that the reader can read and copy
             // the entire URL.
+            // Brass, not `theme.label`. Verdigris is the masthead colour — every
+            // `NASA` and `ARS TECHNICA` above wears it — so a link in it was
+            // camouflaged by repetition and appeared without drawing the eye.
+            // The owner missed it, which is what #117 was filed about. Brass is
+            // the dashboard's attention colour and is used nowhere else in this
+            // panel, so it cannot be mistaken for anything already there.
             (Some(link), _) => (
-                crate::grid::wrapped(link, area.width),
-                Style::default().fg(theme.label),
+                link_lines(link, area.width).join("\n"),
+                Style::default().fg(theme.accent),
             ),
             (None, Some(_)) => (
                 format!(
@@ -407,6 +425,37 @@ impl Panel for NewsPanel {
             frame.render_widget(Paragraph::new(foot).style(foot_style), footer);
         }
     }
+}
+
+/// The link as the footer draws it: `↳` on the first row, aligned under it after
+/// that.
+///
+/// `↳` (U+21B3) rather than a link emoji, and the reason is invariant 10: several
+/// obvious emoji report width 1 to `unicode-width` and draw two cells, which
+/// silently shifts everything after them. This one measures 1 and draws 1, and it
+/// says "belongs to the thing above", which is the relationship being shown.
+///
+/// The height of the footer is taken from this same function rather than
+/// measured separately. Wrapping and measuring drifted apart once already, in
+/// `grid` — the height counted an over-long word by subtracting the width a row
+/// at a time, which is only right when every glyph is one cell — and a footer
+/// sized by one rule and drawn by another would clip the end off a link. One
+/// function, two callers, agreement by construction.
+fn link_lines(link: &str, width: u16) -> Vec<String> {
+    const MARK: &str = "↳ ";
+    let indent = " ".repeat(crate::grid::display_width(MARK));
+    let avail = usize::from(width).saturating_sub(indent.len()).max(1);
+    crate::grid::wrap(link, avail)
+        .into_iter()
+        .enumerate()
+        .map(|(row, line)| {
+            if row == 0 {
+                format!("{MARK}{line}")
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect()
 }
 
 /// One block of lines per story: its source and age, then the wrapped headline.
@@ -826,6 +875,128 @@ mod tests {
         assert_eq!(how_many_fit(&[], 10), 0, "nothing to fit");
     }
 
+    /// #117: the link was styled `theme.label` — the same verdigris every
+    /// masthead wears — so it was camouflaged by repetition and appeared without
+    /// drawing the eye. The owner missed it entirely.
+    ///
+    /// Brass is the dashboard's attention colour and is used nowhere else in
+    /// this panel.
+    ///
+    /// **Read off the rendered cells**, not from the theme. The first version of
+    /// this test compared `theme.accent` against the masthead's colour and never
+    /// looked at what the panel drew — so it passed with the old `theme.label`
+    /// pasted back in. A test whose assertion is about a fact the bug does not
+    /// change is the pattern this repo keeps finding; caught here by reverting
+    /// the colour and watching it stay green.
+    #[test]
+    fn the_link_is_not_the_colour_every_masthead_already_wears() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut panel = loaded_panel();
+        panel.handle_key(KeyEvent::from(KeyCode::Char('o')));
+
+        let (w, h) = (46u16, 10u16);
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // The row carrying the mark is the link's; the mastheads are above it.
+        let link_row = (0..h)
+            .find(|y| (0..w).any(|x| buffer.cell((x, *y)).is_some_and(|c| c.symbol() == "↳")))
+            .expect("the link should be on screen, marked with ↳");
+        let link_colour = buffer
+            .cell((1, link_row))
+            .and_then(|c| c.style().fg)
+            .expect("the link is coloured");
+
+        let masthead_colour = masthead(&panel.shown[0], &config.theme)
+            .first()
+            .and_then(|span| span.style.fg)
+            .expect("the masthead is coloured");
+
+        assert_ne!(
+            link_colour, masthead_colour,
+            "the link is drawn in the masthead's own colour, so it reads as more \
+             furniture — which is what #117 was filed about"
+        );
+        assert_eq!(
+            link_colour, config.theme.accent,
+            "and it should be brass, the dashboard's attention colour"
+        );
+    }
+
+    /// The mark is `↳`, and it has to measure what it draws — invariant 10. A
+    /// glyph reporting width 1 and drawing 2 shifts everything after it.
+    #[test]
+    fn the_link_mark_is_one_cell_wide() {
+        assert_eq!(crate::grid::display_width("↳"), 1);
+    }
+
+    /// The footer's height is taken from the same function that draws it.
+    /// Measuring separately is how `grid`'s wrap and height drifted apart, and
+    /// here it would clip the tail off a link — the exact bug #108 fixed.
+    #[test]
+    fn the_link_is_never_clipped_by_a_footer_sized_from_a_different_rule() {
+        let link = "https://arstechnica.com/science/2026/07/\
+                    if-a-quantum-computer-outperforms-normal-ones-can-you-tell/";
+        for width in 20..80u16 {
+            let lines = link_lines(link, width);
+            for line in &lines {
+                assert!(
+                    crate::grid::display_width(line) <= usize::from(width),
+                    "a link row overflowed at width {width}: {line:?}"
+                );
+            }
+            // Every character of the link survives, in order.
+            let rejoined: String = lines
+                .iter()
+                .map(|l| l.trim_start_matches(['↳', ' ']))
+                .collect();
+            assert_eq!(
+                rejoined.replace('-', ""),
+                link.replace(['-', ' '], ""),
+                "the link lost characters at width {width}"
+            );
+        }
+    }
+
+    /// The selection starts empty, so `o` silently did nothing on a freshly
+    /// focused panel while the border advertised `o show link` regardless.
+    #[test]
+    fn o_shows_the_top_story_before_the_cursor_has_been_moved() {
+        let mut panel = loaded_panel();
+        assert_eq!(panel.selected.selected(), None, "nothing selected yet");
+
+        panel.handle_key(KeyEvent::from(KeyCode::Char('o')));
+
+        assert_eq!(
+            panel.showing_link.as_deref(),
+            Some(panel.shown[0].link.as_str()),
+            "the first press should show the top story's link"
+        );
+        assert_eq!(
+            panel.selected.selected(),
+            Some(0),
+            "and mark the story it belongs to"
+        );
+    }
+
     /// A panel holding twelve stories, the number the shipped config produces.
     fn loaded_panel() -> NewsPanel {
         let mut panel = NewsPanel::new(&NewsConfig {
@@ -833,7 +1004,10 @@ mod tests {
             ..NewsConfig::default()
         });
         panel.shown = (0..12)
-            .map(|n| story("NASA", &format!("Story number {n}"), n * 10))
+            .map(|n| Story {
+                link: format!("https://example.test/story-{n}"),
+                ..story("NASA", &format!("Story number {n}"), n * 10)
+            })
             .collect();
         panel
     }
