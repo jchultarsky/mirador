@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-30
+
 ### Added
 
 - **The clock's zone list can be reordered, edited and located.** `Shift+↑`/`↓`
@@ -1173,7 +1175,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.16.3...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/jchultarsky/mirador/compare/v0.16.3...v0.17.0
 [0.16.3]: https://github.com/jchultarsky/mirador/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/jchultarsky/mirador/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/jchultarsky/mirador/compare/v0.16.0...v0.16.1
