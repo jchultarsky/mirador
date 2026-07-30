@@ -10,7 +10,11 @@
 //!
 //! - **However many stories fit, and no more.** There is no scrolling and no
 //!   "more below". You cannot work through it, because there is nothing to work
-//!   through.
+//!   through. `render` keeps only the stories whose whole block fits the body,
+//!   so the selection cannot leave the viewport and `List` has nothing to
+//!   scroll. This was documentation rather than behaviour until #118 — every
+//!   story became an item and the panel scrolled through all twelve — and the
+//!   tests at the foot of this file are what stop it drifting back.
 //! - **No count anywhere.** Not in the frame, not in the body.
 //! - **Nothing is new.** No unread state, no marker, no reordering to put fresh
 //!   items on top beyond the newest-first order they already have.
@@ -321,25 +325,28 @@ impl Panel for NewsPanel {
             return;
         }
 
-        // Each story is its source and age on one line, the headline wrapped
-        // under it, and a blank line after. Air rather than rules: a separator
-        // between every story would be more furniture than content at this
-        // width, and the panel is meant to read like a page.
-        let mut items: Vec<ListItem> = Vec::new();
-        let last = self.shown.len().saturating_sub(1);
-        for (index, story) in self.shown.iter().enumerate() {
-            let mut lines = vec![Line::from(masthead(story, theme))];
-            for line in crate::grid::wrap(&story.title, width) {
-                lines.push(Line::from(Span::styled(
-                    line,
-                    Style::default().fg(theme.text),
-                )));
+        let blocks = story_blocks(&self.shown, width, theme);
+        let budget = usize::from(body.height);
+        let mut keep = how_many_fit(&blocks, budget);
+        // A headline too tall for the panel would otherwise leave it blank with
+        // stories loaded, which reads as broken rather than as short. Show the
+        // first one clipped instead: `List` draws only items that fit entirely,
+        // so the clipping has to happen here.
+        let clipped = keep == 0 && budget > 0;
+        if clipped {
+            keep = 1;
+        }
+
+        let mut items: Vec<ListItem> = Vec::with_capacity(keep);
+        for (index, mut lines) in blocks.into_iter().take(keep).enumerate() {
+            if clipped {
+                lines.truncate(budget);
             }
             // The gap goes *between* stories, not after every one. A trailing
             // blank on the last item costs a whole row, and `List` draws only
             // items that fit entirely — so that row was routinely the
             // difference between two stories and three.
-            if index != last {
+            if index + 1 != keep {
                 lines.push(Line::from(""));
             }
             items.push(ListItem::new(lines));
@@ -400,6 +407,65 @@ impl Panel for NewsPanel {
             frame.render_widget(Paragraph::new(foot).style(foot_style), footer);
         }
     }
+}
+
+/// One block of lines per story: its source and age, then the wrapped headline.
+///
+/// The blank line that separates stories is *not* here — it belongs between
+/// blocks rather than to any one of them, and [`how_many_fit`] has to count it
+/// that way. Air rather than rules: a separator between every story would be
+/// more furniture than content at this width, and the panel is meant to read
+/// like a page.
+fn story_blocks(
+    stories: &[Story],
+    width: usize,
+    theme: &crate::theme::Theme,
+) -> Vec<Vec<Line<'static>>> {
+    stories
+        .iter()
+        .map(|story| {
+            let mut lines = vec![Line::from(masthead(story, theme))];
+            for line in crate::grid::wrap(&story.title, width) {
+                lines.push(Line::from(Span::styled(
+                    line,
+                    Style::default().fg(theme.text),
+                )));
+            }
+            lines
+        })
+        .collect()
+}
+
+/// How many of `blocks` fit whole in `budget` rows.
+///
+/// **This is where "however many stories fit, and no more" is enforced**, and
+/// for a long time nothing was: every story became a `ListItem`, so `List`
+/// scrolled the moment the selection left the viewport. Twelve stories with
+/// three visible made nine of them reachable only by scrolling, which is a feed
+/// you work through — the thing this panel exists to not be. Filed as #118 after
+/// being found by driving the panel rather than by reading it.
+///
+/// Bounding the *list* rather than clamping the selection afterwards is the
+/// point. The cursor is limited to what was built, so it cannot walk off the
+/// screen and `List` is never given anything to scroll. One rule, one place.
+///
+/// A story after the first is preceded by a blank line, so `n` stories cost
+/// their own rows plus `n - 1` separators.
+///
+/// This stays a floor rather than a ceiling, per the config rule: a taller panel
+/// shows more, up to whatever the feeds provided.
+fn how_many_fit(blocks: &[Vec<Line<'static>>], budget: usize) -> usize {
+    let mut used = 0usize;
+    let mut keep = 0usize;
+    for block in blocks {
+        let cost = block.len() + usize::from(keep > 0);
+        if used + cost > budget {
+            break;
+        }
+        used += cost;
+        keep += 1;
+    }
+    keep
 }
 
 /// `NASA · 2h`, in the engraved-label face.
@@ -731,5 +797,172 @@ mod tests {
         ]);
         let titles: Vec<&str> = ordered.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(titles, ["newer", "older", "undated"]);
+    }
+
+    /// The fitting rule on its own, without a terminal in the way.
+    ///
+    /// `n` stories cost their own rows plus `n - 1` blank separators, so the
+    /// arithmetic is worth pinning directly — a test that only goes through
+    /// `render` cannot say whether an off-by-one is in the counting or the
+    /// drawing.
+    #[test]
+    fn the_fitting_rule_counts_the_separators_between_stories() {
+        let block = |rows: usize| vec![Line::from(""); rows];
+        let three = vec![block(2), block(2), block(2)];
+
+        assert_eq!(how_many_fit(&three, 2), 1, "one story, no separator");
+        assert_eq!(
+            how_many_fit(&three, 4),
+            1,
+            "two need a separator: 2+1+2 = 5"
+        );
+        assert_eq!(how_many_fit(&three, 5), 2, "exactly two");
+        assert_eq!(how_many_fit(&three, 7), 2, "three need 2+1+2+1+2 = 8");
+        assert_eq!(how_many_fit(&three, 8), 3, "exactly three");
+        assert_eq!(how_many_fit(&three, 99), 3, "never more than there are");
+
+        assert_eq!(how_many_fit(&three, 0), 0, "no room, no stories");
+        assert_eq!(how_many_fit(&three, 1), 0, "not even one block fits");
+        assert_eq!(how_many_fit(&[], 10), 0, "nothing to fit");
+    }
+
+    /// A panel holding twelve stories, the number the shipped config produces.
+    fn loaded_panel() -> NewsPanel {
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = (0..12)
+            .map(|n| story("NASA", &format!("Story number {n}"), n * 10))
+            .collect();
+        panel
+    }
+
+    /// Draw the panel and return what reached the screen.
+    fn draw(panel: &mut NewsPanel, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// **The panel shows what fits and nothing more.**
+    ///
+    /// #118: it did not. Every story became a `ListItem`, so `List` scrolled as
+    /// soon as the selection left the viewport — twelve stories with three
+    /// visible made nine reachable only by scrolling. That is a feed you work
+    /// through, which is precisely the thing this panel exists to not be, and
+    /// the module header claimed the opposite for months because nothing here
+    /// checked.
+    ///
+    /// If this fails, the question is not how to fix the test.
+    #[test]
+    fn the_panel_builds_only_the_stories_that_fit() {
+        let mut panel = loaded_panel();
+        draw(&mut panel, 46, 10);
+        let short = panel.drawn;
+        assert!(
+            short > 0 && short < 12,
+            "a 10-row panel should hold some of twelve stories, held {short}"
+        );
+
+        draw(&mut panel, 46, 30);
+        assert!(
+            panel.drawn > short,
+            "a taller panel must show more, not the same {short}"
+        );
+    }
+
+    /// The selection is bounded by what was built, so the cursor cannot walk off
+    /// the screen — which is what leaves `List` with nothing to scroll.
+    #[test]
+    fn the_cursor_cannot_leave_the_visible_stories() {
+        let mut panel = loaded_panel();
+        let visible = {
+            draw(&mut panel, 46, 10);
+            panel.drawn
+        };
+
+        for _ in 0..50 {
+            panel.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        assert!(
+            panel.selected.selected().unwrap_or(0) < visible,
+            "the cursor reached {:?} with only {visible} stories on screen",
+            panel.selected.selected()
+        );
+
+        // And what is on screen after all that walking is still the top of the
+        // list: nothing scrolled underneath it.
+        let after = draw(&mut panel, 46, 10);
+        assert!(
+            after.contains("Story number 0"),
+            "the first story scrolled away; got:\n{after}"
+        );
+    }
+
+    /// The panel carries no count, in the frame or the body. #118 found that
+    /// `counter()` was right and nothing held it there — unlike the watch log,
+    /// which has had this test all along.
+    ///
+    /// A number in the border is a badge, a badge accumulates, and an
+    /// accumulating badge is the unread-message count this dashboard turned
+    /// down. If this assertion ever fails, the question to ask is not how to
+    /// fix the test.
+    #[test]
+    fn the_panel_never_offers_a_counter() {
+        let mut panel = loaded_panel();
+        assert_eq!(panel.counter(), None, "no counter in the frame");
+
+        let screen = draw(&mut panel, 46, 10);
+        for claim in ["12", "new", "more", "of 12"] {
+            assert!(
+                !screen.contains(claim),
+                "the panel said `{claim}`, which counts or promises more below:\n{screen}"
+            );
+        }
+    }
+
+    /// A headline taller than the panel must still show something. A blank
+    /// panel with stories loaded reads as broken rather than as short.
+    #[test]
+    fn a_story_too_tall_for_the_panel_is_clipped_rather_than_dropped() {
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = vec![story("NASA", &"a very long headline ".repeat(20), 5)];
+
+        let screen = draw(&mut panel, 24, 4);
+        assert_eq!(panel.drawn, 1, "the only story must still be built");
+        assert!(
+            screen.contains("NASA"),
+            "nothing was drawn at all; got:\n{screen}"
+        );
     }
 }

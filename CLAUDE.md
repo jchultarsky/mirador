@@ -509,7 +509,23 @@ It survives on the same kind of commitment the watch log made, and the same
 three words apply: **no count, no unread state, nothing to dismiss**, plus a
 fourth — **no scrolling**. It shows what fits. You cannot work through it
 because there is nothing to work through. A `3 new` counter in that frame turns
-it back into the rejected feature; there is a test whose failure message says so.
+it back into the rejected feature.
+
+**All four are now tested, and two of them were not until 0.17.1.** This
+paragraph used to end "there is a test whose failure message says so" — and
+there was no such test. Only `watchlog.rs` had one. Worse, the panel *scrolled*:
+every story became a `ListItem`, so the selection walked past the bottom and
+`List` followed it, which with the shipped feeds left nine of twelve stories
+reachable only by scrolling. The rule had been documentation for months
+(#118), and the owner chose to keep the rule and change the code rather than
+the other way round.
+
+The lesson generalises and is the same one Phase 1 kept finding: **a commitment
+nothing checks is a commitment that has already drifted.** `how_many_fit` is now
+the one place the rule lives, and `the_panel_builds_only_the_stories_that_fit`,
+`the_cursor_cannot_leave_the_visible_stories` and
+`the_panel_never_offers_a_counter` are what hold it. Each was verified by
+restoring the old behaviour and watching it go red.
 
 **Stories are interleaved across feeds, not sorted by date.** Pure date order
 hands the whole visible window to whichever outlet publishes most often — the
