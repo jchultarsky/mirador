@@ -7,7 +7,7 @@
 
 use jiff::tz::TimeZone;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -23,9 +23,13 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 const BINDINGS: &[Binding] = &[
     Binding::primary("s", "seconds"),
     Binding::primary("a", "add zone"),
+    Binding::primary("e", "edit"),
     Binding::primary("d", "remove"),
     Binding::extra("↑ / ↓", "select a clock"),
     Binding::extra("j / k", "select a clock"),
+    Binding::extra("Shift+↑/↓", "move it"),
+    Binding::extra("J / K", "move it"),
+    Binding::extra("o", "show file path"),
 ];
 
 /// The largest scale the numerals are ever drawn at. Past this a clock stops
@@ -69,8 +73,13 @@ pub struct ClocksPanel {
     /// Which secondary clock is selected, for `d`. The primary is index 0 and
     /// cannot be selected, because it cannot be removed.
     selected: usize,
-    /// The `a` dialog, while it is open.
+    /// The `a` or `e` dialog, while it is open.
     asking: Option<crate::prompt::Prompt>,
+    /// Which entry `e` opened the dialog on, when it was `e` rather than `a`.
+    ///
+    /// The two dialogs are the same prompt, and this is what tells them apart
+    /// on submit — an add appends, an edit replaces. `None` means `a`.
+    editing: Option<usize>,
     status: Option<String>,
     /// The instant the last frame showed, in whichever unit is on screen.
     ///
@@ -118,6 +127,7 @@ impl ClocksPanel {
             zones,
             selected: 1,
             asking: None,
+            editing: None,
             status: None,
             last_shown: None,
         })
@@ -154,21 +164,57 @@ impl ClocksPanel {
         self.last_shown = None;
     }
 
-    /// Deal with a keypress while the add-zone prompt is open.
+    /// Move the selected clock one row up, keeping the cursor on it.
+    ///
+    /// The cursor follows the clock rather than staying put, because the reader
+    /// is moving a *thing*: holding the key should walk one entry up the table,
+    /// not shuffle a different entry on every press.
+    fn move_selected_up(&mut self) {
+        if self.zones.move_up(self.selected) {
+            self.selected -= 1;
+            self.reload();
+        } else {
+            // The only way to fail from a valid selection is trying to displace
+            // the primary, so this says the same thing `d` does.
+            self.status = Some("the big clock stays".into());
+        }
+    }
+
+    /// Move the selected clock one row down, keeping the cursor on it.
+    ///
+    /// Silent at the bottom, unlike [`Self::move_selected_up`]: running out of
+    /// list is obvious from the screen, where the rule protecting the big clock
+    /// is not.
+    fn move_selected_down(&mut self) {
+        if self.zones.move_down(self.selected) {
+            self.selected += 1;
+            self.reload();
+        }
+    }
+
+    /// Deal with a keypress while the add-or-edit prompt is open.
     fn handle_prompt_key(&mut self, key: KeyEvent) {
         let Some(prompt) = self.asking.as_mut() else {
             return;
         };
         match prompt.handle_key(key) {
             crate::prompt::Outcome::Editing => {}
-            crate::prompt::Outcome::Cancelled => self.asking = None,
+            crate::prompt::Outcome::Cancelled => {
+                self.asking = None;
+                self.editing = None;
+            }
             // Picked from the list: the city the reader recognised becomes
             // the clock's label, which is the whole reason the outcome carries
             // both. Nothing needs validating — the list only holds zones that
             // resolve, and a test holds it to that.
             crate::prompt::Outcome::Chose { label, value } => {
-                if self.zones.add(label, value) {
+                let applied = match self.editing {
+                    Some(index) => self.zones.edit(index, label, value),
+                    None => self.zones.add(label, value),
+                };
+                if applied {
                     self.asking = None;
+                    self.editing = None;
                     self.reload();
                 } else if let Some(prompt) = self.asking.as_mut() {
                     prompt.reject("that clock is already on the panel");
@@ -185,11 +231,16 @@ impl ClocksPanel {
                     prompt.reject(format!("unknown timezone `{timezone}`"));
                     return;
                 }
-                if !self.zones.add(label, timezone) {
+                let applied = match self.editing {
+                    Some(index) => self.zones.edit(index, label, timezone),
+                    None => self.zones.add(label, timezone),
+                };
+                if !applied {
                     prompt.reject("that clock is already on the panel");
                     return;
                 }
                 self.asking = None;
+                self.editing = None;
                 self.reload();
             }
         }
@@ -368,6 +419,7 @@ impl Panel for ClocksPanel {
         match key.code {
             KeyCode::Char('s') => self.show_seconds = !self.show_seconds,
             KeyCode::Char('a') => {
+                self.editing = None;
                 self.asking = Some(crate::prompt::Prompt::new(
                     "ADD A CLOCK",
                     "Type to narrow · ↑↓ to choose · Enter adds · Esc cancels",
@@ -375,6 +427,35 @@ impl Panel for ClocksPanel {
                     crate::prompt::Completion::Places(crate::zones::PLACES),
                 ));
             }
+            KeyCode::Char('e') => {
+                // Pre-filled with what the entry already says, in the same
+                // `Label = Zone` the add dialog accepts. Relabelling is the
+                // common case, so the text you want to change is already there
+                // rather than something you retype from scratch.
+                if let Some(zone) = self.zones.zones().get(self.selected) {
+                    self.editing = Some(self.selected);
+                    self.asking = Some(crate::prompt::Prompt::new(
+                        "EDIT THIS CLOCK",
+                        "`Label = Zone` · Enter saves · Esc cancels",
+                        &format!("{} = {}", zone.label, zone.timezone),
+                        crate::prompt::Completion::Places(crate::zones::PLACES),
+                    ));
+                }
+            }
+            KeyCode::Char('o') => {
+                self.status = Some(self.zones.path().display().to_string());
+            }
+            // Shift moves the clock rather than the cursor, which is the same
+            // shape as `Ctrl+arrows` resizing a panel rather than moving focus.
+            // `J`/`K` do it too, because this panel already offers arrows and
+            // `j`/`k` as equals for the selection and it would be strange for
+            // only one of the pair to gain the modifier.
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected_up(),
+            KeyCode::Char('K') => self.move_selected_up(),
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.move_selected_down();
+            }
+            KeyCode::Char('J') => self.move_selected_down(),
             KeyCode::Char('d') => {
                 if self.zones.remove(self.selected) {
                     self.reload();

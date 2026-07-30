@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The clock's zone list can be reordered, edited and located.** `Shift+↑`/`↓`
+  (or `J`/`K`) moves the selected clock through the table, `e` opens it in the
+  same `Label = Zone` dialog `a` uses, pre-filled, and `o` shows where
+  `zones.toml` lives. Previously the only way to change an order or fix a label
+  was to delete entries and re-add them in the order you wanted, which is what
+  the reporter did. The first entry is still the big clock and still cannot be
+  displaced — reordering the table is what was asked for; choosing the primary
+  is a different decision and would want its own key.
+  [#109](https://github.com/jchultarsky/mirador/issues/109).
 - **`--reset-config`, a way out of a config that has gone past fixing.** Writes
   the shipped defaults and copies the old file to `config.toml.bak` first. The
   name sounds harmless and the effect is not, so it says what it is about to do
