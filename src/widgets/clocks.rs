@@ -36,9 +36,15 @@ const MAX_CLOCK_SCALE: u16 = 3;
 const BIG_CLOCK_ROWS: u16 = 5 * MAX_CLOCK_SCALE;
 
 /// Columns of the secondary zone list.
+///
+/// `time` holds the formatted time *and* the day marker, so it has to be wide
+/// enough for both: `HH:MM:SS +1d` is twelve cells. It was nine, which fits the
+/// time and truncates the marker away — and the marker is the half that carries
+/// the warning, so the column silently dropped the only part of the row a reader
+/// could get wrong. See the note on `day_marker` below.
 const COLUMNS: &[Column] = &[
     Column::flex("zone", 1),
-    Column::fixed("time", 9),
+    Column::fixed("time", 12),
     Column::fixed("vs local", 9).right().drops_below(30),
 ];
 
@@ -188,6 +194,45 @@ impl ClocksPanel {
             }
         }
     }
+}
+
+/// `format` with its seconds removed, for when `s` has hidden them.
+///
+/// `s` is bound to "seconds", not "seconds on the big clock", and the panel is
+/// one panel — a clock with no seconds sitting above a table that still has
+/// them reads as the key not having worked.
+///
+/// The awkwardness is that `[clocks].time_format` is the user's, and can be
+/// anything. Switching to a fixed seconds-less format would silently discard
+/// their choice — someone who set `%I:%M:%S %p` would find `s` turning their
+/// clock to 24-hour. So the seconds specifier is removed from *their* format,
+/// along with the separator immediately before it, and everything else is left
+/// alone.
+///
+/// A format with no seconds in it is returned unchanged, which is the right
+/// answer rather than a special case: there is nothing for `s` to hide, and the
+/// table simply looks the same either way.
+fn without_seconds(format: &str) -> String {
+    // Longest first: `%:S` and `%.f` would otherwise be half-matched by `%S`.
+    for token in ["%:S", "%S", "%T"] {
+        if let Some(at) = format.find(token) {
+            let replacement = if token == "%T" { "%H:%M" } else { "" };
+            // Take the separator with it, so `%H:%M:%S` does not leave `%H:%M:`.
+            let mut start = at;
+            if replacement.is_empty()
+                && let Some(before) = format[..at].chars().next_back()
+                && matches!(before, ':' | '.' | '-')
+            {
+                start -= before.len_utf8();
+            }
+            return format!(
+                "{}{replacement}{}",
+                &format[..start],
+                &format[at + token.len()..]
+            );
+        }
+    }
+    format.to_string()
 }
 
 /// Look up an IANA zone, treating `local` as the system zone.
@@ -505,6 +550,14 @@ impl Panel for ClocksPanel {
         let grid = Grid::new(COLUMNS, area.width);
         let mut lines = vec![grid.header(theme)];
 
+        // Once per draw rather than once per row: `s` governs the whole panel,
+        // not just the numerals above this table.
+        let time_format = if self.show_seconds {
+            self.config.time_format.clone()
+        } else {
+            without_seconds(&self.config.time_format)
+        };
+
         for (index, clock) in self.secondary.iter().enumerate() {
             // The cursor is over the zone list, whose first entry is zone 1.
             let here = ctx.focused && index + 1 == self.selected;
@@ -537,7 +590,7 @@ impl Panel for ClocksPanel {
                     lines.push(grid.row(&[
                         Span::styled(clock.label.clone(), label),
                         Span::styled(
-                            format!("{}{day_marker}", zoned.strftime(&self.config.time_format)),
+                            format!("{}{day_marker}", zoned.strftime(&time_format)),
                             Style::default().fg(if day_marker.is_empty() {
                                 theme.text
                             } else {
@@ -658,6 +711,122 @@ mod tests {
             shrank.len(),
             &shrank[..shrank.len().min(6)]
         );
+    }
+
+    /// #106: `s` is bound to "seconds", and the panel is one panel — a clock
+    /// with no seconds above a table that still has them reads as the key not
+    /// having worked. The user's own `time_format` has to survive it, so the
+    /// seconds specifier is removed from *their* format rather than swapped for
+    /// a fixed one.
+    #[test]
+    fn hiding_the_seconds_takes_them_out_of_the_zone_table_too() {
+        assert_eq!(without_seconds("%H:%M:%S"), "%H:%M");
+        // A 12-hour format keeps being a 12-hour format.
+        assert_eq!(without_seconds("%I:%M:%S %p"), "%I:%M %p");
+        // `%T` is a whole time, so it becomes the seconds-less whole time.
+        assert_eq!(without_seconds("%T"), "%H:%M");
+        // Nothing to remove is not a special case.
+        assert_eq!(without_seconds("%H:%M"), "%H:%M");
+        assert_eq!(without_seconds(""), "");
+        // The separator goes with it, rather than leaving a trailing colon.
+        assert!(!without_seconds("%H:%M:%S").ends_with(':'));
+        assert!(!without_seconds("%H.%M.%S").ends_with('.'));
+    }
+
+    /// The wiring, not just the helper. Breaking the call site while leaving
+    /// `without_seconds` correct passed every other test here — the helper can
+    /// be right and simply not be called.
+    #[test]
+    fn the_rendered_zone_table_loses_its_seconds_when_s_does() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+
+        let screen = |panel: &mut ClocksPanel| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+            terminal
+                .draw(|frame| {
+                    panel.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..20)
+                .map(|y| {
+                    (0..60)
+                        .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        // A zone table needs at least one secondary clock to exist at all.
+        let (mut panel, _guard) = panel_from_named("seconds-wiring", ClocksConfig::default());
+        assert!(
+            !panel.secondary.is_empty(),
+            "the default config seeds secondary zones"
+        );
+
+        // `HH:MM:SS` in the table: two colons on a zone row.
+        panel.show_seconds = true;
+        let with = screen(&mut panel);
+        let rows_with_two_colons = with
+            .lines()
+            .filter(|line| line.matches(':').count() >= 2)
+            .count();
+        assert!(
+            rows_with_two_colons > 0,
+            "with seconds on, some zone row shows HH:MM:SS\n{with}"
+        );
+
+        panel.show_seconds = false;
+        let without = screen(&mut panel);
+        let still_two = without
+            .lines()
+            .filter(|line| {
+                // Ignore the big numerals, which are block glyphs, and the
+                // footer; a zone row is one with a zone label on it.
+                line.matches(':').count() >= 2 && !line.contains('\u{2588}')
+            })
+            .count();
+        assert_eq!(
+            still_two, 0,
+            "with seconds off, no zone row should still carry them\n{without}"
+        );
+    }
+
+    /// #107: the column holds the time *and* the day marker, and the marker is
+    /// the half that carries the warning. At nine cells `02:43:48 +1d` was
+    /// truncated to `02:43:48…`, so the one part a reader could get wrong was
+    /// the part that never showed.
+    #[test]
+    fn the_day_marker_fits_beside_the_time_it_belongs_to() {
+        let time = COLUMNS
+            .iter()
+            .find(|column| column.label == "time")
+            .expect("there is a time column");
+        let crate::grid::Width::Fixed(width) = time.width else {
+            panic!("the time column is fixed width");
+        };
+        for marker in ["", " +1d", " -1d"] {
+            let widest = format!("00:00:00{marker}");
+            assert!(
+                crate::grid::display_width(&widest) <= usize::from(width),
+                "`{widest}` needs {} cells and the column is {width}",
+                crate::grid::display_width(&widest)
+            );
+        }
     }
 
     /// A panel seeded from `config`, with a zone file of its very own.
