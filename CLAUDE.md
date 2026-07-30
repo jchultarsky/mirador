@@ -1094,8 +1094,8 @@ input is hostile", not "is this correct".
 
 ### Phase 3 — soak
 
-Nothing here had run for a day when this was written. Two of the four are done;
-the other two still need a person with a real terminal.
+Nothing here had run for a day when this was written. **Three of the four are
+done.** Only a real midnight is left, and it needs nothing but time.
 
 - **A full day idle — done.** 0.16.3 soaked for 9h42m over 583 samples on
   2026-07-30: RSS climbed 1.0MB in the first two hours and then moved *once* in
@@ -1108,14 +1108,25 @@ the other two still need a person with a real terminal.
   as unknown.
 - **A real midnight** — still open. The day-rollover entry has only met a test
   that winds the date back.
-- **Terminal focus reporting** — still open, and **blocked on
-  [#132](https://github.com/jchultarsky/mirador/issues/132)**. It cannot be
-  honestly confirmed while the current behaviour hides its own evidence: the
-  watch log marks itself seen on `FocusGained` as well as `FocusLost`, so
-  returning to the dashboard erases the "since you were here" line in the same
-  instant you look for it. A terminal that reports focus *correctly* makes the
-  feature less visible, not more, so "I saw no rule line" cannot distinguish
-  working from broken. Fix #132 first, then verify.
+- **Terminal focus reporting — done, and the method is the interesting part.**
+  This was recorded for a long time as unverifiable by an agent, because a
+  headless tmux has no attached client to have focus. That is true and beside
+  the point: **focus events are just bytes on stdin**, and `tmux send-keys -H`
+  can inject them.
+
+  ```sh
+  tmux send-keys -t <session> -H 1b 5b 49   # ESC [ I — focus gained
+  tmux send-keys -t <session> -H 1b 5b 4f   # ESC [ O — focus lost
+  ```
+
+  Verified on 2026-07-30 with a rule line on screen: focus-in left it alone,
+  focus-out erased it. **The control is what makes that mean anything** — if the
+  sequences were being swallowed, focus-out would have done nothing either. Use
+  the same pair for anything else that reacts to focus.
+
+  This also settles #132's fix end to end: `mark_seen` now runs on `FocusLost`
+  only, so returning to the dashboard no longer erases the line in the instant
+  it is wanted.
 
 **The midnight check wants two independent witnesses**, for exactly that reason:
 the clock's own date line flipping, *and* a watch log entry reading

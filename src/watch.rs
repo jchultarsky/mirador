@@ -208,4 +208,54 @@ mod tests {
 
         assert_eq!(log.unseen(), Some(2), "the two that arrived after");
     }
+
+    /// #132, written as the sequence a reader actually performs.
+    ///
+    /// The bug was in `app.rs`, which marked the log seen on `FocusGained` as
+    /// well as `FocusLost` — so returning to the dashboard set "last looked" to
+    /// *now*, every entry that arrived while away landed on the old side of the
+    /// line, and the line vanished in the instant it was wanted. A terminal that
+    /// reported focus *correctly* made the feature less visible than one that
+    /// did not.
+    ///
+    /// The log itself was always right, which is why this asserts the property
+    /// the reader cares about — the line is still there when they come back —
+    /// rather than which events fire. `only_losing_focus_marks_the_log_seen` in
+    /// `app.rs` holds the wiring.
+    ///
+    /// Timestamps come from `at`, not `Zoned::now()`. The first version of this
+    /// test used real clock reads and failed about one run in three: `unseen`
+    /// compares with `>`, and two `now()` calls in a tight loop can land on the
+    /// same instant.
+    #[test]
+    fn coming_back_leaves_the_rule_line_where_it_was() {
+        let mut log = WatchLog::default();
+        log.push(at(&log, 1));
+
+        // Leaving is the half that can be recorded honestly: the reader was
+        // present with that entry on screen.
+        log.seen_at = Some(
+            log.since
+                .checked_add(Span::new().minutes(2))
+                .expect("in range"),
+        );
+
+        // Two things happen while nobody is looking.
+        log.push(at(&log, 3));
+        log.push(at(&log, 4));
+
+        assert_eq!(
+            log.unseen(),
+            Some(2),
+            "both entries that arrived while away are unseen"
+        );
+
+        // Coming back marks nothing now, so the line is still here. Before the
+        // fix this point was a fresh `mark_seen()` and the answer became `None`.
+        assert_eq!(
+            log.unseen(),
+            Some(2),
+            "returning must not erase the line it exists to show"
+        );
+    }
 }
