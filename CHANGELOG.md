@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The watch log erased its own "since you were here" line the moment you came
+  back.** It marked the log seen on gaining focus as well as losing it, so
+  returning to the dashboard set "last looked" to *now* — everything that
+  arrived while you were away landed on the old side of the line, and the line
+  disappeared in the instant you came back to read it. A terminal that reported
+  focus *correctly* made the feature less visible than one that did not. Only
+  losing focus marks it seen now.
+  [#132](https://github.com/jchultarsky/mirador/issues/132).
+
 - **The clock's reorder keys were invisible.** `Shift+↑`/`↓` shipped in 0.17.0 as
   an `extra` binding, which put it in the help overlay and nowhere else — so the
   panel border advertised `e edit` and said nothing about reordering, the thing

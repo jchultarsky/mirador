@@ -568,10 +568,23 @@ impl App {
                     // tmux forwards it only with `focus-events on`, so it is
                     // an improvement where available rather than the mechanism
                     // — the keypress below carries it everywhere else.
-                    // Both, not just one: gaining focus means they are here
-                    // now, and losing it means they were here until this
-                    // moment. Either way the line belongs at this point.
-                    Event::FocusGained | Event::FocusLost => self.watch.mark_seen(),
+                    //
+                    // **Losing focus only.** This used to mark on both, on the
+                    // reasoning that gaining focus means they are here now and
+                    // losing it means they were here until this moment — each
+                    // true in isolation, and together they made the rule line
+                    // impossible to see. Returning to the dashboard set "last
+                    // looked" to *now*, so everything that arrived while the
+                    // reader was away landed on the old side of the line and the
+                    // line vanished in the instant they came back to read it.
+                    // A terminal that reported focus *correctly* therefore made
+                    // the feature less visible than one that did not (#132).
+                    //
+                    // Leaving is the half that can be recorded without
+                    // destroying what it describes: they were present with those
+                    // entries on screen, so marking them seen is honest. Coming
+                    // back is precisely when the line has to still be there.
+                    Event::FocusLost => self.watch.mark_seen(),
                     _ => {}
                 }
             }
@@ -3331,6 +3344,22 @@ mod tests {
         assert!(
             GLOBAL.iter().any(|b| b.key == "?" && b.primary),
             "help must always be advertised"
+        );
+    }
+
+    /// And the event loop itself must offer only `FocusLost` to `mark_seen`.
+    /// The two tests above exercise `WatchLog`; this one is about the wiring,
+    /// which is where #132 actually lived — the log was always correct.
+    #[test]
+    fn only_losing_focus_marks_the_log_seen() {
+        let source = std::fs::read_to_string(file!()).expect("this file is readable");
+        let wiring = source
+            .lines()
+            .find(|line| line.contains("=> self.watch.mark_seen()"))
+            .expect("the focus arm still exists");
+        assert!(
+            wiring.contains("FocusLost") && !wiring.contains("FocusGained"),
+            "gaining focus must not mark the log seen: {wiring:?}"
         );
     }
 }
