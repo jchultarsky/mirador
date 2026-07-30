@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A story's link can now be copied or opened, not just looked at.** `y` asks
+  the terminal to put it on the clipboard (OSC 52) — no configuration and no
+  dependency, though some terminals refuse it and tmux needs `set-clipboard on`;
+  mirador cannot tell either way, so it says it *sent* the link rather than
+  claiming it copied one. `↵` opens it with `[news].open_command`, which is empty
+  by default — mirador launches nothing you did not name, runs it directly rather
+  than through a shell, and passes the link as its own argument so nothing in a
+  URL can be read as shell syntax.
+  [#137](https://github.com/jchultarsky/mirador/issues/137).
+
 ## [0.18.2] - 2026-07-30
 
 ### Fixed

@@ -337,6 +337,19 @@ per_feed        = 4      # kept from each feed, so a chatty one cannot crowd
                          # out a quiet one. Stories are then interleaved, so
                          # the top of the panel holds one from each.
 
+# What Enter runs on the selected story, with the link added as the last
+# argument. Empty means Enter opens nothing — mirador launches no program you
+# did not name. Run directly rather than through a shell, so nothing in a URL
+# can be read as shell syntax.
+#
+#   open_command = ["open"]                  # macOS
+#   open_command = ["xdg-open"]              # Linux
+#   open_command = ["cmd", "/c", "start"]    # Windows
+#
+# `y` copies the link instead, by asking the terminal (OSC 52). That needs no
+# configuration, but some terminals refuse it and tmux wants `set-clipboard on`.
+# open_command = []
+
 [[news.feeds]]
 name = "NASA"
 url  = "https://www.nasa.gov/news-release/feed/"

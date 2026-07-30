@@ -403,6 +403,18 @@ pub struct NewsConfig {
     /// Most stories to keep from any one feed, so a chatty outlet cannot crowd
     /// out a quiet one.
     pub per_feed: usize,
+    /// What `Enter` runs on the selected story, with the link appended.
+    ///
+    /// **Empty by default, so mirador launches nothing it was not asked to.**
+    /// The panel's own note is that no browser is opened for you — and the way
+    /// that was settled for sound is the way it is settled here: mirador does
+    /// not pick the program, you name it. Same shape as
+    /// `[pomodoro].chime_command`, run directly rather than through a shell, so
+    /// nothing in a URL can be taken as shell syntax.
+    ///
+    /// `["open"]` on macOS, `["xdg-open"]` on Linux, `["cmd", "/c", "start"]`
+    /// on Windows — or name a specific browser.
+    pub open_command: Vec<String>,
 }
 
 impl Default for NewsConfig {
@@ -426,6 +438,7 @@ impl Default for NewsConfig {
             ],
             refresh_minutes: 60,
             per_feed: 4,
+            open_command: Vec::new(),
         }
     }
 }

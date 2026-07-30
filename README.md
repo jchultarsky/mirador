@@ -511,7 +511,7 @@ Headlines from RSS feeds you choose.
 │ ARS TECHNICA · 45m old                               │
 │ 5th Circuit blocks Texas law requiring websites to   │
 │ filter "harmful" speech                              │
-╰───────── r refresh · o show link ────────────────────╯
+╰──── o show link · y copy · ↵ open · r refresh ────────╯
 ```
 
 **A window, not a feed.** It shows however many stories fit and no more. There
@@ -525,9 +525,31 @@ panel holds the newest from *each* feed. Sorting by date alone hands the whole
 window to whichever outlet publishes most often, which is fresh but is not a
 window on the world.
 
-`o` shows the selected story's link so you can copy it. It does not open a
-browser — that means talking to the platform, which is the same decision as
-playing a sound file and gets the same answer.
+`o` shows the selected story's link, in brass beneath a `↳`, wrapped whole so
+you can read all of it.
+
+`y` copies it, by asking your terminal to set the clipboard (OSC 52). No
+configuration and no dependency — but it is best-effort: some terminals refuse
+the sequence, and tmux needs `set-clipboard on`. mirador cannot tell whether it
+worked, which is why it says it sent the link rather than claiming it copied one.
+
+`↵` opens it, and **only if you name a program**:
+
+```toml
+[news]
+open_command = ["open"]                  # macOS
+# open_command = ["xdg-open"]            # Linux
+# open_command = ["cmd", "/c", "start"]  # Windows
+```
+
+Empty by default, so mirador launches nothing you did not ask for. It is run
+directly rather than through a shell, and the link goes on as its own argument,
+so nothing in a URL can be read as shell syntax. Same shape as
+`[pomodoro].chime_command`: mirador does not pick the program, you name it.
+
+If you would rather select the text with the mouse, note that mirador holds the
+mouse — use your terminal's override modifier (Shift in most, Option in macOS
+Terminal and iTerm2), or set `[general].mouse = false`.
 
 The shipped feeds are science, space and technology only. Choosing outlets for
 general or political news is an editorial act this project has no business

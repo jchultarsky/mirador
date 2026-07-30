@@ -5,6 +5,7 @@
 mod app;
 mod arrange;
 mod chart;
+mod clipboard;
 mod config;
 mod dateinput;
 mod feed;
