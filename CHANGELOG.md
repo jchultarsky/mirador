@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-30
+
 ### Added
 
 - **A story's link can now be copied or opened, not just looked at.** `y` asks
@@ -1251,7 +1253,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.18.2...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/jchultarsky/mirador/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/jchultarsky/mirador/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/jchultarsky/mirador/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/jchultarsky/mirador/compare/v0.17.1...v0.18.0
