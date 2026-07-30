@@ -8,7 +8,7 @@
 //! `[layout]` is the exception that proves the rule — it goes back to the
 //! config because people read and curate it. A list of cities is not that.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -692,6 +692,76 @@ impl Zones {
         true
     }
 
+    /// Move the zone at `index` one place towards the top of the list.
+    ///
+    /// Refuses to move into the first slot, for the same reason [`Self::remove`]
+    /// refuses to empty it: that entry is the big clock, and promoting a
+    /// secondary would silently demote the one the reader chose to see from
+    /// across the room. Reordering the *table* is what was asked for; choosing
+    /// the primary is a different decision and would want its own key.
+    pub fn move_up(&mut self, index: usize) -> bool {
+        if index <= 1 || index >= self.clocks.len() {
+            return false;
+        }
+        self.clocks.swap(index, index - 1);
+        self.dirty = true;
+        true
+    }
+
+    /// Move the zone at `index` one place towards the bottom of the list.
+    pub fn move_down(&mut self, index: usize) -> bool {
+        if index == 0 || index + 1 >= self.clocks.len() {
+            return false;
+        }
+        self.clocks.swap(index, index + 1);
+        self.dirty = true;
+        true
+    }
+
+    /// Replace the label and timezone of the zone at `index`.
+    ///
+    /// Returns false when the timezone is blank, or when it names a zone some
+    /// *other* entry already shows. Comparing against other entries rather than
+    /// all of them is what lets an edit change only the label — the common case,
+    /// and the one the reporter wanted — without the entry colliding with
+    /// itself.
+    pub fn edit(&mut self, index: usize, label: &str, timezone: &str) -> bool {
+        let timezone = timezone.trim();
+        if timezone.is_empty() || index >= self.clocks.len() {
+            return false;
+        }
+        if self
+            .clocks
+            .iter()
+            .enumerate()
+            .any(|(i, z)| i != index && z.timezone == timezone)
+        {
+            return false;
+        }
+        // Same rule as `add`: an emptied label falls back to the city in the
+        // timezone, so clearing the field is a way to get the default back
+        // rather than a way to end up with a nameless clock.
+        let label = match label.trim() {
+            "" => timezone
+                .rsplit('/')
+                .next()
+                .unwrap_or(timezone)
+                .replace('_', " "),
+            given => given.to_string(),
+        };
+        self.clocks[index] = ClockZone {
+            label,
+            timezone: timezone.to_string(),
+        };
+        self.dirty = true;
+        true
+    }
+
+    /// Where the zones are stored, for the panel's `o`.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Write atomically if there are pending changes.
     pub fn save(&mut self) -> Result<()> {
         if !self.dirty {
@@ -768,6 +838,111 @@ mod tests {
         let mut zones = seeded();
         assert!(!zones.add("Nowhere", "   "));
         assert_eq!(zones.zones().len(), 2);
+    }
+
+    fn three() -> Zones {
+        Zones {
+            path: PathBuf::from("/nonexistent/zones.toml"),
+            clocks: vec![
+                zone("Local", "local"),
+                zone("Tokyo", "Asia/Tokyo"),
+                zone("London", "Europe/London"),
+            ],
+            dirty: false,
+            last_error: None,
+        }
+    }
+
+    fn labels(zones: &Zones) -> Vec<&str> {
+        zones.zones().iter().map(|z| z.label.as_str()).collect()
+    }
+
+    #[test]
+    fn a_clock_can_be_moved_through_the_list() {
+        let mut zones = three();
+        assert!(zones.move_down(1));
+        assert_eq!(labels(&zones), ["Local", "London", "Tokyo"]);
+        assert!(zones.move_up(2));
+        assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
+    }
+
+    /// The first entry is the big clock. `remove` refuses to take it and this
+    /// refuses to displace it, for the same reason: promoting a secondary would
+    /// silently demote the clock the reader chose to see from across the room.
+    #[test]
+    fn nothing_can_be_moved_into_the_big_clocks_slot() {
+        let mut zones = three();
+        assert!(!zones.move_up(1), "moving the top secondary up must refuse");
+        assert!(!zones.move_up(0), "the primary itself cannot move either");
+        assert!(!zones.move_down(0));
+        assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
+    }
+
+    #[test]
+    fn moving_off_either_end_is_refused_rather_than_wrapping() {
+        let mut zones = three();
+        assert!(!zones.move_down(2), "the last entry has nowhere to go");
+        assert!(!zones.move_down(9), "and neither has one off the end");
+        assert!(!zones.move_up(9));
+        assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
+    }
+
+    /// Relabelling without touching the timezone is the case the reporter
+    /// actually wanted, and the one a naive duplicate check breaks: the entry
+    /// collides with itself and the edit is refused.
+    #[test]
+    fn an_entry_can_be_relabelled_without_changing_its_zone() {
+        let mut zones = three();
+        assert!(zones.edit(1, "Japan", "Asia/Tokyo"));
+        assert_eq!(labels(&zones), ["Local", "Japan", "London"]);
+        assert_eq!(zones.zones()[1].timezone, "Asia/Tokyo");
+    }
+
+    #[test]
+    fn an_edit_onto_a_zone_another_clock_shows_is_refused() {
+        let mut zones = three();
+        assert!(
+            !zones.edit(1, "Britain", "Europe/London"),
+            "that zone is already on the panel"
+        );
+        assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
+    }
+
+    /// Same rule as `add`: an emptied label falls back to the city in the
+    /// timezone, so clearing the field restores the default rather than
+    /// leaving a nameless clock.
+    #[test]
+    fn clearing_the_label_falls_back_to_the_city_in_the_zone() {
+        let mut zones = three();
+        assert!(zones.edit(1, "   ", "America/New_York"));
+        assert_eq!(labels(&zones), ["Local", "New York", "London"]);
+    }
+
+    #[test]
+    fn an_edit_out_of_range_or_with_a_blank_zone_changes_nothing() {
+        let mut zones = three();
+        assert!(!zones.edit(9, "Nowhere", "Asia/Tokyo"));
+        assert!(!zones.edit(1, "Tokyo", "   "));
+        assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
+    }
+
+    /// Every mutation has to mark the list dirty, or the change is on screen
+    /// and never reaches the file — the failure is invisible until a restart.
+    #[test]
+    fn every_change_marks_the_list_for_saving() {
+        for (name, mutate) in [
+            (
+                "move_down",
+                &(|z: &mut Zones| z.move_down(1)) as &dyn Fn(&mut Zones) -> bool,
+            ),
+            ("move_up", &|z: &mut Zones| z.move_up(2)),
+            ("edit", &|z: &mut Zones| z.edit(1, "Japan", "Asia/Tokyo")),
+        ] {
+            let mut zones = three();
+            assert!(!zones.dirty, "starts clean");
+            assert!(mutate(&mut zones), "{name} should have applied");
+            assert!(zones.dirty, "{name} left the list unsaved");
+        }
     }
 
     /// Every zone in the picker has to be one jiff will actually accept.

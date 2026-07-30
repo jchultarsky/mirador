@@ -227,7 +227,8 @@ Some settings you change with a keystroke are remembered across restarts:
 | Seconds on the clock | `s` | Clock |
 | Pomodoro durations | `+` / `-` | Pomodoro |
 | Watchlist symbols | `a` / `d` | Markets |
-| World clocks | `a` / `d` | Clock |
+| World clocks | `a` / `e` / `d` | Clock |
+| World clock order | `Shift+↑`/`↓` | Clock |
 | Weather location | `L` | Weather |
 | Agenda file | `f` | Agenda |
 | Which panels are shown | `w` | — |
@@ -382,10 +383,15 @@ ends up in your config is never a surprise.
 Anything not on the list still works: type a zone it does not carry and it is
 taken as written, with `HQ = Europe/Berlin` naming it yourself.
 
+`e` reopens that dialog on the selected clock, pre-filled, so fixing a label
+does not mean deleting the entry and adding it back. `Shift+↑` and `Shift+↓`
+(or `J` and `K`) move the selected clock through the table, and `o` shows where
+the file lives.
+
 Like the watchlist, the live list is a data file (`zones.toml`) rather than
 config, which is what lets the panel own it; `[clocks].zones` seeds your first
-run. The large clock is not removable, because a clock panel with nothing to
-draw large is not a clock panel.
+run. The large clock is not removable, and nothing can be moved into its place
+either, because a clock panel with nothing to draw large is not a clock panel.
 
 ```
 ╭┤1 Calendar├───────────────────╮
