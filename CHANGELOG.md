@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The news panel scrolled, which its own rule said it must not.** Every story
+  became a list item, so the selection could walk past the bottom of the panel
+  and ratatui's `List` scrolled to follow it — with the shipped feeds that made
+  nine of twelve stories reachable only by scrolling. "However many stories fit,
+  and no more" was documentation rather than behaviour, and nothing tested it.
+  The panel now builds only the stories whose whole block fits, so the cursor
+  cannot leave the viewport and there is nothing to scroll. A taller panel still
+  shows more. [#118](https://github.com/jchultarsky/mirador/issues/118).
+
 ## [0.17.0] - 2026-07-30
 
 ### Added
