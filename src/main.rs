@@ -169,6 +169,11 @@ fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
             println!("There is no config at {}.", path.display());
             println!("This writes the defaults there.");
         }
+        // Say the second half out loud. Resetting the config without this
+        // leaves the dashboard looking untouched (#153), so a reader who is
+        // told only about the config is being told half of what will happen.
+        println!("Preferences you changed from the keyboard are put aside too.");
+        println!("Your tasks, notes and watchlist are left alone.");
         print!("Go ahead? [y/N] ");
         std::io::stdout().flush().context("writing the prompt")?;
 
@@ -189,6 +194,25 @@ fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
     if let Some(backup) = backup {
         println!("Your previous config is at {}.", backup.display());
     }
+
+    // The config is only half of what decides the dashboard. `state.toml`
+    // records what was changed from the keyboard and *outranks* the config, so
+    // leaving it would apply the old preferences straight back over the file
+    // just restored — the reason #153 looked like the command doing nothing.
+    match Config::state_path() {
+        Ok(state) => match state::clear(&state)? {
+            Some(moved) => println!(
+                "Put your remembered preferences aside; they are at {}.",
+                moved.display()
+            ),
+            None => println!("There were no remembered preferences to clear."),
+        },
+        // Worth a word rather than a silent skip: the config really was reset,
+        // and the reader should know which half did not happen.
+        Err(e) => println!("Could not find the preferences file to clear it: {e}"),
+    }
+
+    println!("Left your tasks, notes and watchlist alone.");
     Ok(())
 }
 

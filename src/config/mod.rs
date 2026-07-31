@@ -451,7 +451,7 @@ impl Config {
 /// Racy in principle — the name is checked and then written — but the loser of
 /// that race is a person running two resets at the same instant, and the bound
 /// stops a directory of stale backups from making this loop for ever.
-fn free_backup_path(path: &Path) -> PathBuf {
+pub(crate) fn free_backup_path(path: &Path) -> PathBuf {
     let first = path.with_extension("toml.bak");
     if !first.exists() {
         return first;
