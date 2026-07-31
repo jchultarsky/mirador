@@ -4,7 +4,7 @@
 # default, so you can delete anything you do not want to override.
 #
 # mirador edits this file surgically and never reserialises it: switching a
-# panel on with `w`, or resizing one with Ctrl+arrow, rewrites the one line it
+# panel on with `w`, or resizing one with Ctrl+arrows, rewrites the one line it
 # has to and leaves your comments, spacing and ordering exactly as they were.
 # So it stays safe to hand-edit and to keep in version control.
 #

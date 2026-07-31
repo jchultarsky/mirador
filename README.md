@@ -233,7 +233,7 @@ Some settings you change with a keystroke are remembered across restarts:
 | Agenda file | `f` | Agenda |
 | Which panels are shown | `w` | — |
 | Where the panels are | `m` | — |
-| Panel sizes | `Ctrl+arrow` | — |
+| Panel sizes | `Ctrl+arrows` | — |
 
 They go to two different places, and the split is deliberate.
 
@@ -290,8 +290,8 @@ widget mirador has and which of them your layout places:
 disappears the moment you toggle it, and the change is written to your config
 when you close the dialog — as a one-line edit, with your comments untouched.
 A new panel joins the row carrying the fewest panels; `m` moves it wherever you
-want it afterwards, and `Ctrl+arrow` moves the
-space around afterwards, and that is written too.
+want it afterwards, and `Ctrl+arrows` move the
+space around, and that is written too.
 
 The last panel cannot be switched off, because a layout with nothing in it is
 rejected at startup and would leave you with a config that will not open.
@@ -681,7 +681,7 @@ rather than a cap on what a wider panel can draw.
 | `w` | Choose which panels are shown |
 | `m` | Rearrange the panels — see below |
 | `t` | Choose a theme, previewing as you move — see below |
-| `Ctrl+arrow` | Resize the focused panel against its neighbour |
+| `Ctrl+arrows` | Resize the focused panel against its neighbour |
 | `q` / `Ctrl+C` | Quit |
 
 ### Rearranging the dashboard
@@ -705,8 +705,8 @@ at the edge stops rather than spawning a row per keypress.
 
 The panels themselves move as you press, so what you see is what you will get.
 `Enter` keeps the arrangement and `Esc` puts everything back exactly as it was.
-`Tab` picks a different panel to move without leaving the mode, and `Ctrl+arrow`
-still resizes while you are in there.
+`Tab` picks a different panel to move without leaving the mode, and `Ctrl+arrows`
+still resize while you are in there.
 
 A panel keeps the width you gave it when it moves, and the row weights always
 add up to what they added up to before — so rearranging one corner of the
