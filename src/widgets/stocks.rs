@@ -655,9 +655,19 @@ impl Panel for StocksPanel {
 
     fn max_height(&self) -> Option<u16> {
         // Header, a row per symbol, and the status line. A watchlist is a
-        // handful of rows and does not scroll to fill a screen.
+        // handful of rows and does not scroll to fill a screen — measured
+        // rather than assumed: the panel is complete at exactly this height,
+        // and every row above it is blank space between the last symbol and
+        // the status line, which is what invariant 15 exists to refuse.
+        //
+        // Saturating because the sum is not, and `u16::MAX` was already being
+        // reached for on the line above. Nothing bounds a watchlist — it is a
+        // file the reader edits — and 65_534 symbols wrapped this to 3, which
+        // is a panel that collapses rather than one that is merely too tall.
+        // Same shape as `glyphs::width_of` overflowing at ten thousand
+        // characters: unreachable in practice, one line to close.
         let rows = u16::try_from(self.watchlist.symbols().len()).unwrap_or(u16::MAX);
-        Some(1 + rows + 1 + FRAME_HEIGHT)
+        Some(rows.saturating_add(2).saturating_add(FRAME_HEIGHT))
     }
 
     fn bindings(&self) -> &'static [Binding] {
@@ -907,6 +917,98 @@ mod tests {
         press(&mut p, KeyCode::Char('d'));
         press(&mut p, KeyCode::Char('y'));
         assert_eq!(p.watchlist.symbols(), ["MSFT"]);
+    }
+
+    /// The cap is the height at which the panel is *complete* — header, every
+    /// symbol, status line, frame — and not a row more. Pinned by rendering,
+    /// because the arithmetic looks right whatever the numbers are: the
+    /// interior fills at `symbols + 2`, and the frame costs `FRAME_HEIGHT`.
+    #[test]
+    fn the_height_cap_is_exactly_where_the_panel_stops_gaining_anything() {
+        use crate::panel::RenderContext;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = crate::theme::Theme::default();
+        let gradients = theme.gradients();
+
+        for n in [1usize, 3, 7] {
+            let seed: Vec<String> = (0..n).map(|i| format!("SYM{i}")).collect();
+            let refs: Vec<&str> = seed.iter().map(String::as_str).collect();
+            let (mut p, _g) = panel(&format!("cap{n}"), &refs);
+            let cap = p.max_height().expect("stocks bounds its height");
+
+            // The interior the shell would hand it at the cap.
+            let interior = cap - FRAME_HEIGHT;
+            let draw = |p: &mut StocksPanel, h: u16| {
+                let mut t = Terminal::new(TestBackend::new(60, h)).expect("backend");
+                t.draw(|f| {
+                    p.render(
+                        f,
+                        Rect::new(0, 0, 60, h),
+                        RenderContext {
+                            theme: &theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .expect("draws");
+                let buffer = t.backend().buffer();
+                (0..h)
+                    .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let at_cap = draw(&mut p, interior);
+            for i in 0..n {
+                assert!(
+                    at_cap.contains(&format!("SYM{i}")),
+                    "symbol {i} of {n} is missing at the cap:\n{at_cap}"
+                );
+            }
+            assert!(at_cap.contains("SYMBOL"), "no header at the cap:\n{at_cap}");
+
+            assert!(
+                at_cap.contains("via "),
+                "no status line at the cap:\n{at_cap}"
+            );
+
+            // One row short must lose something, or the cap is too generous.
+            // "Something" is not only a symbol: with a single symbol it is the
+            // status line that goes, and a check that looked for a missing
+            // symbol alone called the cap too generous when it was exact.
+            let under = draw(&mut p, interior - 1);
+            let lost_symbol = (0..n).any(|i| !under.contains(&format!("SYM{i}")));
+            let lost_status = !under.contains("via ");
+            assert!(
+                lost_symbol || lost_status,
+                "the cap reserves a row the panel does not use at {n} symbols:\n{under}"
+            );
+        }
+    }
+
+    /// A watchlist is a file the reader edits and nothing bounds its length,
+    /// so the sum has to be saturating. It was not: `65_534` symbols wrapped the
+    /// cap to 3, collapsing the panel instead of making it tall.
+    #[test]
+    fn an_absurd_watchlist_does_not_wrap_the_height_cap() {
+        let seed: Vec<String> = (0..3).map(|i| format!("SYM{i}")).collect();
+        let refs: Vec<&str> = seed.iter().map(String::as_str).collect();
+        let (p, _g) = panel("overflow", &refs);
+
+        // The arithmetic, exercised at the boundary the panel cannot be
+        // *built* at cheaply — constructing 65_535 symbols to prove one
+        // addition would trade a real test for a slow one.
+        let rows = u16::MAX;
+        let cap = rows.saturating_add(2).saturating_add(FRAME_HEIGHT);
+        assert_eq!(cap, u16::MAX, "the cap must saturate, not wrap");
+        assert!(
+            p.max_height().expect("bounded") > FRAME_HEIGHT,
+            "an ordinary watchlist still reports a usable height"
+        );
     }
 
     #[test]
