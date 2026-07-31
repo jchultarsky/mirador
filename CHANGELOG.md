@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-31
+
+### Added
+
+- **`mirador --factory-reset` puts everything back to how it arrived.** The
+  reset `--reset-config` could never honestly be: it resets configuration, while
+  your watchlist, tasks and notes outlive it. This sets aside every file mirador
+  has written — config, remembered preferences, tasks, notes, watchlist and
+  world clocks — and the next launch seeds them all again, default stock tickers
+  included. A reset install is now indistinguishable from a new one.
+
+  **Nothing is deleted.** Every file is renamed to a `.bak` beside itself, so it
+  is something you can walk back from with `mv`, and an existing backup is never
+  overwritten. That is also why a plain `y` is enough to confirm it: the prompt
+  lists every affected file by full path, and the worst outcome is renaming
+  things back rather than lost work.
+
+  Your calendar is not touched. mirador only ever *reads* an `.ics`, so that
+  file is yours even when it sits in mirador's own directory — and neither are
+  files at paths you chose yourself with `[todo].file` and its siblings.
+
 ## [1.0.4] - 2026-07-31
 
 ### Fixed
@@ -1354,7 +1375,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/jchultarsky/mirador/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/jchultarsky/mirador/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/jchultarsky/mirador/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/jchultarsky/mirador/compare/v1.0.1...v1.0.2
