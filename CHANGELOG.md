@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-07-31
+
+Housekeeping. Nothing you can see changes; both entries are things that were
+wrong underneath.
+
+### Fixed
+
+- **A very long watchlist collapsed the stocks panel instead of filling it.**
+  The panel reports the height it can use, and that sum was not saturating while
+  already reaching for `u16::MAX` — so a watchlist of around 65,000 symbols
+  wrapped it to three rows. Absurd in practice; the watchlist is a file you
+  edit, so nothing bounded it. The cap itself was checked at the same time and
+  is exactly right: the panel is complete at header, every symbol and the status
+  line, and any extra height would be a blank gap, so the space goes to a
+  neighbouring row instead.
+
+### Changed
+
+- **The test suite no longer reaches the network.** It was documented as never
+  doing so, and that had quietly stopped being true: constructing the stocks
+  panel spawns a fetch thread, so *building* one called Yahoo Finance — and
+  since the default layout places that panel, any test building a dashboard did
+  too. Quote sources are injectable now, and the one function that opens a
+  socket refuses outright under `cfg(test)`. No effect on the shipped binary,
+  which fetches exactly as before.
+
 ## [1.0.1] - 2026-07-31
 
 ### Fixed
@@ -1293,7 +1319,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/jchultarsky/mirador/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/jchultarsky/mirador/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jchultarsky/mirador/compare/v0.19.0...v1.0.0
 [0.19.0]: https://github.com/jchultarsky/mirador/compare/v0.18.2...v0.19.0
