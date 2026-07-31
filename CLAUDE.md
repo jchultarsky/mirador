@@ -598,9 +598,31 @@ line on screen the first left it alone while the second erased it. **Always send
 the second as a control:** if the sequences were being swallowed, neither would
 do anything, and only one of them proves that.
 
-What is left is a terminal question rather than mirador's. Focus events do not
-survive zellij, tmux needs `focus-events on`, and nobody has yet run this on a
-bare terminal with neither. The keypress fallback carries the feature there.
+**Delivery on a bare terminal — verified 2026-07-30, on macOS Terminal.app with
+no multiplexer.** This was the last unverified behaviour in the program, and it
+passes: an entry that arrived while away drew the rule line, and the line
+*survived* coming back, which is #132's fix meeting a real terminal for the first
+time.
+
+The method is the part worth keeping, because inferring delivery from mirador's
+own screen cannot distinguish "the terminal sent nothing" from "mirador mishandled
+it". **Measure the terminal separately.** A dozen lines of Python that put the tty
+in raw mode, write `\033[?1004h`, and log stdin to a file answers it outright —
+Terminal.app produced exactly `1b5b4f` on leaving and `1b5b49` on returning. Do
+that first, then test mirador; two clean signals beat one ambiguous one.
+
+Still untried: iTerm2, and any non-Apple terminal. Focus events do not survive
+zellij and tmux needs `focus-events on`; the keypress fallback carries the feature
+wherever delivery fails.
+
+**One run out of three showed no rule line, and it did not reproduce.** Recorded
+because the temptation was to file it. The failing run differed in that the entry
+arrived only after the window came forward, so that was made the variable and
+tested directly — and the line appeared anyway. The most likely cause is the test
+harness rather than mirador: the screenshot tool hides non-allowlisted
+applications, which can shuffle focus and deliver transitions nobody asked for.
+**An anomaly seen once, in a rig you built that morning, is more likely to be the
+rig.** Reproduce before reporting.
 
 **The log does not persist, on purpose.** A file would come back after a restart
 with a hole in it — the hours mirador was not running and observed nothing —
@@ -1286,11 +1308,12 @@ picker over them, arrange mode with row movement, and in-panel editing for
 everything the UI can change.
 
 That is a fact about the *list*, not a claim the program is finished. The
-nearest thing to an untested condition left is a **bare terminal with no
-multiplexer**: focus events demonstrably do not survive zellij, and tmux needs
-`focus-events on`, so nobody has yet watched the watch log's rule line behave
-where the terminal reports focus directly. mirador's own handling of those
-events is verified — see Phase 3.
+last untested condition — a **bare terminal with no multiplexer** — was closed on
+2026-07-30 against macOS Terminal.app, which reports focus and drew the rule line
+correctly. See the watch log section for the method and for the one anomalous run
+that did not reproduce. What remains is breadth rather than doubt: iTerm2 and the
+non-Apple terminals have not been tried, and focus events still do not survive
+zellij.
 
 One thing is parked on its merits rather than forgotten. **OSC 8 hyperlinks**
 were the third mechanism in the news-link design; `y` and `[news].open_command`
