@@ -230,16 +230,7 @@ pub fn default_path(data_dir: &Path) -> PathBuf {
 /// not a licence for the program to throw away a setting somebody spent time
 /// choosing.
 pub fn clear(path: &Path) -> Result<Option<PathBuf>> {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => return Ok(None),
-        Err(e) => anyhow::bail!("could not check whether {} exists: {e}", path.display()),
-    }
-
-    let to = crate::config::free_backup_path(path);
-    std::fs::rename(path, &to)
-        .with_context(|| format!("moving {} to {}", path.display(), to.display()))?;
-    Ok(Some(to))
+    crate::store::move_aside(path)
 }
 
 #[cfg(test)]

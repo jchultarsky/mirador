@@ -63,6 +63,8 @@ OPTIONS:
         --config-path      Print the resolved config path and exit
         --migrate-config   Update a config written by an older version
         --reset-config     Replace the config with the defaults, keeping a copy
+        --factory-reset    Start over: config, preferences, tasks, notes and
+                           watchlist all set aside, nothing deleted
     -y, --yes              Do not ask for confirmation
     -h, --help             Print this help and exit
     -V, --version          Print the version and exit
@@ -93,6 +95,7 @@ struct Args {
     show_config_path: bool,
     migrate_config: bool,
     reset_config: bool,
+    factory_reset: bool,
     /// Skip the confirmation `--reset-config` would otherwise ask for.
     assume_yes: bool,
     help: bool,
@@ -112,6 +115,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
             "--config-path" => args.show_config_path = true,
             "--migrate-config" => args.migrate_config = true,
             "--reset-config" => args.reset_config = true,
+            "--factory-reset" => args.factory_reset = true,
             "-y" | "--yes" => args.assume_yes = true,
             "-c" | "--config" => {
                 let value = iter.next().ok_or_else(|| {
@@ -216,6 +220,87 @@ fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Put mirador back where a fresh install would leave it.
+///
+/// The reset `--reset-config` deliberately is not. That one is about
+/// configuration; this one is about everything mirador has written, because
+/// the owner's expectation of a reset was "as if I just installed the app" and
+/// `--reset-config` cannot honestly promise that — the watchlist, tasks and
+/// notes all outlive it (#153).
+///
+/// **Nothing is deleted.** Every file is renamed to a numbered `.bak` beside
+/// itself, so the dashboard starts over and the reader can still get their task
+/// list back. That is what makes a single `y` an acceptable confirmation for a
+/// command with this name: the prompt names every file, and the worst outcome
+/// is an afternoon of renaming rather than lost work.
+fn factory_reset(config_path: &Path, assume_yes: bool) -> Result<()> {
+    let data_files = Config::owned_data_files().unwrap_or_default();
+    let present: Vec<&PathBuf> = data_files
+        .iter()
+        .filter(|p| p.try_exists().unwrap_or(false))
+        .collect();
+    let config_exists = config_path.try_exists().unwrap_or(false);
+
+    if !assume_yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "refusing to reset everything without a confirmation.\n\nThere is \
+                 no terminal to ask on, so re-run with `--yes` if you mean it."
+            );
+        }
+        println!("This starts mirador over from scratch.");
+        println!();
+        if config_exists {
+            println!("  Replaced with the defaults:");
+            println!("    {}", config_path.display());
+            println!();
+        }
+        if present.is_empty() {
+            println!("  There is nothing else to set aside.");
+        } else {
+            println!("  Set aside, each kept as a `.bak` beside itself:");
+            for path in &present {
+                println!("    {}", path.display());
+            }
+        }
+        println!();
+        println!("Nothing is deleted. Your tasks and notes stay on disk under their");
+        println!("backup names, and mirador starts again with fresh ones.");
+        print!("Go ahead? [y/N] ");
+        std::io::stdout().flush().context("writing the prompt")?;
+
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading your answer")?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Left everything alone.");
+            return Ok(());
+        }
+    }
+
+    let backup = Config::reset(config_path)?;
+    println!("Wrote the default config to {}.", config_path.display());
+    if let Some(backup) = backup {
+        println!("Your previous config is at {}.", backup.display());
+    }
+
+    let mut moved = 0usize;
+    for path in data_files {
+        if let Some(to) = store::move_aside(&path)? {
+            println!("Set aside {} -> {}", path.display(), to.display());
+            moved += 1;
+        }
+    }
+    if moved == 0 {
+        println!("There was nothing else to set aside.");
+    }
+
+    println!("Next launch starts fresh: example tasks and notes, and the");
+    println!("watchlist seeded from `[stocks].symbols` in the new config.");
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = parse_args(std::env::args().skip(1))?;
 
@@ -246,6 +331,14 @@ fn run() -> Result<()> {
             None => Config::default_path()?,
         };
         return reset_config(&path, args.assume_yes);
+    }
+
+    if args.factory_reset {
+        let path = match args.config.clone() {
+            Some(p) => p,
+            None => Config::default_path()?,
+        };
+        return factory_reset(&path, args.assume_yes);
     }
 
     if args.migrate_config {
@@ -370,6 +463,11 @@ mod tests {
         assert!(parse(&["--config-path"]).unwrap().show_config_path);
         assert!(parse(&["--migrate-config"]).unwrap().migrate_config);
         assert!(parse(&["--reset-config"]).unwrap().reset_config);
+        assert!(parse(&["--factory-reset"]).unwrap().factory_reset);
+        // The two are separate commands, not degrees of one: a config reset
+        // must never quietly take the tasks with it.
+        assert!(!parse(&["--reset-config"]).unwrap().factory_reset);
+        assert!(!parse(&["--factory-reset"]).unwrap().reset_config);
         assert!(parse(&["-y"]).unwrap().assume_yes);
         assert!(parse(&["--yes"]).unwrap().assume_yes);
     }
