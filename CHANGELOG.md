@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-31
+
+### Fixed
+
+- **The resize keys are advertised where you would look for them.** `Ctrl+arrow`
+  has resized the focused
+  panel since long before 1.0, but it was declared as a secondary binding, so it
+  appeared only in the `?` overlay — someone looking for it on the status bar
+  concluded the feature did not exist. It now sits beside the other primary
+  hints, spelled `Ctrl+arrows resize`, the way arrange mode and `--help` already
+  spelled it. A panel that cannot use the extra space still declines it, so
+  growing a row may move the space to a neighbour rather than to the panel you
+  are pointing at; that is deliberate.
+- **The status bar no longer cuts a hint in half.** It drew every hint and let
+  the terminal clip the last one, which on a narrow window left fragments like
+  `Ctrl+←` — a rendering fault to look at, where a missing hint just reads as a
+  narrow terminal. It now drops whole hints, which is what arrange mode's legend
+  has always done. Reachable before this release for any terminal narrow enough
+  to cut `t theme`.
+
 ## [1.0.0] - 2026-07-30
 
 **1.0 is a promise, not a feature.** Nothing is added here that was not in
@@ -1273,7 +1293,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jchultarsky/mirador/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jchultarsky/mirador/compare/v0.19.0...v1.0.0
 [0.19.0]: https://github.com/jchultarsky/mirador/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/jchultarsky/mirador/compare/v0.18.1...v0.18.2
