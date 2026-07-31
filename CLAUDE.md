@@ -1111,44 +1111,32 @@ input is hostile", not "is this correct".
 
 ### Phase 3 — soak
 
-Nothing here had run for a day when this was written. **Three of the four are
-done.** Only a real midnight is left, and it needs nothing but time.
+**Closed.** All four items are verified, and three of them were closed by the
+owner on a real terminal between 28 and 30 July — which this section went on
+denying for a day afterwards, so read the dates rather than the prose if the two
+ever disagree again.
 
-- **A full day idle — done.** 0.16.3 soaked for 9h42m over 583 samples on
-  2026-07-30: RSS climbed 1.0MB in the first two hours and then moved *once* in
-  the following 2h54m, a single 16KB step. That is allocator settling, not a
-  leak. CPU stayed at the floor and no alert ever fired. A second soak of 0.18.1
-  is what the midnight check below is riding on.
-- **Windows — done.** Started by the owner on 25 and 28 July through the
-  PowerShell installer, including `mirador-update`, and every CI run since builds
-  and tests it. Treat it as the least-travelled of the three targets rather than
-  as unknown.
-- **A real midnight** — still open. The day-rollover entry has only met a test
-  that winds the date back.
-- **Terminal focus reporting — done, and the method is the interesting part.**
-  This was recorded for a long time as unverifiable by an agent, because a
-  headless tmux has no attached client to have focus. That is true and beside
-  the point: **focus events are just bytes on stdin**, and `tmux send-keys -H`
-  can inject them.
-
-  ```sh
-  tmux send-keys -t <session> -H 1b 5b 49   # ESC [ I — focus gained
-  tmux send-keys -t <session> -H 1b 5b 4f   # ESC [ O — focus lost
-  ```
-
-  Verified on 2026-07-30 with a rule line on screen: focus-in left it alone,
-  focus-out erased it. **The control is what makes that mean anything** — if the
-  sequences were being swallowed, focus-out would have done nothing either. Use
-  the same pair for anything else that reacts to focus.
-
-  This also settles #132's fix end to end: `mark_seen` now runs on `FocusLost`
-  only, so returning to the dashboard no longer erases the line in the instant
-  it is wanted.
-
-**The midnight check wants two independent witnesses**, for exactly that reason:
-the clock's own date line flipping, *and* a watch log entry reading
-`<Day> <n> <Month> began`. With one witness, "did not happen" and "happened and
-was erased" look identical.
+- **Windows — done, 2026-07-28.** Installed and run through the PowerShell
+  installer, twice, including `mirador-update`. Every shipped binary on every
+  shipped target has now been executed at least once.
+- **A real midnight — done, 2026-07-29.** The owner saw
+  `00:00 Wednesday 29 July began` in the watch log at the rollover. Until then it
+  had only met a test that winds the date back.
+- **A full day idle — done, 2026-07-30.** A 15-hour RSS log at 15-minute
+  intervals went **23436 → 22592 KB, net −844 KB** — it *ends lower than it
+  starts*, oscillating in a band of roughly 19224–23796 KB. Allocator churn and
+  page reclaim, not accumulation. **Do not draw a trend from two RSS samples of
+  this program**: an earlier pair read as "+3548 KB in 5–6 h" and looked like a
+  leak, when both samples simply landed at different points in the same cycle.
+- **Terminal focus reporting — answered, and the answer has two halves.**
+  *mirador's handling is verified*: focus events are bytes on stdin, so
+  `tmux send-keys -H 1b 5b 49` (gained) and `1b 5b 4f` (lost) inject them, and
+  with a rule line on screen the first left it alone while the second erased it.
+  Always send the second as a control — if the sequences were being swallowed,
+  neither would do anything. *Delivery is a terminal question, not mirador's*:
+  *focus events do not survive zellij*, the same shape as the documented tmux
+  caveat that needs `focus-events on`. Still untested is a bare terminal with no
+  multiplexer, which is a far narrower gap than "never verified".
 
 *Exit:* the list of unverified behaviour is empty.
 
@@ -1275,10 +1263,12 @@ the watch log, and the on-fire signal — along with named themes and the `t`
 picker over them, arrange mode with row movement, and in-panel editing for
 everything the UI can change.
 
-That is a fact about the *list*, not a claim the program is finished. The one
-thing shipped that has never run in the conditions it was built for is the
-**day rollover**: it has only ever been exercised by a test that winds the date
-back, and the first real midnight is the first real test of it.
+That is a fact about the *list*, not a claim the program is finished. The
+nearest thing to an untested condition left is a **bare terminal with no
+multiplexer**: focus events demonstrably do not survive zellij, and tmux needs
+`focus-events on`, so nobody has yet watched the watch log's rule line behave
+where the terminal reports focus directly. mirador's own handling of those
+events is verified — see Phase 3.
 
 When something goes back on this list, put the *reason* beside it. Every entry
 that was ever useful here said why it mattered; the one that got quietly dropped
