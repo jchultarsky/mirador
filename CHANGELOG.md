@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-07-31
+
+### Fixed
+
+- **`--reset-config` now resets what you can see.** It restored the config
+  correctly all along, but left `state.toml` — the preferences you change from
+  the keyboard — in place. Those *outrank* the config, so they were applied
+  straight back over the file just restored, and the dashboard came back looking
+  exactly as before. Anyone who had only ever changed their theme saw the
+  command appear to do nothing. The remembered preferences are now put aside
+  too, into `state.toml.bak`, and a second reset does not overwrite the first
+  copy.
+
+  Both the prompt and the result say what is kept, because the boundary was
+  invisible from the flag's name: **your tasks, notes and watchlist are left
+  alone.** They are your content rather than configuration, so a command called
+  `--reset-config` does not delete them — which also means the default stock
+  tickers are not restored. `[stocks].symbols` seeds `watchlist.toml` only when
+  that file is absent, and that is what lets the panel edit the list at all.
+
 ## [1.0.3] - 2026-07-31
 
 Documentation only. No behaviour changes at all; this exists so the corrected
@@ -1334,7 +1354,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/jchultarsky/mirador/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/jchultarsky/mirador/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/jchultarsky/mirador/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/jchultarsky/mirador/compare/v1.0.0...v1.0.1
