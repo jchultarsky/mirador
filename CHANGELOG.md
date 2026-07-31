@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-07-31
+
+Documentation only. No behaviour changes at all; this exists so the corrected
+text reaches the README on crates.io and the config mirador prints.
+
+### Changed
+
+- **The resize key is spelled the same everywhere.** The status bar, arrange
+  mode and `--help` all say `Ctrl+arrows`; the README said `Ctrl+arrow` in four
+  places, including both key tables, so the page you read and the bar you look
+  at disagreed about one key. The comment at the head of the shipped config said
+  it too, and that text is compiled into the binary, so `mirador --print-config`
+  carried it. The singular survives where it means one keypress — that is
+  grammar, not inconsistency.
+
 ## [1.0.2] - 2026-07-31
 
 Housekeeping. Nothing you can see changes; both entries are things that were
@@ -1319,7 +1334,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/jchultarsky/mirador/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/jchultarsky/mirador/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/jchultarsky/mirador/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/jchultarsky/mirador/compare/v0.19.0...v1.0.0
