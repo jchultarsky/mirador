@@ -41,10 +41,16 @@ const GLOBAL: &[Binding] = &[
     // same reason too: six themes ship, and a theme nobody can find is six
     // files of decoration.
     Binding::primary("t", "theme"),
+    // Promoted from `extra` at the owner's request, and the comment on `m`
+    // above had already named the reason: shipped, useful, and undiscoverable.
+    // Spelled the way the arrange legend and `--help` already spell it —
+    // `Ctrl+←/→ resize width` plus `Ctrl+↑/↓ resize height` is 45 cells of
+    // status bar and needs 120 columns before either appears, where the
+    // collapsed form fits from 92. Which arrow does which axis is the one
+    // thing nobody has to be told.
+    Binding::primary("Ctrl+arrows", "resize"),
     Binding::extra("Shift+Tab", "focus back"),
     Binding::extra("1-9", "jump to panel"),
-    Binding::extra("Ctrl+←/→", "resize width"),
-    Binding::extra("Ctrl+↑/↓", "resize height"),
     Binding::extra("Ctrl+C", "quit"),
 ];
 
@@ -1578,7 +1584,22 @@ impl App {
                 .add_modifier(Modifier::BOLD),
         )];
 
+        // Dropped whole rather than clipped, exactly as the arrange legend
+        // above does it: half a hint reads as a rendering fault, a missing one
+        // reads as a narrow terminal. This bar had no such guard and did not
+        // need one while every primary was a single character — `t theme` was
+        // the widest thing in it. Promoting the resize keys made it need one:
+        // at 80 columns the bar ended `Ctrl+←`.
+        let mut used = crate::grid::display_width(" mirador");
         for binding in GLOBAL.iter().filter(|b| b.primary) {
+            let width = 3
+                + crate::grid::display_width(binding.key)
+                + 1
+                + crate::grid::display_width(binding.action);
+            if used + width > usize::from(area.width) {
+                break;
+            }
+            used += width;
             spans.push(Span::styled("   ", muted));
             spans.push(Span::styled(binding.key, key_style));
             spans.push(Span::styled(format!(" {}", binding.action), muted));
@@ -2030,6 +2051,72 @@ mod tests {
             bar.contains("move row"),
             "and says a row can be moved: {bar}"
         );
+    }
+
+    /// The resize keys shipped as `extra` and so appeared only behind `?`.
+    /// The owner went looking for them in the status bar, did not find them,
+    /// and concluded the feature did not exist — which is the whole argument
+    /// for `primary`, and the same failure #109 and #117 already made.
+    #[test]
+    fn the_resize_keys_are_advertised_on_the_status_bar() {
+        let mut app = App::new(resizable()).expect("builds");
+        let bar = status_bar_at(&mut app, 120);
+        assert!(
+            bar.contains("Ctrl+arrows resize"),
+            "resize must be advertised where someone looking for it will look: {bar}"
+        );
+    }
+
+    /// The bar is built from one table, so a hint cannot be worded differently
+    /// in two places — but it *can* be worded differently from the legend and
+    /// `--help`, which are separate strings. All three say `Ctrl+arrows`.
+    #[test]
+    fn the_resize_hint_is_worded_the_way_arrange_mode_words_it() {
+        let mut app = App::new(resizable()).expect("builds");
+        let plain = status_bar_at(&mut app, 120);
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        let legend = status_bar_at(&mut app, 120);
+        assert!(
+            plain.contains("Ctrl+arrows resize") && legend.contains("Ctrl+arrows resize"),
+            "the same key must read the same in both bars:\n  {plain}\n  {legend}"
+        );
+    }
+
+    /// Every width must show whole hints or none — never a fragment. This is
+    /// the property the arrange legend has always had and this bar did not:
+    /// while every primary was one character the shortfall never showed, and
+    /// promoting `Ctrl+arrows` made it show at 80 columns as `Ctrl+←`.
+    ///
+    /// Asserted by construction rather than by looking for a fragment: the
+    /// drawn bar has to be one of the prefixes that end on a hint boundary,
+    /// which no partial hint can be.
+    #[test]
+    fn the_status_bar_never_draws_half_a_hint() {
+        let mut app = App::new(resizable()).expect("builds");
+
+        let mut whole = Vec::new();
+        let mut acc = String::from(" mirador");
+        whole.push(acc.clone());
+        for binding in GLOBAL.iter().filter(|b| b.primary) {
+            acc.push_str("   ");
+            acc.push_str(binding.key);
+            acc.push(' ');
+            acc.push_str(binding.action);
+            whole.push(acc.clone());
+        }
+
+        for width in 8..200u16 {
+            let bar = status_bar_at(&mut app, width);
+            let drawn = bar.trim_end().to_string();
+            assert!(
+                whole.contains(&drawn),
+                "the bar was cut mid-hint at {width}: {drawn:?}"
+            );
+            assert!(
+                crate::grid::display_width(&drawn) <= usize::from(width),
+                "the bar overflowed at {width}: {drawn:?}"
+            );
+        }
     }
 
     /// A terminal too narrow for every hint keeps the ones that get you out.
