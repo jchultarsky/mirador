@@ -1153,7 +1153,7 @@ real defect, and the useful part is which of the three sub-questions had a
 mechanical answer.
 
 **No option that ever shipped has been removed.** Checked by extracting every
-key from `assets/default_config.toml` at all twenty-two release tags and
+key from `assets/default_config.toml` at all thirty-one release tags and
 diffing: 78 keys, none lost. So `migrate.rs` covering "every rename ever
 shipped" was already true — its four rules are all pre-`0.1.0`, and there has
 been nothing to migrate since.
@@ -1200,7 +1200,17 @@ cannot fail.
 
 ### Phase 5 — cut 1.0.0
 
-When phases 1–4 are done, and not because a date arrived.
+**Done, 2026-07-30.** Phases 1–4 were complete and the owner called it; the
+version number was not waiting on a date.
+
+The compatibility audit was re-run against **all thirty-one release tags** before
+tagging — 1860 key-comparisons, nothing removed — rather than trusting the
+twenty-two-tag figure from the Phase 4 audit. **The first three attempts at that
+re-run all reported a clean pass while comparing nothing**, which is worth more
+than the result: `"$t:assets/…"` in zsh applies the `:a` *absolute path*
+modifier to `$t`, so every `git show` failed and every tag yielded an empty key
+set that trivially contained no losses. Write `"${t}:path"`, and have the check
+count what it actually compared so a vacuous pass cannot look like a real one.
 
 ## Feature freeze — lifted 2026-07-30
 
