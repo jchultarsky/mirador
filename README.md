@@ -1005,7 +1005,7 @@ covers.
 
 **Your config.** No option that has ever shipped in a released version has been
 removed — every key in every `mirador.toml` written since `0.1.0` is still
-accepted, checked against all twenty-two releases. Options are added, never
+accepted, checked against all thirty-one releases. Options are added, never
 renamed out from under you. The four keys that predate `0.1.0` are handled by
 `mirador --migrate-config`, which edits the file in place and tells you what it
 changed.

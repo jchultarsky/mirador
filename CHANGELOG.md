@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-30
+
+**1.0 is a promise, not a feature.** Nothing is added here that was not in
+0.19.0. What changes is what the version number commits to:
+
+- **Your config keeps working.** No option that has ever shipped has been
+  removed. Re-verified before tagging against all thirty-one release tags —
+  1860 key comparisons, nothing lost. The four keys predating `0.1.0` are still
+  handled by `mirador --migrate-config`.
+- **Your data files keep working.** `todos.toml`, your notes, `watchlist.toml`,
+  `zones.toml` and `state.toml` have not changed shape since `0.1.0`, and all
+  ignore keys they do not recognise — so a file written by a newer mirador still
+  opens in an older one.
+- **No known crashes or hangs.** Every module has been read adversarially, the
+  untrusted-input boundary is bounded on every side, and the dashboard has been
+  soaked across real midnights on macOS, Linux and Windows.
+
+Breaking changes from here get a major version. Options may be added; they will
+not be renamed out from under you.
+
 ## [0.19.0] - 2026-07-30
 
 ### Added
@@ -1253,7 +1273,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/jchultarsky/mirador/compare/v0.19.0...v1.0.0
 [0.19.0]: https://github.com/jchultarsky/mirador/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/jchultarsky/mirador/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/jchultarsky/mirador/compare/v0.18.0...v0.18.1
