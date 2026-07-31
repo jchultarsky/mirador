@@ -122,6 +122,48 @@ fn temp_path(path: &Path) -> std::path::PathBuf {
 /// panel can render it. Swallowing the error is deliberate — a read-only disk
 /// must not take the dashboard down — but swallowing it *silently* is not: an
 /// edit that never reached the disk is exactly what the user needs told.
+/// A `.bak` name beside `path` that nothing is using yet.
+///
+/// Numbered rather than overwritten, so a second reset does not destroy what
+/// the first one preserved. Lived in `config` while the config was the only
+/// thing ever set aside; it belongs here now that state and the data files use
+/// it too, because "do not lose the old file" is this module's whole job.
+pub(crate) fn free_backup_path(path: &Path) -> std::path::PathBuf {
+    let first = path.with_extension("toml.bak");
+    if !first.exists() {
+        return first;
+    }
+    for n in 2..1000 {
+        let candidate = path.with_extension(format!("toml.bak.{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
+/// Move `path` out of the way, keeping its contents under a `.bak` name.
+///
+/// Returns where it went, or `None` if there was nothing there.
+///
+/// Renamed rather than deleted, and that is the point. A factory reset has to
+/// leave the reader where a fresh install would — which means these files must
+/// be *gone* from where mirador looks — but "gone" and "destroyed" are not the
+/// same thing, and this program does not destroy a task list. The same reason
+/// `write_atomic` exists.
+pub fn move_aside(path: &Path) -> Result<Option<std::path::PathBuf>> {
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(e) => anyhow::bail!("could not check whether {} exists: {e}", path.display()),
+    }
+
+    let to = free_backup_path(path);
+    std::fs::rename(path, &to)
+        .with_context(|| format!("moving {} to {}", path.display(), to.display()))?;
+    Ok(Some(to))
+}
+
 pub fn report(result: Result<()>, last_error: &mut Option<String>) {
     *last_error = match result {
         Ok(()) => None,
@@ -151,6 +193,61 @@ pub fn line_ending(source: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A factory reset has to leave these files gone from where mirador looks,
+    /// without destroying them. Both halves matter and the second is the one
+    /// worth a test — deleting a task list would be the single most
+    /// unforgivable thing this program could do.
+    #[test]
+    fn moving_aside_leaves_nothing_behind_and_loses_nothing() {
+        let dir = std::env::temp_dir().join(format!("mirador-aside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, "title = \"do not lose me\"").expect("writes");
+
+        let moved = move_aside(&path).expect("moves").expect("there was a file");
+        assert!(
+            !path.exists(),
+            "the original must be gone from where mirador looks"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&moved).expect("readable"),
+            "title = \"do not lose me\"",
+            "and every byte of it kept"
+        );
+
+        assert!(
+            move_aside(&path).expect("no error").is_none(),
+            "moving an absent file is a normal outcome, not a failure"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reset twice and the first rescue must survive the second.
+    #[test]
+    fn a_second_move_does_not_overwrite_the_first_backup() {
+        let dir = std::env::temp_dir().join(format!("mirador-aside2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let path = dir.join("notes.toml");
+        std::fs::write(&path, "first").expect("writes");
+        let first = move_aside(&path).expect("moves").expect("a file");
+        std::fs::write(&path, "second").expect("writes again");
+        let second = move_aside(&path).expect("moves").expect("a file");
+
+        assert_ne!(first, second, "the second needs a name of its own");
+        assert_eq!(
+            std::fs::read_to_string(&first).expect("readable"),
+            "first",
+            "the first backup must not have been clobbered"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     struct TempDir(std::path::PathBuf);
 

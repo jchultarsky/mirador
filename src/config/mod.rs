@@ -192,7 +192,7 @@ impl Config {
     pub fn reset(path: &Path) -> Result<Option<PathBuf>> {
         let backup = match path.try_exists() {
             Ok(true) => {
-                let to = free_backup_path(path);
+                let to = crate::store::free_backup_path(path);
                 std::fs::copy(path, &to).with_context(|| {
                     format!("backing up {} to {}", path.display(), to.display())
                 })?;
@@ -354,6 +354,31 @@ impl Config {
         Ok(crate::update::default_path(&Self::default_data_dir()?))
     }
 
+    /// Every file mirador writes into its own data directory.
+    ///
+    /// The list a factory reset works from, and deliberately not the same as
+    /// "every file a panel reads". `calendar.ics` is absent because mirador
+    /// only ever *reads* a calendar — it is the reader's file, sitting in
+    /// mirador's directory by default, and a reset has no business moving it.
+    /// The rule is ownership by authorship: if mirador wrote it, mirador may
+    /// set it aside.
+    ///
+    /// Default locations only. A `[todo].file` pointing somewhere else is a
+    /// path the reader chose, and resetting the config already stops mirador
+    /// looking there — moving a file out of a directory the reader picked
+    /// would be a surprise a reset cannot justify.
+    pub fn owned_data_files() -> Result<Vec<PathBuf>> {
+        let dir = Self::default_data_dir()?;
+        Ok(vec![
+            crate::state::default_path(&dir),
+            dir.join("todos.toml"),
+            dir.join("notes.toml"),
+            dir.join("watchlist.toml"),
+            dir.join("zones.toml"),
+            crate::update::default_path(&dir),
+        ])
+    }
+
     pub fn state_path() -> Result<PathBuf> {
         Ok(crate::state::default_path(&Self::default_data_dir()?))
     }
@@ -440,31 +465,6 @@ impl Config {
         }
     }
 }
-
-/// A backup path beside `path` that nothing is using yet.
-///
-/// `config.toml.bak` first, matching `migrate`, then `.bak.2`, `.bak.3` and so
-/// on. The counter is not tidiness: without it a second reset would overwrite
-/// the first backup with the defaults the first reset had just written, and the
-/// user's real config would be gone with no way back.
-///
-/// Racy in principle — the name is checked and then written — but the loser of
-/// that race is a person running two resets at the same instant, and the bound
-/// stops a directory of stale backups from making this loop for ever.
-pub(crate) fn free_backup_path(path: &Path) -> PathBuf {
-    let first = path.with_extension("toml.bak");
-    if !first.exists() {
-        return first;
-    }
-    for n in 2..1000 {
-        let candidate = path.with_extension(format!("toml.bak.{n}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    first
-}
-
 /// Turn a parse failure into an error that says how to fix it.
 ///
 /// The common case by far is a config written by an older version: mirador
@@ -514,6 +514,43 @@ fn expand_tilde(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list a factory reset works from. What is *absent* is the load-bearing
+    /// part: mirador reads a calendar and never writes one, so `calendar.ics`
+    /// belongs to the reader even when it sits in mirador's own directory.
+    /// Setting it aside would be destroying data mirador did not create.
+    #[test]
+    fn the_owned_files_are_the_ones_mirador_writes() {
+        let Ok(files) = Config::owned_data_files() else {
+            // No data directory on this platform; nothing to assert about.
+            return;
+        };
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into())
+            .collect();
+
+        for wanted in [
+            "state.toml",
+            "todos.toml",
+            "notes.toml",
+            "watchlist.toml",
+            "zones.toml",
+            "update-check.toml",
+        ] {
+            assert!(names.iter().any(|n| n == wanted), "{wanted} must be reset");
+        }
+        assert!(
+            !names.iter().any(|n| n == "calendar.ics"),
+            "a factory reset must not touch a calendar mirador only ever reads: {names:?}"
+        );
+        // All in one directory, so nothing here can reach outside it.
+        let dir = files[0].parent().expect("a parent");
+        assert!(
+            files.iter().all(|p| p.parent() == Some(dir)),
+            "every owned file must live in mirador's own data directory: {files:?}"
+        );
+    }
 
     /// A scratch directory named for the calling test, so the reset tests do
     /// not share files with each other or with a parallel run.

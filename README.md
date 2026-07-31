@@ -304,10 +304,23 @@ moves the panel itself, merging it into the neighbouring row.
 and leaves a backup beside the original.
 
 If a config has gone past fixing, `mirador --reset-config` writes the shipped
-defaults over it and copies the old one to `config.toml.bak` first. It says what
-it is about to do and waits for a `y`, and it will not run at all without a
-terminal to ask on unless you add `--yes`. An existing backup is never
-overwritten, so resetting twice still leaves your original recoverable.
+defaults over it and copies the old one to `config.toml.bak` first. It also puts
+aside the preferences you changed from the keyboard, because those outrank the
+config — leaving them would apply your old choices straight back over the file
+just restored, and the dashboard would come back looking untouched. Your tasks,
+notes and watchlist are left alone, and it says so.
+
+If you want the whole thing back to how it arrived, `mirador --factory-reset`
+sets aside everything mirador has written — config, preferences, tasks, notes,
+watchlist and world clocks — and the next launch seeds them all again. **Nothing
+is deleted.** Every file is renamed to a `.bak` beside itself, so a factory
+reset is something you can walk back from with `mv`. Your calendar is not
+touched: mirador only ever reads an `.ics`, so that file is yours even when it
+sits in mirador's own directory.
+
+Both say what they are about to do and wait for a `y`, and neither runs without
+a terminal to ask on unless you add `--yes`. An existing backup is never
+overwritten, so resetting twice still leaves the first one recoverable.
 
 ## The panels
 
