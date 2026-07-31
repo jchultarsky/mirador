@@ -26,17 +26,24 @@
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// How long any single request may take.
+///
+/// `cfg(not(test))` alongside the only function that uses it: under `cfg(test)`
+/// `http_get` refuses before building an agent, so keeping these would be dead
+/// code the lint would rightly complain about.
+#[cfg(not(test))]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Yahoo rejects requests without a browser user agent with HTTP 429, whatever
 /// the request rate. This is not an attempt to hide what mirador is — the
 /// endpoint simply refuses anything that does not look like a browser.
+#[cfg(not(test))]
 const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
                           AppleWebKit/537.36 (KHTML, like Gecko) \
                           Chrome/126.0.0.0 Safari/537.36";
@@ -235,6 +242,25 @@ impl QuoteSource for YahooChart {
 }
 
 /// A blocking GET with a timeout, presenting a browser user agent.
+///
+/// **Refuses outright under `cfg(test)`, and that is load-bearing (#147).**
+/// This is the only function in the crate that opens a socket, and the stated
+/// rule is that no test does. The rule was believed to hold because
+/// `parse_chart` is tested against captured JSON — but a panel spawns a fetch
+/// thread when it is *constructed*, and `Layout::default()` places the stocks
+/// panel, so building a dashboard in a test was enough. A Windows runner got a
+/// real HTTP 404 back for a made-up symbol and rendered it.
+///
+/// Injecting a `QuoteSource` fixes the tests that build a panel directly, and
+/// is the better design; this covers the ones that reach it through
+/// `widgets::build`, where there is no seam to pass a source through. Nothing
+/// is lost: no test asserts on a live response, because none could.
+#[cfg(test)]
+fn http_get(_url: &str) -> Result<String> {
+    anyhow::bail!("network access is refused in tests")
+}
+
+#[cfg(not(test))]
 fn http_get(url: &str) -> Result<String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
@@ -448,6 +474,24 @@ pub fn sparkline(series: &[f64], width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rule that no test opens a socket, made checkable (#147).
+    ///
+    /// It used to rest on `parse_chart` being split from the request — true,
+    /// and not enough: constructing a stocks panel spawns a fetch thread, and
+    /// `Layout::default()` places that panel, so building a dashboard in a test
+    /// was sufficient to call Yahoo. `http_get` refuses under `cfg(test)` now.
+    /// Delete that branch and this goes red rather than going quiet.
+    #[test]
+    fn the_network_is_refused_while_testing() {
+        let err = YahooChart
+            .fetch("AAPL")
+            .expect_err("a live fetch must not be possible from a test");
+        assert!(
+            err.to_string().contains("refused in tests"),
+            "the refusal must come from the cfg(test) guard, not from the wire: {err}"
+        );
+    }
 
     /// A trimmed but structurally faithful v8 chart response.
     const SAMPLE: &str = r#"{

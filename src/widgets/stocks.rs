@@ -175,6 +175,28 @@ impl StocksPanel {
                 crate::quote::SOURCE_NAMES.join(", ")
             )
         })?;
+
+        Ok(Self::with_source(config, watchlist, source))
+    }
+
+    /// Build the panel against a source that is already chosen.
+    ///
+    /// This is the seam `QuoteSource` exists for, and it was missing: `new`
+    /// resolved the only real source itself and spawned a thread against it, so
+    /// *constructing a panel made an HTTP request*. Every test that built one
+    /// therefore reached Yahoo Finance — the rule that no test touches the
+    /// network held for `parse_chart` and had quietly stopped holding here.
+    /// It surfaced when a Windows runner got a real 404 back for a made-up
+    /// symbol and rendered it (#147).
+    ///
+    /// The watchlist is loaded by the caller so that a bad file is still
+    /// reported before an unknown source name, which is the order `new`
+    /// always had.
+    fn with_source(
+        config: StocksConfig,
+        watchlist: Watchlist,
+        source: Box<dyn QuoteSource>,
+    ) -> Self {
         let source_name = source.name();
 
         let board: Board = watchlist
@@ -234,7 +256,7 @@ impl StocksPanel {
         panel.reselect();
         // Persist the seed on first run so there is a file to hand-edit.
         panel.watchlist.save_reporting();
-        Ok(panel)
+        panel
     }
 
     fn snapshot(&self) -> Board {
@@ -820,20 +842,64 @@ mod tests {
         }
     }
 
+    /// A source that answers from memory.
+    ///
+    /// Counts its calls so a test can prove the panel used *this* and not the
+    /// network. Always succeeds: an error would be equally deterministic, but
+    /// a filled board is the state most tests want to look at.
+    struct Offline(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl QuoteSource for Offline {
+        fn name(&self) -> &'static str {
+            "offline"
+        }
+
+        fn fetch(&self, symbol: &str) -> anyhow::Result<Quote> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(Quote {
+                symbol: symbol.to_string(),
+                price: 100.0,
+                previous_close: 99.0,
+                currency: Some("USD".into()),
+                series: vec![99.0, 100.0],
+                delayed: false,
+            })
+        }
+    }
+
     fn panel(name: &str, seed: &[&str]) -> (StocksPanel, TempDir) {
+        let (p, dir, _calls) = panel_counting(name, seed);
+        (p, dir)
+    }
+
+    /// The panel every test builds, wired to `Offline`.
+    ///
+    /// It used to call `StocksPanel::new`, which resolves the real Yahoo
+    /// source and spawns a thread against it — so building a panel issued an
+    /// HTTP request. The `refresh_secs` below was believed to prevent that and
+    /// does not: it governs the gap *between* cycles, and the first poll is
+    /// immediate. See #147.
+    fn panel_counting(
+        name: &str,
+        seed: &[&str],
+    ) -> (StocksPanel, TempDir, Arc<std::sync::atomic::AtomicUsize>) {
         let dir =
             std::env::temp_dir().join(format!("mirador-stocks-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let config = StocksConfig {
             symbols: seed.iter().map(|s| (*s).to_string()).collect(),
-            // Long enough that the fetch thread never completes a cycle during
-            // a test, so nothing here touches the network.
+            // Still long, so the loop polls once and then sleeps rather than
+            // spinning through the whole watchlist for the length of the test.
             refresh_secs: 86_400,
             ..StocksConfig::default()
         };
-        let p = StocksPanel::new(config, dir.join("watchlist.toml")).unwrap();
-        (p, TempDir(dir))
+        let watchlist =
+            Watchlist::load(dir.join("watchlist.toml"), &config.symbols).expect("watchlist loads");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let source = Box::new(Offline(Arc::clone(&calls)));
+        let p = StocksPanel::with_source(config, watchlist, source);
+        (p, TempDir(dir), calls)
     }
 
     fn press(p: &mut StocksPanel, code: KeyCode) {
@@ -860,6 +926,41 @@ mod tests {
         for c in text.chars() {
             press(p, KeyCode::Char(c));
         }
+    }
+
+    /// #147: building a panel spawned a thread against the real Yahoo source,
+    /// so every test in this module issued an HTTP request — a Windows runner
+    /// got a genuine 404 back for a made-up symbol and rendered it. The helper
+    /// wires an offline source now, and this is what stops that drifting back.
+    ///
+    /// Two halves, because either alone is weak. The panel a test receives must
+    /// be built against `Offline`, which `source_for` cannot produce — so its
+    /// presence proves the test constructed the source rather than resolving
+    /// one from config. And the module must not reach for the real constructor
+    /// except in the single test that expects it to fail before any thread
+    /// exists.
+    #[test]
+    fn no_test_builds_a_panel_against_the_network() {
+        let (p, _g, _calls) = panel_counting("offline-guard", &["AAPL"]);
+        assert_eq!(
+            p.source_name, "offline",
+            "the test helper must not resolve a real quote source"
+        );
+        assert!(
+            source_for("offline").is_none(),
+            "`offline` has to stay unreachable from config, or the check above proves nothing"
+        );
+
+        // Split so the needle is not itself a match in this file.
+        let needle = concat!("StocksPanel", "::new(");
+        let text = std::fs::read_to_string(file!()).expect("this file is readable");
+        let tests = text.split_once("mod tests").expect("the tests module").1;
+        let direct = tests.matches(needle).count();
+        assert_eq!(
+            direct, 1,
+            "only the unknown-source test may use the real constructor, and it \
+             fails before a thread is spawned; found {direct} uses"
+        );
     }
 
     #[test]
