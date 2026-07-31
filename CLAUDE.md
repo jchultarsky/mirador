@@ -611,9 +611,16 @@ in raw mode, write `\033[?1004h`, and log stdin to a file answers it outright �
 Terminal.app produced exactly `1b5b4f` on leaving and `1b5b49` on returning. Do
 that first, then test mirador; two clean signals beat one ambiguous one.
 
-Still untried: iTerm2, and any non-Apple terminal. Focus events do not survive
-zellij and tmux needs `focus-events on`; the keypress fallback carries the feature
-wherever delivery fails.
+**iTerm2 was checked the same way on 2026-07-31 and behaves identically** — the
+same six bytes, the rule line drawn while away and still there on return. Two
+independent terminals agreeing is what turns this from an observation into a
+reasonable expectation of the next one. Note that iTerm2 asks for confirmation
+before running a script handed to it by `open`, which is a dialog to click, not
+a failure.
+
+Still untried: any non-Apple terminal. Focus events do not survive zellij and
+tmux needs `focus-events on`; the keypress fallback carries the feature wherever
+delivery fails.
 
 **One run out of three showed no rule line, and it did not reproduce.** Recorded
 because the temptation was to file it. The failing run differed in that the entry
@@ -1311,9 +1318,9 @@ That is a fact about the *list*, not a claim the program is finished. The
 last untested condition — a **bare terminal with no multiplexer** — was closed on
 2026-07-30 against macOS Terminal.app, which reports focus and drew the rule line
 correctly. See the watch log section for the method and for the one anomalous run
-that did not reproduce. What remains is breadth rather than doubt: iTerm2 and the
-non-Apple terminals have not been tried, and focus events still do not survive
-zellij.
+that did not reproduce. iTerm2 was checked on 2026-07-31 and matches. What
+remains is breadth rather than doubt: no non-Apple terminal has been tried, and
+focus events still do not survive zellij.
 
 One thing is parked on its merits rather than forgotten. **OSC 8 hyperlinks**
 were the third mechanism in the news-link design; `y` and `[news].open_command`
