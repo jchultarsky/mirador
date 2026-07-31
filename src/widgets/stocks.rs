@@ -962,6 +962,13 @@ mod tests {
                     .join("\n")
             };
 
+            // Rows are counted, not matched on text. The status line reads
+            // `via yahoo` only until a fetch reports something — and these
+            // panels really do reach the network, so a Windows runner got far
+            // enough to render `SYM0: no such symbol` and failed an assertion
+            // looking for `via `. Rows are what the cap is about anyway.
+            let filled = |text: &str| text.lines().filter(|line| !line.trim().is_empty()).count();
+
             let at_cap = draw(&mut p, interior);
             for i in 0..n {
                 assert!(
@@ -970,10 +977,10 @@ mod tests {
                 );
             }
             assert!(at_cap.contains("SYMBOL"), "no header at the cap:\n{at_cap}");
-
-            assert!(
-                at_cap.contains("via "),
-                "no status line at the cap:\n{at_cap}"
+            assert_eq!(
+                filled(&at_cap),
+                n + 2,
+                "the cap should fill header + {n} symbols + status exactly:\n{at_cap}"
             );
 
             // One row short must lose something, or the cap is too generous.
@@ -981,10 +988,8 @@ mod tests {
             // status line that goes, and a check that looked for a missing
             // symbol alone called the cap too generous when it was exact.
             let under = draw(&mut p, interior - 1);
-            let lost_symbol = (0..n).any(|i| !under.contains(&format!("SYM{i}")));
-            let lost_status = !under.contains("via ");
             assert!(
-                lost_symbol || lost_status,
+                filled(&under) < n + 2,
                 "the cap reserves a row the panel does not use at {n} symbols:\n{under}"
             );
         }
