@@ -213,9 +213,129 @@ pub fn default_path(data_dir: &Path) -> PathBuf {
     data_dir.join("state.toml")
 }
 
+/// Put the remembered preferences aside, so the config gets its say back.
+///
+/// Returns where the old file went, or `None` if there was nothing to move.
+///
+/// This exists because resetting the config alone does not reset the
+/// dashboard (#153). Remembered preferences are *deltas against the config*
+/// and they outrank it, so restoring the file and leaving them in place means
+/// the deltas are still measured against a config that is no longer there —
+/// the baseline moves and the overrides do not. Someone who had only ever
+/// changed their theme reset their config and saw an identical dashboard,
+/// which reads as the command having done nothing.
+///
+/// Moved rather than deleted, even though this file's own header says it is
+/// safe to delete. That is advice to a person who knows what they are doing,
+/// not a licence for the program to throw away a setting somebody spent time
+/// choosing.
+pub fn clear(path: &Path) -> Result<Option<PathBuf>> {
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) => return Ok(None),
+        Err(e) => anyhow::bail!("could not check whether {} exists: {e}", path.display()),
+    }
+
+    let to = crate::config::free_backup_path(path);
+    std::fs::rename(path, &to)
+        .with_context(|| format!("moving {} to {}", path.display(), to.display()))?;
+    Ok(Some(to))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #153: resetting the config alone left this file in place, and it
+    /// outranks the config — so the preferences were applied straight back
+    /// over the freshly restored file and the dashboard looked untouched.
+    #[test]
+    fn clearing_moves_the_file_aside_rather_than_destroying_it() {
+        let dir = std::env::temp_dir().join(format!("mirador-clear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let _guard = TempDir(dir.clone());
+
+        let path = default_path(&dir);
+        let state = UiState {
+            theme: Some("nord".into()),
+            ..UiState::default()
+        };
+        state.save(&path).expect("saves");
+
+        let moved = clear(&path).expect("clears").expect("there was a file");
+        assert!(!path.exists(), "the state file must be gone after a clear");
+        assert!(
+            moved.exists(),
+            "and its contents kept at {}",
+            moved.display()
+        );
+        assert!(
+            std::fs::read_to_string(&moved)
+                .expect("readable")
+                .contains("nord"),
+            "the preference itself has to survive in the copy"
+        );
+
+        // And what mirador would load next time is the config's say, nothing
+        // else — which is the whole point of the reset.
+        assert_eq!(
+            UiState::load(&path),
+            UiState::default(),
+            "a cleared state must express no opinion at all"
+        );
+    }
+
+    /// Clearing when there is nothing to clear is a normal outcome, not an
+    /// error: plenty of people reset a config having never pressed a key that
+    /// records anything.
+    #[test]
+    fn clearing_nothing_is_not_a_failure() {
+        let dir = std::env::temp_dir().join(format!("mirador-clear-none-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let _guard = TempDir(dir.clone());
+
+        assert!(
+            clear(&default_path(&dir)).expect("no error").is_none(),
+            "an absent state file reports nothing moved"
+        );
+    }
+
+    /// Two resets must not lose the first set of preferences, the same way two
+    /// config resets do not clobber the first backup.
+    #[test]
+    fn a_second_clear_does_not_overwrite_the_first_copy() {
+        let dir = std::env::temp_dir().join(format!("mirador-clear-two-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let _guard = TempDir(dir.clone());
+
+        let path = default_path(&dir);
+        UiState {
+            theme: Some("nord".into()),
+            ..UiState::default()
+        }
+        .save(&path)
+        .expect("saves");
+        let first = clear(&path).expect("clears").expect("a file");
+
+        UiState {
+            theme: Some("dracula".into()),
+            ..UiState::default()
+        }
+        .save(&path)
+        .expect("saves again");
+        let second = clear(&path).expect("clears").expect("a file");
+
+        assert_ne!(first, second, "the second copy needs its own name");
+        assert!(
+            std::fs::read_to_string(&first)
+                .expect("readable")
+                .contains("nord"),
+            "the first copy must still hold the first preferences"
+        );
+    }
 
     struct TempDir(PathBuf);
 
