@@ -658,6 +658,51 @@ nine panels are drawn on top of it.
 The corollary is that a panel's `render` must stay inside the rectangle it is
 given. Nothing enforces it; the failure looks like a corrupt terminal.
 
+## The two reset flags — built, 1.0.4 and 1.1.0
+
+**They are separate commands, not degrees of one.** `--reset-config` is about
+configuration; `--factory-reset` is about everything mirador has written. A test
+asserts neither flag sets the other, because the day they blur is the day a
+config reset quietly takes somebody's task list with it.
+
+**`--reset-config` has to clear `state.toml`, and the reason generalises.**
+Remembered preferences are *deltas against the config* and they outrank it — see
+invariant 17. Restore the config and leave them, and the deltas are still
+measured against a config that no longer exists: the baseline moves and the
+overrides do not. So the old preferences were applied straight back over the
+file just restored, and the dashboard came back looking untouched. Reported as
+"it displayed my previous screen" (#153), and someone who had only ever changed
+their theme would have seen the command appear to do nothing at all. **Any
+future file that overrides the config has to be cleared here too.**
+
+**Nothing either flag touches is ever deleted.** Every file is renamed to a
+numbered `.bak` beside itself through `store::move_aside`. That is not caution
+for its own sake — it is what makes a plain `y` an honest confirmation for a
+command called factory reset: the prompt lists every affected file by full path,
+and the worst outcome is renaming things back rather than lost work. A typed
+confirmation word was considered and rejected on those grounds; it would have
+diverged from `--reset-config` for no gain, since the file list is what actually
+informs the decision.
+
+**What a factory reset may touch is decided by authorship, not location.** If
+mirador wrote it, mirador may set it aside. `calendar.ics` is therefore excluded
+even though it sits in mirador's own data directory by default — mirador only
+ever *reads* a calendar, so that file belongs to the reader, and moving it would
+be destroying data the program did not create. Files at paths the reader chose
+with `[todo].file` and its siblings are excluded for the same reason; resetting
+the config already stops mirador looking there. `the_owned_files_are_the_ones_mirador_writes`
+pins both halves — add `calendar.ics` to the list and it fails.
+
+**Why a config reset cannot restore the default tickers, and a factory reset
+can.** `[stocks].symbols` seeds `watchlist.toml` only when that file is
+*absent*, which is the whole reason the panel can edit the watchlist at all.
+Rewriting the config therefore changes nothing; removing the file is what makes
+the seed run again. The same is true of the task and notes examples, which
+`load_or_seed` keys on absence for the same reason (invariant 18).
+
+`free_backup_path` lives in `store.rs` beside `write_atomic`, not in `config` —
+"do not lose the old file" is that module's job, and three callers need it now.
+
 ## Recently settled, so it is not re-litigated
 
 **The layout grid stays two levels** — `rows: Vec<Row{height, panels}>` — rather
@@ -1296,18 +1341,17 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**The tracker is empty.** [#132](https://github.com/jchultarsky/mirador/issues/132)
-was the last entry and shipped in 0.18.2 — `mark_seen()` fired on `FocusGained`
-as well as `FocusLost`, so returning to the dashboard set "last looked" to *now*
-and erased the line marking what had arrived while you were away. It now fires on
-`FocusLost` only, and `only_losing_focus_marks_the_log_seen` reads the event
-loop's own source and fails if `FocusGained` comes back, because the log was
-always correct and the defect was in the wiring.
+**The tracker is empty.** [#153](https://github.com/jchultarsky/mirador/issues/153)
+was the last entry and shipped across 1.0.4 and 1.1.0 — `--reset-config` left
+`state.toml` in place, so the remembered preferences were applied straight back
+over the config it had just restored. See the reset flags section above; the
+half that wanted a decision rather than a patch was whether a true factory reset
+should exist, and it does now.
 
-This section described it as "the one open issue" for a day after it was closed.
-That is the failure this heading is most prone to, and it is the same one the
-freeze section had: an entry is written when work starts and nothing makes
-anybody revisit it when the work lands.
+This heading has twice described an issue as open for a day after it was closed
+— #132 before #153. That is the failure it is most prone to, and it is the same
+one the freeze section had: an entry is written when work starts and nothing
+makes anybody revisit it when the work lands.
 
 Everything from the original product analysis is built — the `.ics` agenda,
 the watch log, and the on-fire signal — along with named themes and the `t`
@@ -1387,7 +1431,7 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.0.0` is released**, on crates.io and as a GitHub release with binaries
+- **`1.1.0` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. This line goes
   stale every release and is worth a glance before you trust anything near it;
   `git tag --list 'v*' | sort -V | tail -1` is the truth — it had been four
