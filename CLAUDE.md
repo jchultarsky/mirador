@@ -589,11 +589,18 @@ the closest honest signal, and falls back to the last keypress. Where neither
 has fired it draws *no* rule line — a line in the wrong place makes a claim,
 where a missing one merely says nothing.
 
-**Focus reporting is unverified in practice.** It could not be tested here: a
-headless tmux server has no attached client to have focus, so the probe could
-not distinguish "unsupported" from "nothing is focused". The keypress fallback
-carries the feature until someone confirms it on a real terminal, and tmux
-needs `focus-events on` regardless.
+**mirador's handling of focus events is verified; their delivery is not.** This
+paragraph long said the whole thing was untestable, on the reasoning that a
+headless tmux server has no attached client to have focus — true of *observing*
+focus, and irrelevant, because focus events are just bytes on stdin.
+`tmux send-keys -H 1b 5b 49` is gained and `1b 5b 4f` is lost, and with a rule
+line on screen the first left it alone while the second erased it. **Always send
+the second as a control:** if the sequences were being swallowed, neither would
+do anything, and only one of them proves that.
+
+What is left is a terminal question rather than mirador's. Focus events do not
+survive zellij, tmux needs `focus-events on`, and nobody has yet run this on a
+bare terminal with neither. The keypress fallback carries the feature there.
 
 **The log does not persist, on purpose.** A file would come back after a restart
 with a hole in it — the hours mirador was not running and observed nothing —
@@ -1234,12 +1241,17 @@ defects, both stale-state and both small (#119, #120, fixed in #121), plus one
 documentation finding (#118). Nothing structural. A freeze whose purpose is to
 surface breakage stops earning its keep once a full pass comes back that quiet.
 
-**What did not change:** 1.0.0 is still a promise about config compatibility,
+**What did not change:** 1.0.0 was a promise about config compatibility,
 data-file compatibility, and no known crashes or hangs — see the road map above,
-and it is still not cut because a date arrived. **The soak is now a gate rather
-than a habit:** run it once, on the build about to be tagged, and note that no
-soak has yet crossed a real midnight, so the day-rollover watch log entry is
-still unverified outside a test that winds the date back.
+and it was not cut because a date arrived. **The soak is now a gate rather than a
+habit:** run it once, on the build about to be tagged.
+
+That paragraph used to end by saying no soak had yet crossed a real midnight. It
+was wrong when it was written — the owner watched the rollover on 2026-07-29 and
+Phase 3 records it — and it is the **second** retraction of that same claim, the
+first being PR #140. Both times it survived because it sat in a subordinate
+clause of a paragraph about something else, so nobody rereading the section it
+belonged to ever saw it. When a fact is retired, grep for it.
 
 One consequence to be deliberate about: several issues were parked as post-1.0
 *because of* the freeze rather than on their own merits — #100, #109, #111 and
@@ -1255,20 +1267,20 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**The watch log erases its own "since you were here" line** —
-[#132](https://github.com/jchultarsky/mirador/issues/132), the one open issue.
-`mark_seen()` fires on `FocusGained` as well as `FocusLost`, so returning to the
-dashboard sets "last looked" to *now* and the line marking what arrived while you
-were away is gone in the instant you look for it. Better terminal support makes
-the feature *less* visible, not more; it survives only on a window that never
-took focus. The comment above the call shows it was reasoned about rather than
-overlooked, which is why this wants a decision rather than a patch — mark on
-`FocusLost` only, or render once with the previous value first.
+**The tracker is empty.** [#132](https://github.com/jchultarsky/mirador/issues/132)
+was the last entry and shipped in 0.18.2 — `mark_seen()` fired on `FocusGained`
+as well as `FocusLost`, so returning to the dashboard set "last looked" to *now*
+and erased the line marking what had arrived while you were away. It now fires on
+`FocusLost` only, and `only_losing_focus_marks_the_log_seen` reads the event
+loop's own source and fails if `FocusGained` comes back, because the log was
+always correct and the defect was in the wiring.
 
-It also **blocks Phase 3's focus-reporting check**, because the current
-behaviour hides its own evidence.
+This section described it as "the one open issue" for a day after it was closed.
+That is the failure this heading is most prone to, and it is the same one the
+freeze section had: an entry is written when work starts and nothing makes
+anybody revisit it when the work lands.
 
-Everything else from the original product analysis is built — the `.ics` agenda,
+Everything from the original product analysis is built — the `.ics` agenda,
 the watch log, and the on-fire signal — along with named themes and the `t`
 picker over them, arrange mode with row movement, and in-panel editing for
 everything the UI can change.
@@ -1279,6 +1291,15 @@ multiplexer**: focus events demonstrably do not survive zellij, and tmux needs
 `focus-events on`, so nobody has yet watched the watch log's rule line behave
 where the terminal reports focus directly. mirador's own handling of those
 events is verified — see Phase 3.
+
+One thing is parked on its merits rather than forgotten. **OSC 8 hyperlinks**
+were the third mechanism in the news-link design; `y` and `[news].open_command`
+shipped and this did not. It would make a link genuinely clickable, which is
+better than either, and it fights ratatui's renderer: cells are written as cells,
+not as escape sequences, and a *wrapped* link has to carry the same target across
+several rows. It wants a prototype before it wants a promise. Note also that
+1.0.0 is out, so anything that changes a config key or a data file now costs a
+major version.
 
 When something goes back on this list, put the *reason* beside it. Every entry
 that was ever useful here said why it mattered; the one that got quietly dropped
@@ -1336,10 +1357,11 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`0.18.1` is released**, on crates.io and as a GitHub release with binaries
+- **`1.0.0` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. This line goes
   stale every release and is worth a glance before you trust anything near it;
-  `git tag --list 'v*' | sort -V | tail -1` is the truth. `0.0.0` is still on
+  `git tag --list 'v*' | sort -V | tail -1` is the truth — it had been four
+  releases behind by the time anybody noticed. `0.0.0` is still on
   crates.io below it — the name reservation that went out first, since
   reservation is first-come with no reclamation.
 
