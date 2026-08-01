@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-01
+
+### Added
+
+- **A calculator panel.** Type an expression, press Enter. Suggested by a reader
+  on r/rust.
+
+  `2 + 3 * 4` is 14, not 20 — precedence is the arithmetic kind and brackets
+  work. A pocket calculator gives 20, and that was the other candidate; it lost
+  because what this replaces is `bc` or `python3 -c`, not a desk calculator, and
+  anyone typing `2+3*4` at a terminal would read 20 as a bug. An operator typed
+  straight after an answer carries it forward, which covers what a memory key
+  was for. `y` sends the answer to the clipboard, and what you have worked out
+  lands on a tape below.
+
+  An answer too wide for the panel is shown in scientific notation rather than
+  cut. Everywhere else in mirador a value that will not fit reads as a narrow
+  terminal; here a number missing its tail is a different number, and nothing on
+  screen would say so.
+
+  **While this panel has focus, `1`–`9` type digits instead of jumping to a
+  panel.** It is the only panel that changes what a global key does, and it is
+  unavoidable — a calculator needs the digits. `Tab` still moves focus, and `q`,
+  `?`, `w`, `m` and `t` all still work.
+
+  There is no memory key, no percent key and no functions, and nothing is kept
+  when you quit.
+
+### Changed
+
+- The default layout now places thirteen panels rather than twelve, with the
+  calculator on the reading row beside the news and the watch log. Jump keys
+  stop at `9`, so the pomodoro joins the CPU and network panels in not having
+  one. An existing config is never rewritten, so this affects new installs and
+  configs with no `[layout]` block.
+
 ## [1.2.0] - 2026-08-01
 
 ### Fixed
