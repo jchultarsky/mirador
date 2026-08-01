@@ -127,21 +127,26 @@ is the stronger check and the one to run if you care:
 gh attestation verify --repo jchultarsky/mirador mirador-aarch64-apple-darwin.tar.gz
 ```
 
-They also install `mirador-update` beside it, so a later upgrade is:
+Whether you installed with Cargo or one of those installers, a later upgrade is:
 
 ```sh
-mirador-update
+mirador --update
 ```
 
-It asks GitHub what the newest release is and installs it if that is newer than
-what you have. It runs **only when you run it** — mirador itself never phones
-home and does not know this program exists, unless you set
+The flag hands an installer-managed copy to the `mirador-update` program placed
+beside it, and a crates.io copy back to Cargo. The separate `mirador-update`
+command remains available for compatibility. A binary installed directly from
+an archive has no installation record to follow, so update it manually or run
+an installer once.
+
+Updating runs **only when you ask for it** — the normal dashboard never phones
+home, unless you set
 `[general].check_for_updates = true`, which asks crates.io once a day whether a
 newer version exists and says so once in the status bar. That setting is off by
 default, sends no identifier, caches its answer, fails silently, and is
 overridden by `NO_UPDATE_CHECK=1` or `DO_NOT_TRACK=1` in your environment. If you
-installed with `cargo install` or from source, upgrade the same way you
-installed; the updater is only for the two installers above.
+installed from source or through another package manager, upgrade the same way
+you installed.
 
 From source:
 

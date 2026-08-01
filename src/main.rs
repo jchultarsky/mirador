@@ -36,6 +36,7 @@ mod theme;
 mod theme_picker;
 mod themes;
 mod update;
+mod upgrade;
 mod watch;
 mod widgets;
 mod zones;
@@ -69,6 +70,7 @@ OPTIONS:
         --reset-config     Replace the config with the defaults, keeping a copy
         --factory-reset    Start over: config, preferences, tasks, notes and
                            watchlist all set aside, nothing deleted
+        --update           Update through the installer or Cargo and exit
     -y, --yes              Do not ask for confirmation
     -h, --help             Print this help and exit
     -V, --version          Print the version and exit
@@ -100,13 +102,14 @@ struct Args {
     migrate_config: bool,
     reset_config: bool,
     factory_reset: bool,
+    update: bool,
     /// Skip the confirmation `--reset-config` would otherwise ask for.
     assume_yes: bool,
     help: bool,
     version: bool,
 }
 
-/// Parse arguments without pulling in a CLI framework for four flags.
+/// Parse arguments without pulling in a CLI framework for this small flag set.
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
     let mut args = Args::default();
     let mut iter = raw.into_iter();
@@ -120,6 +123,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
             "--migrate-config" => args.migrate_config = true,
             "--reset-config" => args.reset_config = true,
             "--factory-reset" => args.factory_reset = true,
+            "--update" => args.update = true,
             "-y" | "--yes" => args.assume_yes = true,
             "-c" | "--config" => {
                 let value = iter.next().ok_or_else(|| {
@@ -139,6 +143,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
 }
 
 fn main() -> ExitCode {
+    upgrade::cleanup_stale();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -315,6 +320,8 @@ fn run() -> Result<()> {
     if args.version {
         println!("mirador {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    } else if args.update {
+        return upgrade::run();
     }
     if args.print_config {
         print!("{}", config::DEFAULT_CONFIG);
@@ -468,6 +475,7 @@ mod tests {
         assert!(parse(&["--migrate-config"]).unwrap().migrate_config);
         assert!(parse(&["--reset-config"]).unwrap().reset_config);
         assert!(parse(&["--factory-reset"]).unwrap().factory_reset);
+        assert!(parse(&["--update"]).unwrap().update);
         // The two are separate commands, not degrees of one: a config reset
         // must never quietly take the tasks with it.
         assert!(!parse(&["--reset-config"]).unwrap().factory_reset);
@@ -528,6 +536,8 @@ mod tests {
             "--config-path",
             "--migrate-config",
             "--reset-config",
+            "--factory-reset",
+            "--update",
             "--yes",
             "--help",
             "--version",

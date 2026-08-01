@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mirador --update` upgrades both installer- and Cargo-managed copies.** It
+  hands release installs to the existing `mirador-update` helper and crates.io
+  installs back to Cargo, so the dashboard can advertise one command without
+  knowing how it was installed. On Windows it moves the running executable
+  aside before waiting for the updater, because Cargo cannot replace a mapped
+  `.exe`; the next launch removes that old image. The standalone updater stays
+  available for compatibility, and no network request happens without an
+  explicit update command or the existing opt-in update check.
+
 ## [1.4.1] - 2026-08-01
 
 ### Fixed
