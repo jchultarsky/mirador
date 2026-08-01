@@ -158,9 +158,29 @@ map, that one is the procedure.
 1. **Panels must never block.** Network and disk I/O go on a background thread
    and are polled in `tick()`; see `widgets/weather.rs`. A blocking panel
    freezes the whole dashboard.
-2. **`Panel::captures_input()` is an absolute veto on global keys.** It is what
-   stops typing `q` into a task title from quitting. Ctrl+C is the sole
-   exception, and it is safe because panels save as they go.
+2. **`Panel::captures_input()` is an absolute veto on global keys**, and
+   **there is always exactly one way out that no panel can take.** The veto is
+   what stops typing `q` into a task title from quitting. The exception is what
+   stops that from being a trap.
+
+   Today the exception is Ctrl+C, and it is safe because panels save as they
+   go. But **the rule is the guarantee, not the key**: someone who is stuck —
+   mid-form, mid-selection, in a state they do not recognise — has to be able
+   to leave *without first working out what state they are in*. A panel that
+   consumes the escape under some condition has not added a feature; it has
+   made the guarantee conditional on the reader diagnosing their own situation,
+   which is precisely what they cannot do.
+
+   If a panel genuinely needs Ctrl+C for itself — a text editor wanting it for
+   copy is the obvious case — then the second press must be unconditional, so
+   that **"Ctrl+C twice always quits"** stays sayable. Consuming it and leaving
+   the condition standing is the failure mode: in review of #177 a text
+   selection took Ctrl+C and never cleared itself, so the key copied for ever
+   and never quit.
+
+   This was written as "Ctrl+C is the sole exception" for a year, which was
+   true and useless — it described the mechanism, so the first change to the
+   mechanism made the sentence wrong instead of making the change look wrong.
 3. **One `Binding` declaration feeds three surfaces** — border hint, status bar,
    help overlay. Never hardcode hint text anywhere else; it will drift.
 4. **Hints are shown only for the focused panel.** A flat list of every binding
