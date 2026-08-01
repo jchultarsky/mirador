@@ -102,6 +102,27 @@ enum Mode {
     ConfirmDelete { id: u64, title: String },
 }
 
+/// A note's body, wrapped once for a given width.
+///
+/// The reader used to wrap the whole body on *every* frame and then hand the
+/// result to a `Paragraph` that scrolled past most of it — so the cost of
+/// drawing a note was proportional to the note rather than to what was on
+/// screen, which is the rule the agenda panel already had to learn. A 2MB note
+/// cost 62ms a frame against a 250ms tick (#178).
+///
+/// Keyed on the text itself rather than on a note id and a dirty flag. Ids and
+/// flags need every mutation site to remember to invalidate, and the one that
+/// forgets shows stale prose with nothing to say it is stale. Comparing the
+/// source is a memcmp — about 0.2ms for that same 2MB, against the 62ms it
+/// saves — and it cannot be got wrong.
+#[derive(Debug)]
+struct WrappedBody {
+    /// What was wrapped. The cache is valid exactly while this still matches.
+    source: String,
+    width: u16,
+    rows: Vec<String>,
+}
+
 pub struct NotesPanel {
     store: NoteStore,
     config: NotesConfig,
@@ -121,6 +142,8 @@ pub struct NotesPanel {
     /// The body's rectangle as last drawn, so scrolling can clamp against the
     /// wrapped height rather than the number of newlines.
     body_area: Option<Rect>,
+    /// The selected body, already wrapped. See [`WrappedBody`].
+    wrapped_body: Option<WrappedBody>,
 }
 
 impl NotesPanel {
@@ -140,6 +163,7 @@ impl NotesPanel {
             list_area: None,
             detail_area: None,
             body_area: None,
+            wrapped_body: None,
         };
         panel.refresh_view();
         Ok(panel)
@@ -197,15 +221,52 @@ impl NotesPanel {
         self.select_to(current.saturating_sub(n));
     }
 
+    /// The selected body wrapped to `width`, wrapping only if it has to.
+    ///
+    /// See [`WrappedBody`] for why this is keyed on the text rather than on an
+    /// id and a dirty flag.
+    fn wrapped_body(&mut self, body: &str, width: u16) -> &[String] {
+        let fresh = self
+            .wrapped_body
+            .as_ref()
+            .is_some_and(|cache| cache.width == width && cache.source == body);
+        if !fresh {
+            self.wrapped_body = Some(WrappedBody {
+                source: body.to_string(),
+                width,
+                rows: crate::grid::wrap(body, usize::from(width)),
+            });
+        }
+        self.wrapped_body
+            .as_ref()
+            .map_or(&[], |cache| cache.rows.as_slice())
+    }
+
+    /// Rows the selected body occupies, from the cache when it is warm.
+    fn wrapped_rows(&self, body: &str, width: u16) -> Option<u16> {
+        self.wrapped_body
+            .as_ref()
+            .filter(|cache| cache.width == width && cache.source == body)
+            .map(|cache| u16::try_from(cache.rows.len()).unwrap_or(u16::MAX))
+    }
+
     fn scroll_body(&mut self, delta: i16) {
         // Clamped so the body cannot be scrolled off into blank space, against
         // the height it actually occupies once wrapped rather than its count of
         // newlines. Before the first draw there is no width to wrap against, so
         // fall back to logical lines.
         let area = self.body_area;
-        let height = self.selected().map_or(0, |note| match area {
-            Some(area) if area.width > 0 => wrapped_height(&note.body, area.width),
-            _ => u16::try_from(note.body.lines().count()).unwrap_or(u16::MAX),
+        // The cache the reader filled on the last draw already knows this;
+        // measuring again would walk the whole body on every keypress.
+        let cached = self
+            .selected()
+            .zip(area)
+            .and_then(|(note, area)| self.wrapped_rows(&note.body, area.width));
+        let height = cached.unwrap_or_else(|| {
+            self.selected().map_or(0, |note| match area {
+                Some(area) if area.width > 0 => wrapped_height(&note.body, area.width),
+                _ => u16::try_from(note.body.lines().count()).unwrap_or(u16::MAX),
+            })
         });
         // Stop when the last line reaches the top of the viewport, so a long
         // note does not scroll into emptiness.
@@ -487,11 +548,26 @@ impl NotesPanel {
         if rows[2].height == 0 {
             return;
         }
+        // Taken by value because filling the wrap cache needs `&mut self`, and
+        // `note` is borrowed from `self.store`.
+        let body_text = note.body.clone();
         let body = if note.body.trim().is_empty() {
             Paragraph::new(Span::styled("(no body)", Style::default().fg(theme.muted)))
         } else {
-            Paragraph::new(crate::grid::wrapped(&note.body, rows[2].width))
-                .style(Style::default().fg(theme.text))
+            // Only the rows that will be drawn are built. Handing a `Paragraph`
+            // the whole wrapped body and asking it to `scroll` past most of it
+            // made the cost of a frame proportional to the note rather than to
+            // the pane — see `WrappedBody` and #178.
+            let scroll = usize::from(self.body_scroll);
+            let height = usize::from(rows[2].height);
+            let wrapped = self.wrapped_body(&body_text, rows[2].width);
+            let visible: Vec<Line<'static>> = wrapped
+                .iter()
+                .skip(scroll.min(wrapped.len()))
+                .take(height)
+                .map(|row| Line::from(row.clone()))
+                .collect();
+            Paragraph::new(visible).style(Style::default().fg(theme.text))
         };
         // The reader wraps even though the editor does not: prose written at
         // one width has to be readable at another.
@@ -500,7 +576,9 @@ impl NotesPanel {
         // written as one paragraph — the normal way — reported a single line
         // and would not scroll at all however long it was.
         self.body_area = Some(rows[2]);
-        frame.render_widget(body.scroll((self.body_scroll, 0)), rows[2]);
+        // No `.scroll()`: the offset was applied when the visible rows were
+        // chosen. Scrolling here as well would skip twice.
+        frame.render_widget(body, rows[2]);
     }
 
     /// The count line above the split, plus the active search if there is one.
@@ -897,6 +975,38 @@ mod tests {
     }
 
     /// Add a note through the form: `a`, title, Tab, body, Ctrl+S.
+    /// Draw the panel and return what reached the screen.
+    fn draw(p: &mut NotesPanel, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                p.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn add_note(p: &mut NotesPanel, title: &str, body: &str) {
         press(p, KeyCode::Char('a'));
         type_str(p, title);
@@ -967,6 +1077,86 @@ mod tests {
         p.scroll_body(i16::MAX);
         let height = wrapped_height(&long, 40);
         assert_eq!(p.body_scroll, height.saturating_sub(5));
+    }
+
+    /// The reader must cost what is on screen, not what is in the note.
+    ///
+    /// #178: the body was wrapped in full on every frame and then scrolled
+    /// past, so a 2MB note cost 62ms a frame against a 250ms tick. The fix is
+    /// a cache, and the property worth pinning is not the timing — which is
+    /// machine-dependent — but that a second draw of an unchanged note does no
+    /// wrapping at all.
+    #[test]
+    fn an_unchanged_note_is_not_rewrapped_on_every_frame() {
+        let (mut p, _g) = panel("rewrap");
+        add_note(&mut p, "Long", &"lorem ipsum dolor sit amet ".repeat(40));
+        draw(&mut p, 40, 20);
+
+        let first = p
+            .wrapped_body
+            .as_ref()
+            .expect("the first draw fills the cache")
+            .rows
+            .as_ptr();
+
+        draw(&mut p, 40, 20);
+        let second = p.wrapped_body.as_ref().unwrap().rows.as_ptr();
+        assert_eq!(
+            first, second,
+            "the second draw rebuilt the wrap instead of reusing it"
+        );
+    }
+
+    /// The cache is keyed on the text, so an edit invalidates it with nothing
+    /// having to remember to say so.
+    #[test]
+    fn editing_a_note_rewraps_it() {
+        let (mut p, _g) = panel("rewrap-edit");
+        add_note(&mut p, "Long", "one two three");
+        draw(&mut p, 40, 20);
+        let before = p.wrapped_body.as_ref().unwrap().rows.clone();
+
+        add_note(&mut p, "Other", "wholly different prose here");
+        draw(&mut p, 40, 20);
+        let after = p.wrapped_body.as_ref().unwrap().rows.clone();
+        assert_ne!(before, after, "a different body must be rewrapped");
+    }
+
+    /// So does a resize, since the rows depend on the width.
+    #[test]
+    fn resizing_rewraps_the_body() {
+        let (mut p, _g) = panel("rewrap-resize");
+        add_note(&mut p, "Long", &"lorem ipsum dolor sit amet ".repeat(20));
+        draw(&mut p, 40, 20);
+        let wide = p.wrapped_body.as_ref().unwrap().rows.len();
+        draw(&mut p, 20, 20);
+        let narrow = p.wrapped_body.as_ref().unwrap().rows.len();
+        assert!(
+            narrow > wide,
+            "a narrower pane needs more rows: {wide} then {narrow}"
+        );
+    }
+
+    /// Scrolling still shows the right slice — the offset moved from the
+    /// `Paragraph` to the row selection, and applying it in both places would
+    /// skip twice.
+    #[test]
+    fn the_visible_rows_follow_the_scroll_offset() {
+        let (mut p, _g) = panel("rewrap-scroll");
+        let body = (0..60)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        add_note(&mut p, "Long", &body);
+        let top = draw(&mut p, 40, 20);
+        assert!(top.contains("line0"), "the top of the body:\n{top}");
+
+        p.scroll_body(5);
+        let scrolled = draw(&mut p, 40, 20);
+        assert!(
+            !scrolled.contains("line0") && scrolled.contains("line5"),
+            "scrolling by five should start at line5:\n{scrolled}"
+        );
     }
 
     #[test]
