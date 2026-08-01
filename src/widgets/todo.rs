@@ -1128,8 +1128,23 @@ impl Panel for TodoPanel {
                 .and_then(|id| self.store.get(id))
                 .and_then(|t| t.notes.clone())
         {
+            // Only as much text as the preview can possibly show is wrapped.
+            // Wrapping the whole field cost 62ms a frame for a 2MB note — the
+            // same defect the reader in `notes` had (#178), and the same rule
+            // broken: a panel may allocate in proportion to what is on screen,
+            // never to how much it holds.
+            //
+            // No cache is needed here because this preview does not scroll, so
+            // the first few rows are the only rows. A wrapped row holds at most
+            // `width` characters, so `height * width` of them is always enough
+            // to fill the pane — an over-estimate, which is what makes it safe.
+            let budget = usize::from(rows[3].height).saturating_mul(usize::from(rows[3].width));
+            let enough = notes
+                .char_indices()
+                .nth(budget)
+                .map_or(notes.as_str(), |(at, _)| &notes[..at]);
             frame.render_widget(
-                Paragraph::new(crate::grid::wrapped(&notes, rows[3].width))
+                Paragraph::new(crate::grid::wrapped(enough, rows[3].width))
                     .style(Style::default().fg(theme.muted)),
                 rows[3],
             );
@@ -1412,6 +1427,43 @@ mod tests {
         press(panel, KeyCode::Char('a'));
         type_str(panel, title);
         press(panel, KeyCode::Enter);
+    }
+
+    /// The preview's character budget is always enough to fill its pane.
+    ///
+    /// The preview wraps only `height * width` characters instead of the whole
+    /// field, because wrapping a 2MB note for two rows of output cost 62ms a
+    /// frame — the same defect as #178 in the notes reader. The over-estimate
+    /// is what makes that safe: a wrapped row consumes at most `width`
+    /// characters, so `height * width` of them always spans at least `height`
+    /// rows. Wide glyphs only help, since they make a row hold fewer
+    /// characters and so produce more rows.
+    ///
+    /// The first version of this test compared a huge note's render against a
+    /// merely long one's and asserted they matched. It could not fail: both
+    /// exceed any budget, so both were truncated identically and drew the same
+    /// thing. It passed with the budget cut to twenty characters.
+    #[test]
+    fn the_preview_budget_always_fills_its_pane() {
+        for source in [
+            "lorem ipsum dolor sit amet ".repeat(500),
+            "\u{65e5}\u{672c}\u{8a9e}".repeat(500),
+            "no-spaces-at-all-".repeat(500),
+        ] {
+            for width in 1..=48u16 {
+                for height in 1..=4u16 {
+                    let budget = usize::from(height).saturating_mul(usize::from(width));
+                    let cut: String = source.chars().take(budget).collect();
+                    let rows = crate::grid::wrap(&cut, usize::from(width));
+                    assert!(
+                        rows.len() >= usize::from(height),
+                        "{height}x{width} needs {height} rows, {} chars gave {}",
+                        budget,
+                        rows.len()
+                    );
+                }
+            }
+        }
     }
 
     #[test]
