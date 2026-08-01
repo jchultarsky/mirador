@@ -137,8 +137,9 @@ textfield.rs single-line text editor used by task entry
 textarea.rs  multi-line text editor used by note bodies
 dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
+calc.rs      the calculator's parser: precedence, brackets, bounded depth
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, news, cpu, network
+             pomodoro, watchlog, news, cpu, network, calculator
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -207,7 +208,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 283 of them, including the ones mirador
+    trip through `toml` discards all 286 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -342,7 +343,15 @@ bottom border; jump key in the title.
 **The four things the dashboard exists to answer:** what time/day is it, what
 tasks are next, what is the portfolio doing, what compute is available.
 
-**The pomodoro panel answers none of them, and is here anyway** — the owner
+**Two panels answer none of them and are here anyway.** The pomodoro was asked
+for directly by the owner; the calculator was suggested by a reader and
+endorsed. Both are recorded rather than left for the next reader to wonder
+whether the filter was forgotten, and the calculator has an argument of its own:
+it is about *reaching* rather than reading. A tab left open all day is a tab you
+reach into for a quick sum, and the alternative is `bc` in a shell you have to
+go and find. It is the first panel with no data source behind it at all.
+
+The pomodoro's own case follows. The owner
 asked for it directly. Worth recording rather than leaving the next reader to
 wonder whether the filter was forgotten. It is arguably a fifth question, "how
 is this stretch of work going", and it is the only panel that is *about* the
@@ -751,9 +760,25 @@ persistence story rests on. The known cost is that panels of unlike natural
 height in one row waste space; the mitigation is that arrange mode makes it
 easy to group like with like.
 
-**The default is four rows of twelve panels**, and the measurement behind it
-still holds: re-checked at 120x40 on 2026-07-30, nothing truncates, every panel
-is legible and no frame title is clipped. The blank space in the clock is
+**The default is four rows of thirteen panels**, re-measured at 120x40 on
+2026-08-01 when the calculator joined it: nothing truncates, every panel is
+legible and no frame title is clipped.
+
+Where the thirteenth went was decided by arithmetic rather than taste, and the
+arithmetic is worth keeping. The instrument row was the obvious home — a
+calculator belongs beside the pomodoro and the graphs — and it is the one row
+that could not take it. A fifth panel there drops `stocks` from 36 cells to 30
+at 120 columns, and it needs 35 to keep the change column that 1.1.2 went to
+some trouble to save; `network` loses its upload rate a little further down the
+same slope. So it sits on the reading row instead, where the two neighbours are
+prose that wraps. **Prose gives way more gracefully than a table does**: a
+narrower paragraph is still the whole paragraph, where a dropped column is a
+fact the reader no longer has.
+
+The knock-on is worth knowing rather than fixing: jump keys only go up to `9`,
+so a thirteenth panel means `pomodoro` joins `cpu` and `network` in having none.
+The dashboard already had more panels than digits; this changes which three are
+past the end. The blank space in the clock is
 inherent to a row sharing its height with weather rather than being waste to
 reclaim. Arrange mode can open, close and now reorder rows, so the row count is a
 gesture rather than a number shipped for everyone.

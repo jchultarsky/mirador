@@ -45,8 +45,9 @@ mod widgets;
 pub use layout::{Layout, LayoutPanel, LayoutRow};
 #[allow(unused_imports)]
 pub use widgets::{
-    AgendaConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig, NetworkConfig, NewsConfig,
-    NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TodoConfig, WeatherConfig,
+    AgendaConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig,
+    NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TodoConfig,
+    WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -72,6 +73,7 @@ pub struct Config {
     pub calendar: CalendarConfig,
     pub news: NewsConfig,
     pub pomodoro: PomodoroConfig,
+    pub calculator: CalculatorConfig,
     pub cpu: CpuConfig,
     pub network: NetworkConfig,
 }

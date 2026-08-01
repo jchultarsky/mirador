@@ -661,6 +661,38 @@ If that program cannot be started, the panel says so where the durations
 usually sit. A notification you believe is working but is not is worse than
 none at all.
 
+
+### Calculator
+
+Type an expression and press Enter. `2 + 3 * 4` is 14, not 20 — precedence is
+the arithmetic kind, and brackets work — because what this replaces is `bc` or
+`python3 -c`, not a pocket calculator. What you worked out lands on a tape below
+the answer.
+
+| Key | Action |
+| --- | --- |
+| `0`–`9` `.` | Type a number |
+| `+` `-` `*` `/` | Operators; `x` also multiplies |
+| `(` `)` | Group |
+| `Enter` or `=` | Work it out |
+| `Backspace` | Rub out the last character |
+| `Esc` | Clear what is typed, then the answer |
+| `y` | Send the answer to the clipboard |
+| `↑` / `↓` | Scroll the tape |
+
+**While this panel has focus, `1`–`9` type digits instead of jumping to a
+panel.** It is the only panel that changes what a global key does, and it is
+unavoidable — a calculator needs the digits. `Tab` still moves focus, and `q`,
+`?`, `w`, `m` and `t` all still work.
+
+An answer too wide for the panel is shown in scientific notation rather than
+cut. Everywhere else in mirador a value that does not fit reads as a narrow
+terminal; here a number with its tail missing is a different number, and there
+would be nothing on screen to say so.
+
+Nothing is kept when you quit. There is no memory key, no percent key and no
+functions — the tape and chaining an answer into the next sum cover what those
+were for.
 ### CPU and network
 
 CPU shows average load, a moving history graph and a per-core meter row.
@@ -831,6 +863,7 @@ rather than failing quietly.
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
 | `agenda` | What is next, from a local `.ics` file |
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
+| `calculator` | Type a sum, press Enter; a tape of what you worked out |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 
