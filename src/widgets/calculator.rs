@@ -72,16 +72,30 @@ use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::grid::{Column, Grid, display_width};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
-const BINDINGS: &[Binding] = &[
+const ENTRY_BINDINGS: &[Binding] = &[
     Binding::primary("0-9 + - * /", "type"),
     Binding::primary("Enter", "keep"),
     Binding::primary("c", "clear"),
-    Binding::primary("y", "copy"),
     Binding::extra("( )", "group"),
     Binding::extra("x", "multiply"),
     Binding::extra("C", "clear the tape too"),
     Binding::extra("Backspace", "rub out"),
-    Binding::extra("↑ / ↓", "scroll the tape"),
+];
+
+/// Once there is a tape, its result actions outrank another reminder that the
+/// number keys type. At the default width this puts `y copy · p paste` in the
+/// border together instead of leaving both behind `?`.
+const TAPE_BINDINGS: &[Binding] = &[
+    Binding::primary("y", "copy"),
+    Binding::primary("p", "paste"),
+    Binding::primary("0-9 + - * /", "type"),
+    Binding::primary("Enter", "keep"),
+    Binding::primary("c", "clear"),
+    Binding::extra("( )", "group"),
+    Binding::extra("x", "multiply"),
+    Binding::extra("C", "clear the tape too"),
+    Binding::extra("Backspace", "rub out"),
+    Binding::extra("↑ / ↓", "select on the tape"),
 ];
 
 /// Widest the result column is drawn.
@@ -145,7 +159,9 @@ pub struct CalculatorPanel {
     tape: Vec<Entry>,
     /// How far back through the tape the view is scrolled, in rows.
     scrolled: usize,
-    /// Tape rows drawn last frame, so scrolling cannot run past what is there.
+    /// Selected tape entry, counted back from the newest result.
+    selected_back: usize,
+    /// Tape rows drawn last frame, so selection scrolls by the visible window.
     drawn: usize,
     /// What the last `y` did. Cleared by the next keystroke.
     ///
@@ -171,14 +187,23 @@ impl CalculatorPanel {
             preview: Err(CalcError::Empty),
             tape: Vec::new(),
             scrolled: 0,
+            selected_back: 0,
             drawn: 0,
             action: None,
         }
     }
 
-    /// The answer on the tape's last line, which is what `y` copies.
+    /// The answer on the tape's last line, used for operator chaining.
     fn last_result(&self) -> Option<f64> {
         self.tape.last().map(|entry| entry.result)
+    }
+
+    /// The answer the full-weight tape row identifies.
+    fn selected_result(&self) -> Option<f64> {
+        let last = self.tape.len().checked_sub(1)?;
+        self.tape
+            .get(last.saturating_sub(self.selected_back))
+            .map(|entry| entry.result)
     }
 
     /// Re-derive the preview. Called wherever `typing` changes, so the two
@@ -223,6 +248,7 @@ impl CalculatorPanel {
             self.reparse();
             // Back to the foot of the tape, where the new entry is.
             self.scrolled = 0;
+            self.selected_back = 0;
         }
     }
 
@@ -239,9 +265,68 @@ impl CalculatorPanel {
         &self.tape[start..end]
     }
 
-    /// How far back the view may be scrolled, given what fits.
-    fn max_scroll(&self) -> usize {
-        self.tape.len().saturating_sub(self.drawn)
+    /// Keep the selected result inside the visible slice of tape.
+    fn scroll_selection_into_view(&mut self, rows: usize) {
+        let Some(last) = self.tape.len().checked_sub(1) else {
+            self.selected_back = 0;
+            self.scrolled = 0;
+            return;
+        };
+        self.selected_back = self.selected_back.min(last);
+        let rows = rows.max(1).min(self.tape.len());
+        if self.selected_back < self.scrolled {
+            self.scrolled = self.selected_back;
+        } else if self.selected_back >= self.scrolled.saturating_add(rows) {
+            self.scrolled = self.selected_back + 1 - rows;
+        }
+        self.scrolled = self.scrolled.min(self.tape.len().saturating_sub(rows));
+    }
+
+    fn select_older(&mut self) {
+        let Some(last) = self.tape.len().checked_sub(1) else {
+            return;
+        };
+        self.selected_back = self.selected_back.saturating_add(1).min(last);
+        self.scroll_selection_into_view(self.drawn);
+    }
+
+    fn select_newer(&mut self) {
+        self.selected_back = self.selected_back.saturating_sub(1);
+        self.scroll_selection_into_view(self.drawn);
+    }
+
+    fn copy_selected(&mut self) {
+        self.copy_selected_with(crate::clipboard::copy);
+    }
+
+    fn copy_selected_with(&mut self, copy: impl FnOnce(&str) -> std::io::Result<()>) {
+        let Some(value) = self.selected_result() else {
+            return;
+        };
+        let text = calc::format_result(value);
+        self.action = Some(match copy(&text) {
+            // OSC 52 is write-only: the terminal never answers, so this says
+            // what was sent rather than that anything was copied.
+            Ok(()) => format!("sent {text}"),
+            Err(error) => format!("clipboard failed: {error}"),
+        });
+    }
+
+    /// Paste the selected answer at the end of the live expression.
+    fn paste_selected(&mut self) {
+        let Some(value) = self.selected_result() else {
+            return;
+        };
+        let text = calc::format_result(value);
+        let length = self.typing.chars().count() + text.chars().count();
+        if length > calc::MAX_LEN {
+            self.action = Some("entry is full".to_string());
+            return;
+        }
+        self.typing.push_str(&text);
+        self.reparse();
+        self.selected_back = 0;
+        self.scrolled = 0;
     }
 }
 
@@ -308,7 +393,11 @@ impl Panel for CalculatorPanel {
     }
 
     fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+        if self.tape.is_empty() {
+            ENTRY_BINDINGS
+        } else {
+            TAPE_BINDINGS
+        }
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -374,6 +463,7 @@ impl Panel for CalculatorPanel {
                 self.typing.clear();
                 self.tape.clear();
                 self.scrolled = 0;
+                self.selected_back = 0;
                 self.reparse();
             }
             KeyCode::Esc => {
@@ -386,20 +476,10 @@ impl Panel for CalculatorPanel {
                 self.typing.clear();
                 self.reparse();
             }
-            KeyCode::Char('y') => {
-                let Some(value) = self.last_result() else {
-                    return KeyOutcome::Consumed;
-                };
-                let text = calc::format_result(value);
-                self.action = Some(match crate::clipboard::copy(&text) {
-                    // OSC 52 is write-only: the terminal never answers, so this
-                    // says what was sent rather than that anything was copied.
-                    Ok(()) => format!("sent {text}"),
-                    Err(e) => format!("clipboard failed: {e}"),
-                });
-            }
-            KeyCode::Up => self.scrolled = (self.scrolled + 1).min(self.max_scroll()),
-            KeyCode::Down => self.scrolled = self.scrolled.saturating_sub(1),
+            KeyCode::Char('y') if !self.tape.is_empty() => self.copy_selected(),
+            KeyCode::Char('p') if !self.tape.is_empty() => self.paste_selected(),
+            KeyCode::Up => self.select_older(),
+            KeyCode::Down => self.select_newer(),
             _ => {
                 // A key this panel does not want goes to the shell — unless it
                 // only served to retire the copy notice, which is a visible
@@ -415,8 +495,8 @@ impl Panel for CalculatorPanel {
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
         match event.kind {
-            MouseEventKind::ScrollUp => self.scrolled = (self.scrolled + 1).min(self.max_scroll()),
-            MouseEventKind::ScrollDown => self.scrolled = self.scrolled.saturating_sub(1),
+            MouseEventKind::ScrollUp => self.select_older(),
+            MouseEventKind::ScrollDown => self.select_newer(),
             _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
@@ -456,6 +536,7 @@ impl Panel for CalculatorPanel {
                 .saturating_sub(cursor)
                 .saturating_sub(CHROME_ROWS - 1),
         );
+        self.scroll_selection_into_view(room);
         // Cloned rather than borrowed: `self.drawn` has to be recorded before
         // the rows are drawn, and holding a slice of `self.tape` across that
         // would borrow the whole panel. The clone is of what is on screen, not
@@ -491,15 +572,18 @@ impl Panel for CalculatorPanel {
         let live = live.map(|_| aligned.pop().unwrap_or_default());
 
         // Attention runs *downwards*, to the line being typed. The tape recedes
-        // to muted, the entry just kept stays at full body weight, and the live
+        // to muted, its selected entry stays at full body weight, and the live
         // row below is brighter than either. The first version had this
         // backwards and put the faintest thing on screen where the cursor was.
-        let last = entries.len().saturating_sub(1);
+        let selected = self
+            .scrolled
+            .saturating_add(entries.len().saturating_sub(1))
+            .saturating_sub(self.selected_back);
         for (index, entry) in entries.iter().enumerate() {
             if cursor >= bottom {
                 break;
             }
-            let style = Style::default().fg(if index == last {
+            let style = Style::default().fg(if index == selected {
                 theme.text
             } else {
                 theme.muted
@@ -801,6 +885,63 @@ mod tests {
     }
 
     #[test]
+    fn arrows_select_which_tape_result_is_copied() {
+        let mut panel = new_panel();
+        for sum in ["1+1", "2+2", "3+3"] {
+            type_in(&mut panel, sum);
+            enter(&mut panel);
+        }
+        draw(&mut panel, 36, 9);
+
+        panel.handle_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(panel.selected_result(), Some(4.0));
+        panel.copy_selected_with(|text| {
+            assert_eq!(text, "4");
+            Ok(())
+        });
+        assert_eq!(panel.action.as_deref(), Some("sent 4"));
+
+        panel.handle_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(panel.selected_result(), Some(6.0));
+    }
+
+    #[test]
+    fn p_pastes_the_selected_result_into_the_live_expression() {
+        let mut panel = new_panel();
+        for sum in ["1+1", "2+2", "3+3"] {
+            type_in(&mut panel, sum);
+            enter(&mut panel);
+        }
+        draw(&mut panel, 36, 9);
+        panel.handle_key(KeyEvent::from(KeyCode::Up));
+        panel.handle_key(KeyEvent::from(KeyCode::Up));
+        type_in(&mut panel, "10+");
+
+        assert_eq!(press(&mut panel, 'p'), KeyOutcome::Consumed);
+        assert_eq!(panel.typing, "10+2");
+        assert_eq!(panel.preview, Ok(12.0));
+        assert_eq!(panel.selected_back, 0, "the view returns to the tape foot");
+        assert_eq!(panel.scrolled, 0);
+    }
+
+    #[test]
+    fn result_actions_reach_the_border_at_the_default_width() {
+        let mut panel = new_panel();
+        assert_eq!(panel.bindings()[0].action, "type");
+
+        type_in(&mut panel, "2+2");
+        enter(&mut panel);
+        let line = crate::frame::hint_line(panel.bindings(), &crate::theme::Theme::default(), 24)
+            .expect("a 32-column panel leaves a 24-column hint budget");
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("y copy · p paste"), "got {text:?}");
+    }
+
+    #[test]
     fn a_sum_that_cannot_work_says_why_on_screen() {
         let mut panel = new_panel();
         type_in(&mut panel, "1/0");
@@ -969,7 +1110,7 @@ mod tests {
         assert!(panel.drawn > 0);
     }
 
-    /// Scrolling cannot run off either end of the tape.
+    /// Selection and its scroll window cannot run off either end of the tape.
     #[test]
     fn scrolling_is_bounded_at_both_ends() {
         let mut panel = new_panel();
@@ -982,11 +1123,13 @@ mod tests {
         for _ in 0..200 {
             panel.handle_key(KeyEvent::from(KeyCode::Up));
         }
-        assert_eq!(panel.scrolled, panel.max_scroll());
+        assert_eq!(panel.selected_back, panel.tape.len() - 1);
+        assert_eq!(panel.scrolled, panel.tape.len() - panel.drawn);
         draw(&mut panel, 36, 12);
         for _ in 0..200 {
             panel.handle_key(KeyEvent::from(KeyCode::Down));
         }
+        assert_eq!(panel.selected_back, 0, "the newest answer is selected");
         assert_eq!(panel.scrolled, 0, "back at the foot of the tape");
     }
 
