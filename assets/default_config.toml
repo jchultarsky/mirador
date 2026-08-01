@@ -81,8 +81,10 @@ rows = [
     # The timer draws block numerals when it has the width for them and falls
     # back to plain text when it does not.
     { widget = "pomodoro", width = 24 },
-    { widget = "stocks",   width = 28 },
-    { widget = "cpu",      width = 22 },
+    # 30 keeps the change column at 120 columns; below a panel width of 33 the
+    # markets grid drops it rather than clipping a number.
+    { widget = "stocks",   width = 30 },
+    { widget = "cpu",      width = 20 },
     { widget = "network",  width = 26 },
   ] },
 ]
