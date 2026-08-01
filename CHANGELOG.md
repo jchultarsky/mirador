@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-01
+
+### Changed
+
+- **The calculator is drawn as an adding machine's tape** rather than as one
+  large number. The version that shipped in 1.3.0 put the answer in block
+  numerals, which was reasoned from a resemblance — the clock and the pomodoro
+  use them — rather than from what a calculator is. Those two show a single
+  continuously changing value you glance at, and the numerals exist so it reads
+  across a room; a calculated answer is read once and checked against the working
+  that produced it. The numerals also cost six cells a digit, so they only ever
+  appeared for answers small enough not to need them.
+
+  The panel now has `WORKING` and `RESULT` columns like the other lists here,
+  oldest entry at the top and the line you are typing at the foot, where a tape
+  feeds from. Results are aligned on the decimal point. The answer forms beside
+  the line as you type, and Enter keeps it.
+
+  The row you are typing is the brightest thing in the panel with its answer in
+  brass; entries behind it recede.
+
+### Added
+
+- **A clear key for the calculator.** `c` clears what you are typing and `C`
+  clears the tape as well — the CE and AC of a desk calculator. Previously only
+  `Esc` did this, listed as a secondary binding, so it was easy to miss.
+
+### Fixed
+
+- The calculator could show a truncated answer in two narrow-panel cases: a
+  result handed to a column narrower than itself, and a result pushed back over
+  the edge by the padding that aligns decimal points. A number missing its tail
+  is a different number, so both now degrade to scientific notation or give up a
+  place of alignment instead.
+- Calculator error phrases were too long for the column they are drawn in, so
+  `cannot divide by zero` appeared as `cannot divid…`.
+
 ## [1.3.0] - 2026-08-01
 
 ### Added
