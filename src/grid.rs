@@ -612,6 +612,91 @@ mod tests {
     /// news, and the thing to do is check whether `wrapped` can go, not to
     /// delete the assertion. The bound lives in a dependency and would leave
     /// with it.
+    /// Nothing outside this module may hand text to ratatui's word wrapper.
+    ///
+    /// [`wrapped`] exists because that wrapper panics on text mirador did not
+    /// write, and the fix was to route every such site through here. The panels
+    /// that were fixed have their own tests — `a_note_full_of_wide_glyphs_draws_at_every_width`
+    /// is the model — but those guard the sites that were *known* about. A new
+    /// panel, or a new render site in an old one, would reintroduce the crash
+    /// with nothing to catch it.
+    ///
+    /// This is that catch, and it is structural rather than behavioural on
+    /// purpose. A geometry sweep was tried first and abandoned: to trigger the
+    /// fault a specific string has to meet a specific pane width, panels
+    /// sub-divide their own area, and only one note's body is ever drawn — so
+    /// the sweep passed cheerfully with the defect reintroduced. Counting the
+    /// call sites cannot miss.
+    ///
+    /// Two are allowed, and both are text this program wrote itself: the help
+    /// overlay and the delete confirmation, whose one variable line is
+    /// truncated to the width before it gets there.
+    #[test]
+    fn only_the_two_known_places_use_ratatuis_own_wrapper() {
+        // Split so this test's own source is not a match.
+        let needle = concat!(".wr", "ap(");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, needle, found);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    // This module's own tests use the wrapper deliberately, to
+                    // prove it still panics. Testing the thing is not using it.
+                    && path.file_name().is_some_and(|n| n != "grid.rs")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    for line in text.lines() {
+                        let trimmed = line.trim_start();
+                        // Prose about the rule is not a use of it.
+                        if trimmed.starts_with("//") {
+                            continue;
+                        }
+                        if line.contains(needle) {
+                            let name = path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
+                            found.push(format!("{name}: {}", trimmed.trim_end()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        walk(&root, needle, &mut found);
+        found.sort();
+
+        assert_eq!(
+            found.len(),
+            2,
+            "expected exactly two uses of ratatui's wrapper — the help overlay \
+             and the delete confirmation — and found {}:\n  {}\n\n\
+             If this is a new site rendering text mirador did not write, wrap it \
+             with `grid::wrapped` instead: ratatui's wrapper panics on a leading \
+             combining mark, and on a double-width glyph in a word too long for \
+             a two-cell area, which is ordinary prose. If it really is text this \
+             program wrote itself, widen this count and say why.",
+            found.len(),
+            found.join("\n  ")
+        );
+        assert!(
+            found.iter().any(|f| f.starts_with("app.rs:")),
+            "the help overlay's wrap went missing: {found:?}"
+        );
+        assert!(
+            found.iter().any(|f| f.starts_with("todo.rs:")),
+            "the delete confirmation's wrap went missing: {found:?}"
+        );
+    }
+
     #[test]
     fn ratatuis_own_wrapper_is_why_this_module_wraps_first() {
         let hook = std::panic::take_hook();
