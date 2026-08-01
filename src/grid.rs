@@ -368,6 +368,39 @@ impl Grid {
             resolved.push((column, width, declared));
         }
 
+        // No column may take space the grid has not got.
+        //
+        // `drops_below` is how a grid *chooses* what to lose, and it is the
+        // mechanism panels should reach for — a threshold names the width at
+        // which a column stops being worth its room. This is the floor
+        // underneath it, for the widths no threshold anticipated: a fixed
+        // width is declared without reference to the total, so three fixed
+        // columns in a pane narrower than their sum built a row wider than the
+        // pane it was resolved for. What the reader then saw was decided by
+        // the terminal, which cannot tell a value from a fragment and cuts
+        // wherever the edge falls.
+        //
+        // Clamping hands the short column whatever is left, and `fit`
+        // ellipsises it. That is the same bargain the rest of the module
+        // makes: degrade visibly rather than silently.
+        let mut left = total;
+        let mut emitted = false;
+        for (_, width, _) in &mut resolved {
+            if *width == 0 {
+                continue;
+            }
+            let gutter = if emitted { GUTTER } else { 0 };
+            if left <= gutter {
+                *width = 0;
+                continue;
+            }
+            *width = (*width).min(left - gutter);
+            if *width > 0 {
+                left -= gutter + *width;
+                emitted = true;
+            }
+        }
+
         Self { resolved }
     }
 
@@ -410,12 +443,12 @@ impl Grid {
             .add_modifier(Modifier::BOLD);
 
         let mut spans = Vec::new();
-        for (index, (column, width, _)) in self.resolved.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::raw(" ".repeat(GUTTER as usize)));
-            }
+        for (column, width, _) in &self.resolved {
             if *width == 0 {
                 continue;
+            }
+            if !spans.is_empty() {
+                spans.push(Span::raw(" ".repeat(GUTTER as usize)));
             }
             let text = crate::glyphs::utility(column.label);
             spans.push(Span::styled(fit(&text, *width, column.align), style));
@@ -426,12 +459,12 @@ impl Grid {
     /// A data row. Extra cells are ignored; missing cells render blank.
     pub fn row(&self, cells: &[Span<'_>]) -> Line<'static> {
         let mut spans = Vec::new();
-        for (index, (column, width, declared)) in self.resolved.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::raw(" ".repeat(GUTTER as usize)));
-            }
+        for (column, width, declared) in &self.resolved {
             if *width == 0 {
                 continue;
+            }
+            if !spans.is_empty() {
+                spans.push(Span::raw(" ".repeat(GUTTER as usize)));
             }
             // Indexed by the column's declared position, not its surviving
             // one, so a dropped column takes its own value with it rather than
@@ -444,6 +477,59 @@ impl Grid {
         }
         Line::from(spans)
     }
+}
+
+/// Assemble `parts` into a line that fits `width`, dropping whole parts from
+/// the end rather than letting the terminal cut one in half.
+///
+/// **A line assembled from parts must lose whole parts, never half a value.**
+/// This is the same rule [`Grid`] applies to columns, for the many lines in
+/// this program that are not tables: a readout, a summary, a settings line.
+/// Those were all built at their natural width and handed to a `Paragraph`,
+/// which draws what fits and drops the rest on the floor. The terminal has no
+/// idea what a value is, so it cuts wherever the edge falls — and a fragment
+/// of a value is not a smaller truth, it is a different one. `↑ 6.4 KB` is a
+/// total where a rate was meant, `+52.0` is a number nobody holds, and `13 1`
+/// under a calendar's THU is a date. All three were on screen at ordinary
+/// terminal widths.
+///
+/// A part is a group of spans that means nothing on its own — a value and its
+/// unit, an arrow and the figure it points at, a separator and what follows
+/// it. Put the separator at the *front* of the part it introduces, so dropping
+/// the part takes the separator with it and no line ends in a dangling `·`.
+///
+/// When not even the first part fits it is truncated rather than dropped. A
+/// blank where a number belongs reads as a broken panel — invariant 11, one
+/// scale up — and the ellipsis is what keeps that honest: something was cut,
+/// and the reader can see that it was.
+pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
+    let width = usize::from(width);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+
+    for part in parts {
+        let part_width: usize = part.iter().map(|s| display_width(&s.content)).sum();
+        if used + part_width > width {
+            // Nothing has been placed and this part is too wide for the line:
+            // show as much of it as fits, ellipsised, rather than nothing.
+            if spans.is_empty() {
+                let mut room = width;
+                for span in part {
+                    if room == 0 {
+                        break;
+                    }
+                    let text = truncate(&span.content, room);
+                    room -= display_width(&text);
+                    spans.push(Span::styled(text, span.style));
+                }
+            }
+            break;
+        }
+        used += part_width;
+        spans.extend(part);
+    }
+
+    Line::from(spans)
 }
 
 /// Pad or truncate `text` to exactly `width` terminal cells.
@@ -697,6 +783,110 @@ mod tests {
         );
     }
 
+    /// Every multi-span line a widget builds by hand is accounted for.
+    ///
+    /// The clipping pass found nine lines assembled from parts and handed to a
+    /// `Paragraph` at their natural width, in nine different modules, each
+    /// written as if the pane would be wide enough. Four of them were cutting
+    /// values at ordinary terminal sizes — the upload rate reduced to a bare
+    /// `↑`, `humidity` with no figure, `25m focus ·` trailing into nothing,
+    /// `+52.0`. The defect was not in any one of them; it was that nothing
+    /// asked the question.
+    ///
+    /// So this counts the remaining hand-built composite lines and names why
+    /// each is safe. It is a coarse instrument — `Line::from(vec![…])` is not
+    /// itself wrong — and that is the intent: a new one has to be justified out
+    /// loud, here, rather than discovered on somebody's narrow terminal.
+    ///
+    /// The alternative was a render-level sweep, and it was tried first. It
+    /// cannot work: a buffer records what the terminal *kept*, so an overflowing
+    /// line and a line that happens to end there are the same bytes. Overflow
+    /// has to be caught where the line is built, which makes the call site the
+    /// only thing there is to count.
+    #[test]
+    fn every_hand_built_composite_line_in_a_widget_is_accounted_for() {
+        // Each entry is a module and how many composite lines it may build.
+        // A line is exempt only when its width is *already* bounded — every
+        // span truncated to a computed room, or the whole thing measured before
+        // it is built.
+        const ALLOWED: &[(&str, usize, &str)] = &[
+            ("agenda.rs", 1, "the row's summary is truncated to `room`"),
+            (
+                "notes.rs",
+                2,
+                "search field and caret, both cut to the pane",
+            ),
+            ("stocks.rs", 1, "the add field, assembled by `status_line`"),
+            (
+                "todo.rs",
+                1,
+                "the priority marker: three short fixed strings",
+            ),
+            (
+                "watchlog.rs",
+                2,
+                "entry text truncated; the rule line is built to width",
+            ),
+        ];
+
+        fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, needle, found);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    // Tests build lines to assert about them, which is not
+                    // drawing one.
+                    let body = text.split("mod tests").next().unwrap_or(&text);
+                    for line in body.lines() {
+                        if line.trim_start().starts_with("//") {
+                            continue;
+                        }
+                        if line.contains(needle) {
+                            found.push(
+                                path.file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Split so this test's own source is not a match.
+        let needle = concat!("Line::fr", "om(vec![");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/widgets");
+
+        let mut found = Vec::new();
+        walk(&root, needle, &mut found);
+
+        for name in &found {
+            let allowed = ALLOWED
+                .iter()
+                .find(|(module, _, _)| module == name)
+                .map_or(0, |(_, count, _)| *count);
+            let actual = found.iter().filter(|f| *f == name).count();
+            assert!(
+                actual <= allowed,
+                "{name} builds {actual} composite line(s) by hand; {allowed} are \
+                 accounted for.\n\n\
+                 A line assembled from parts and drawn at its natural width is \
+                 cut by the terminal, which cannot tell a value from a fragment \
+                 — `↑ 6.4 KB` where a rate was meant, `+52.0` where a price was. \
+                 Build it with `grid::assemble` so whole parts are dropped \
+                 instead, or bound every span yourself and add the module here \
+                 with the reason."
+            );
+        }
+    }
+
     #[test]
     fn ratatuis_own_wrapper_is_why_this_module_wraps_first() {
         let hook = std::panic::take_hook();
@@ -781,6 +971,170 @@ mod tests {
 
     fn width_of(line: &Line<'_>) -> usize {
         line.spans.iter().map(|s| display_width(&s.content)).sum()
+    }
+
+    /// Every column set in the program, so the check below is about mirador
+    /// rather than about a fixture written to pass it.
+    ///
+    /// Kept honest by `every_grid_in_the_program_is_on_this_list`, which counts
+    /// the declarations in the tree. A grid that is not here is not checked,
+    /// and an unchecked grid is what this whole module exists to prevent.
+    const EVERY_GRID: &[(&str, &[Column])] = &[
+        ("clocks", crate::widgets::clocks::COLUMNS),
+        ("notes", crate::widgets::notes::COLUMNS),
+        ("stocks", crate::widgets::stocks::COLUMNS),
+        ("todo", crate::widgets::todo::COLUMNS),
+        ("weather", crate::widgets::weather::COLUMNS),
+    ];
+
+    /// A grid must never build a row wider than the width it was resolved for.
+    ///
+    /// The one property that matters, and the one nothing checked. A row that
+    /// overflows is not drawn wrong — it is drawn *by the terminal*, which
+    /// keeps the cells that fit and discards the rest without saying so. The
+    /// reader gets a value with its tail missing and no way to tell.
+    ///
+    /// Swept over every width rather than the handful a panel is usually given,
+    /// because the widths that broke this were the ones nobody pictures: a
+    /// tiling window manager quartering a screen, a pane dragged narrow. Both
+    /// the header and a row are measured — they are built by separate loops,
+    /// and only one of them was wrong the first time.
+    #[test]
+    fn no_grid_in_the_program_ever_overflows_its_width() {
+        let cells = [
+            Span::raw("wwwwwwwwwwwwwwwwwwww"),
+            Span::raw("12:34:56"),
+            Span::raw("日本語日本語"),
+            Span::raw("🌞🌞🌞"),
+            Span::raw("+52.07"),
+            Span::raw("x"),
+        ];
+        for (name, columns) in EVERY_GRID {
+            for total in 0u16..=200 {
+                let grid = Grid::new(columns, total);
+                let header = width_of(&grid.header(&Theme::default()));
+                let row = width_of(&grid.row(&cells));
+                assert!(
+                    header <= usize::from(total),
+                    "{name}'s header is {header} cells wide in a {total}-cell grid; \
+                     the terminal will cut the overhang off a label without saying so"
+                );
+                assert!(
+                    row <= usize::from(total),
+                    "{name} builds a {row}-cell row for a {total}-cell grid. \
+                     The overhang is not dropped by mirador, it is dropped by the \
+                     terminal — so the last value on the row loses its tail and \
+                     still reads as a whole number. Give the column a \
+                     `drops_below` threshold that suits it."
+                );
+            }
+        }
+    }
+
+    /// The rule [`assemble`] exists for, stated as the property.
+    #[test]
+    fn an_assembled_line_never_exceeds_the_width_it_was_given() {
+        let parts = vec![
+            vec![Span::raw("12.3"), Span::raw("% "), Span::raw("LOAD")],
+            vec![Span::raw("   40s")],
+            vec![Span::raw("   \u{2191} 6.4 KB/s")],
+            vec![Span::raw("   \u{65E5}\u{672C}\u{8A9E}")],
+            vec![Span::raw("   \u{1F31E}\u{1F31E}")],
+        ];
+        for width in 0u16..=60 {
+            let line = assemble(parts.clone(), width);
+            assert!(
+                width_of(&line) <= usize::from(width),
+                "assemble produced {} cells for a width of {width}",
+                width_of(&line)
+            );
+        }
+    }
+
+    /// A part is all-or-nothing, which is the whole point of the function.
+    ///
+    /// Checked on the exact boundary rather than at a comfortable width: one
+    /// cell short of fitting is where a hand-rolled version drops a character
+    /// instead of a value, and every site this replaced was hand-rolled.
+    #[test]
+    fn a_part_that_does_not_fit_is_dropped_whole_rather_than_cut() {
+        let parts = vec![
+            vec![Span::raw("\u{2193} 6.4 KB/s")],
+            vec![Span::raw("   \u{2191} 1.2 MB/s")],
+        ];
+        let whole = width_of(&assemble(parts.clone(), 60));
+        assert_eq!(whole, 23, "the fixture should need 23 cells");
+
+        // One cell short of the pair: the second reading goes, and its arrow
+        // and separator go with it. An arrow left standing over nothing reads
+        // as a value of zero.
+        let line = assemble(parts.clone(), 22);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(text, "\u{2193} 6.4 KB/s");
+
+        // And exactly at the pair's width, nothing is given up at all.
+        assert_eq!(width_of(&assemble(parts, 23)), 23);
+    }
+
+    /// A first part too wide to fit is ellipsised, not dropped.
+    ///
+    /// The alternative is a blank row where a reading belongs, which reads as a
+    /// broken panel rather than a narrow one — invariant 11 one scale up. The
+    /// `…` is what keeps it honest: the reader can see something was cut.
+    #[test]
+    fn a_lone_part_too_wide_to_fit_is_ellipsised_rather_than_dropped() {
+        let parts = vec![vec![Span::raw("^GSPC: network access is refused")]];
+        let line = assemble(parts, 12);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(
+            text.ends_with('\u{2026}'),
+            "an abridged message must say so, got {text:?}"
+        );
+        assert!(display_width(&text) <= 12);
+        assert!(!text.is_empty(), "a blank line reads as a broken panel");
+    }
+
+    /// The list above has to name every grid, or the sweep passes by not
+    /// looking.
+    ///
+    /// Counting declarations rather than checking each one by hand: the same
+    /// shape as the guard on ratatui's wrapper, and for the same reason. A
+    /// registry nothing reconciles with the tree is a registry that quietly
+    /// stops being complete, and the failure mode is silence.
+    #[test]
+    fn every_grid_in_the_program_is_on_this_list() {
+        fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    if text.contains(concat!("const COLUMNS: &[", "Column]")) {
+                        found.push(path.file_stem().unwrap().to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        found.sort();
+
+        let mut listed: Vec<String> = EVERY_GRID.iter().map(|(n, _)| (*n).to_string()).collect();
+        listed.sort();
+
+        assert_eq!(
+            found, listed,
+            "the source declares grids {found:?} but EVERY_GRID names {listed:?}.\n\n\
+             Add the new one to EVERY_GRID. Until it is there, \
+             no_grid_in_the_program_ever_overflows_its_width does not cover it, \
+             and it will pass anyway — which is the failure this check exists \
+             to make impossible."
+        );
     }
 
     #[test]

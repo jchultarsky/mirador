@@ -169,6 +169,65 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Not a test: renders every panel across a width sweep so clipping can be
+    /// seen rather than reasoned about.
+    /// Run with `cargo test dump_width_sweep -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "renders every panel at many widths for eyeballing, not an assertion"]
+    fn dump_width_sweep() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let dir = std::env::temp_dir().join(format!("mirador-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut config = Config::default();
+        config.todo.file = Some(dir.join("todos.toml"));
+        config.notes.file = Some(dir.join("notes.toml"));
+        config.stocks.file = Some(dir.join("watchlist.toml"));
+        config.weather.latitude = Some(42.36);
+        config.weather.longitude = Some(-71.06);
+
+        for name in WIDGET_NAMES {
+            let mut panel = build(name, &config).unwrap().unwrap();
+            panel.tick();
+            let gradients = config.theme.gradients();
+
+            for width in [12u16, 16, 20, 24, 26, 30, 40] {
+                let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        panel.render(
+                            frame,
+                            area,
+                            crate::panel::RenderContext {
+                                theme: &config.theme,
+                                gradients: &gradients,
+                                focused: true,
+                                watch: &crate::watch::WatchLog::default(),
+                            },
+                        );
+                    })
+                    .unwrap();
+                let buf = terminal.backend().buffer().clone();
+                println!("\n=== {name} @ {width} ===");
+                for y in 0..buf.area.height {
+                    let mut line = String::new();
+                    for x in 0..buf.area.width {
+                        line.push_str(buf[(x, y)].symbol());
+                    }
+                    if !line.trim().is_empty() {
+                        println!("|{line}|");
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Not a test: renders what a brand-new user sees, with nothing on disk,
     /// so the seeded examples can be eyeballed the way they will be met.
     /// Run with `cargo test dump_first_run -- --ignored --nocapture`.

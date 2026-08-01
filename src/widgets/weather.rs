@@ -62,7 +62,7 @@ const WIND_MIN: u16 = HOUR_W + SKY_W + TEMP_W + FEELS_W + RAIN_W + WIND_W + 5;
 /// Columns of the hourly forecast.
 ///
 /// Ordered by how often they are wanted, because the narrow ones drop first.
-const COLUMNS: &[Column] = &[
+pub(crate) const COLUMNS: &[Column] = &[
     Column::fixed("hour", HOUR_W),
     Column::flex("sky", 1),
     Column::fixed("temp", TEMP_W).right(),
@@ -910,7 +910,7 @@ impl Panel for WeatherPanel {
                     lines
                 }
                 None => vec![Line::from(Span::styled(
-                    "Fetching weather\u{2026}",
+                    crate::grid::truncate("Fetching weather\u{2026}", usize::from(area.width)),
                     Style::default().fg(theme.muted),
                 ))],
             };
@@ -993,31 +993,47 @@ impl WeatherPanel {
             area
         };
 
+        // Each reading is a part, so a narrow panel loses one whole and keeps
+        // the rest. Joined into one string, the last one was cut by the
+        // terminal instead: `humidity` with its figure gone still reads as a
+        // labelled value, and the label is the half that carries no
+        // information.
+        let width = readings_area.width;
         let mut lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!("{:.0}{}", data.temperature, data.temperature_unit),
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("  {}", glyphs::describe(sky)),
-                    Style::default().fg(theme.text),
-                ),
-            ]),
+            crate::grid::assemble(
+                vec![
+                    vec![Span::styled(
+                        format!("{:.0}{}", data.temperature, data.temperature_unit),
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                    )],
+                    vec![Span::styled(
+                        format!("  {}", glyphs::describe(sky)),
+                        Style::default().fg(theme.text),
+                    )],
+                ],
+                width,
+            ),
             Line::from(Span::styled(
-                format!("feels {:.0}{}", data.feels_like, data.temperature_unit),
+                crate::grid::truncate(
+                    &format!("feels {:.0}{}", data.feels_like, data.temperature_unit),
+                    usize::from(width),
+                ),
                 Style::default().fg(theme.muted),
             )),
         ];
 
-        let mut extras = vec![format!("wind {:.0} {}", data.wind, data.wind_unit)];
+        let muted = Style::default().fg(theme.muted);
+        let mut extras = vec![vec![Span::styled(
+            format!("wind {:.0} {}", data.wind, data.wind_unit),
+            muted,
+        )]];
         if let Some(humidity) = data.humidity {
-            extras.push(format!("humidity {humidity}%"));
+            extras.push(vec![Span::styled(
+                format!("   humidity {humidity}%"),
+                muted,
+            )]);
         }
-        lines.push(Line::from(Span::styled(
-            extras.join("   "),
-            Style::default().fg(theme.muted),
-        )));
+        lines.push(crate::grid::assemble(extras, width));
 
         // Amber rather than red: the reading is still the best available, it is
         // simply not fresh. Red is for a panel with nothing to show.

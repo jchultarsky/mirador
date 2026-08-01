@@ -471,42 +471,59 @@ impl Panel for PomodoroPanel {
 
         // Pips for the set, and what the two dials are currently set to.
         if cursor < bottom {
-            let mut spans = Vec::new();
+            let mut pips = Vec::new();
             for index in 0..self.config.rounds_before_long_break {
                 let done = index < self.completed;
-                spans.push(Span::styled(
+                pips.push(Span::styled(
                     "■",
                     Style::default().fg(if done { theme.accent } else { theme.track }),
                 ));
-                spans.push(Span::raw(" "));
+                pips.push(Span::raw(" "));
             }
+            let pips_width =
+                usize::try_from(self.config.rounds_before_long_break).unwrap_or(usize::MAX) * 2;
+            let mut parts = vec![pips];
+
             // A broken chime displaces the dial readout rather than sitting
             // beside it: the durations are visible on the timer anyway, and a
             // notification you think is working but is not is the failure worth
             // the space.
             if let Some(error) = &self.chime_error {
-                spans.push(Span::styled(
-                    format!(" chime: {error}"),
+                // Truncated to what is left rather than dropped whole, unlike
+                // everything else on this line. The dials are readable off the
+                // timer, so losing them costs nothing — but this is the only
+                // place a broken chime is reported anywhere in the program, and
+                // a panel narrow enough to drop it is exactly the one where
+                // silence would be permanent.
+                parts.push(vec![Span::styled(
+                    crate::grid::truncate(
+                        &format!(" chime: {error}"),
+                        usize::from(area.width).saturating_sub(pips_width),
+                    ),
                     Style::default().fg(theme.error),
-                ));
+                )]);
             } else {
+                let muted = Style::default().fg(theme.muted);
+                parts.push(vec![Span::styled(
+                    format!(" {}m focus", self.config.focus_minutes),
+                    muted,
+                )]);
+                parts.push(vec![Span::styled(
+                    format!(" · {}m break", self.config.short_break_minutes),
+                    muted,
+                )]);
                 // The pips reset with every long break, so they cannot answer
                 // "how much have I actually done today". This can.
-                let done = if self.total_completed > 0 {
-                    format!(" · {} done", self.total_completed)
-                } else {
-                    String::new()
-                };
-                spans.push(Span::styled(
-                    format!(
-                        " {}m focus · {}m break{done}",
-                        self.config.focus_minutes, self.config.short_break_minutes
-                    ),
-                    Style::default().fg(theme.muted),
-                ));
+                if self.total_completed > 0 {
+                    parts.push(vec![Span::styled(
+                        format!(" · {} done", self.total_completed),
+                        muted,
+                    )]);
+                }
             }
+
             frame.render_widget(
-                Paragraph::new(Line::from(spans)),
+                Paragraph::new(crate::grid::assemble(parts, area.width)),
                 Rect::new(area.x, cursor, area.width, 1),
             );
         }

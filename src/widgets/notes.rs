@@ -49,7 +49,7 @@ const BINDINGS: &[Binding] = &[
 ];
 
 /// Columns of the note list. The date is right-aligned so the dates line up.
-const COLUMNS: &[Column] = &[
+pub(crate) const COLUMNS: &[Column] = &[
     Column::flex("title", 1),
     Column::fixed("date", 6).right().drops_below(24),
 ];
@@ -525,7 +525,14 @@ impl NotesPanel {
     /// The bottom line: a delete confirmation, the search prompt, or the last
     /// status message. A save failure outranks nothing — it stays until the
     /// next keypress, because a note that failed to save must not look saved.
-    fn status_line(&self, theme: &Theme) -> Line<'static> {
+    /// The status line, cut to `width` with an ellipsis rather than by the
+    /// terminal. See `StocksPanel::status_line`: a note title in a delete
+    /// prompt and a typed search term are both as long as the user made them.
+    fn status_line(&self, theme: &Theme, width: u16) -> Line<'static> {
+        crate::grid::assemble(vec![self.status_text(theme).spans], width)
+    }
+
+    fn status_text(&self, theme: &Theme) -> Line<'static> {
         match (&self.mode, &self.status) {
             (Mode::ConfirmDelete { title, .. }, _) => Line::from(Span::styled(
                 format!("delete \"{title}\"?  y / n"),
@@ -843,7 +850,10 @@ impl Panel for NotesPanel {
         self.detail_area = Some(detail_area);
         self.render_detail(frame, detail_area, theme);
 
-        frame.render_widget(Paragraph::new(self.status_line(theme)), rows[2]);
+        frame.render_widget(
+            Paragraph::new(self.status_line(theme, rows[2].width)),
+            rows[2],
+        );
     }
 
     fn shutdown(&mut self) {

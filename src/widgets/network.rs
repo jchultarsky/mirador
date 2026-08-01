@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use sysinfo::Networks;
 
@@ -232,19 +232,48 @@ impl Panel for NetworkPanel {
         ])
         .split(area);
 
+        // An arrow and the rate it points at are one part, so a pane too narrow
+        // for both readouts loses the upload arrow along with its figure. It
+        // used to keep the arrow and lose the number, which drew `↑` followed
+        // by nothing — a heading over an empty space, which reads as zero
+        // rather than as absent. At a middling width it was worse still: `6.4
+        // KB` survived where `6.4 KB/s` was meant, and a total is not a rate.
+        let rx = format_rate(self.rx_rate);
+        let tx = format_rate(self.tx_rate);
+
+        // The figures are padded to a fixed field so they hold still as they
+        // change — a rate that shifts sideways every second is the restlessness
+        // this dashboard exists not to have. The padding is the first thing
+        // given up, though, because losing the upload reading entirely to keep
+        // the download's right margin is the wrong trade at the widths where
+        // that choice comes up.
+        let padded = 2 + 10 + 5 + 10;
+        let (rx_text, arrow, tx_text) = if usize::from(rows[0].width) >= padded {
+            (format!("{rx:>10}"), "   \u{2191} ", format!("{tx:>10}"))
+        } else {
+            (rx, " \u{2191} ", tx)
+        };
+
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("\u{2193} ", Style::default().fg(rx_color)),
-                Span::styled(
-                    format!("{:>10}", format_rate(self.rx_rate)),
-                    Style::default().fg(rx_color).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("   \u{2191} ", Style::default().fg(tx_color)),
-                Span::styled(
-                    format!("{:>10}", format_rate(self.tx_rate)),
-                    Style::default().fg(tx_color).add_modifier(Modifier::BOLD),
-                ),
-            ])),
+            Paragraph::new(crate::grid::assemble(
+                vec![
+                    vec![
+                        Span::styled("\u{2193} ", Style::default().fg(rx_color)),
+                        Span::styled(
+                            rx_text,
+                            Style::default().fg(rx_color).add_modifier(Modifier::BOLD),
+                        ),
+                    ],
+                    vec![
+                        Span::styled(arrow, Style::default().fg(tx_color)),
+                        Span::styled(
+                            tx_text,
+                            Style::default().fg(tx_color).add_modifier(Modifier::BOLD),
+                        ),
+                    ],
+                ],
+                rows[0].width,
+            )),
             rows[0],
         );
 
@@ -272,24 +301,31 @@ impl Panel for NetworkPanel {
         }
 
         if rows[3].height > 0 {
+            let muted = Style::default().fg(theme.muted);
             frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        crate::glyphs::utility("session"),
-                        Style::default()
-                            .fg(theme.label)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(
-                            "  \u{2193} {}  \u{2191} {}   peak {}",
-                            format_bytes(self.rx_total),
-                            format_bytes(self.tx_total),
-                            format_rate(scale)
-                        ),
-                        Style::default().fg(theme.muted),
-                    ),
-                ])),
+                Paragraph::new(crate::grid::assemble(
+                    vec![
+                        vec![Span::styled(
+                            crate::glyphs::utility("session"),
+                            Style::default()
+                                .fg(theme.label)
+                                .add_modifier(Modifier::BOLD),
+                        )],
+                        vec![Span::styled(
+                            format!("  \u{2193} {}", format_bytes(self.rx_total)),
+                            muted,
+                        )],
+                        vec![Span::styled(
+                            format!("  \u{2191} {}", format_bytes(self.tx_total)),
+                            muted,
+                        )],
+                        vec![Span::styled(
+                            format!("   peak {}", format_rate(scale)),
+                            muted,
+                        )],
+                    ],
+                    rows[3].width,
+                )),
                 rows[3],
             );
         }

@@ -146,7 +146,7 @@ fn month_name(month: i8) -> &'static str {
         .unwrap_or("")
 }
 
-/// Centre `text` in a field of exactly `MONTH_WIDTH` cells.
+/// Centre `text` in a field of exactly `width` cells.
 ///
 /// The trailing padding matters as much as the leading: a month block is
 /// composed left to right, so a title line that stops short of the full width
@@ -154,36 +154,68 @@ fn month_name(month: i8) -> &'static str {
 /// to the right, which is where `cal` puts them.
 ///
 /// Month names are ASCII, so counting chars is counting cells here.
-fn centred(text: &str) -> String {
-    let width = usize::from(MONTH_WIDTH);
+fn centred(text: &str, width: usize) -> String {
     let len = text.chars().count();
     if len >= width {
-        return text.to_string();
+        // Ellipsised rather than left to hang over the edge. A title is prose,
+        // so `Aug…` is a plainly abridged month where a title the terminal cut
+        // would read as a shorter name.
+        return crate::grid::truncate(text, width);
     }
     let left = (width - len) / 2;
     let right = width - len - left;
     format!("{:left$}{text}{:right$}", "", "")
 }
 
-/// One month as exactly `MONTH_HEIGHT` lines of exactly `MONTH_WIDTH` cells.
+/// Cells a month occupies when only `day_columns` of its seven weekdays fit.
+///
+/// Each day is two cells with one between them, so the whole-column widths are
+/// 2, 5, 8 … 20 and nothing else. Any other width cuts a date down the middle,
+/// and a date cut down the middle is still a date: `14` clipped to `1` under
+/// THU is not a fragment the reader can spot, it is Thursday the 1st.
+const fn month_width(day_columns: usize) -> usize {
+    day_columns * 3 - 1
+}
+
+/// The most whole weekday columns that fit in `width`.
+///
+/// Zero when not even one day fits, which is the only honest answer at a
+/// couple of cells — the panel then draws nothing rather than half a number.
+const fn day_columns_for(width: u16) -> usize {
+    let fits = (width as usize + 1) / 3;
+    if fits > 7 { 7 } else { fits }
+}
+
+/// One month as exactly `MONTH_HEIGHT` lines of exactly
+/// `month_width(day_columns)` cells.
+///
+/// Narrowing drops whole weekday columns from the end, the way the shared grid
+/// drops whole table columns. What is left is true — the dates under SU MO TU
+/// are the right dates — and it is visibly a cut-off calendar, which the
+/// alternative was not.
 fn month_block(
     first: Date,
     today: Date,
     week_start: Weekday,
     theme: &Theme,
     focused: bool,
+    day_columns: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(usize::from(MONTH_HEIGHT));
+    let width = month_width(day_columns);
 
     lines.push(Line::from(Span::styled(
-        centred(&format!("{} {}", month_name(first.month()), first.year())),
+        centred(
+            &format!("{} {}", month_name(first.month()), first.year()),
+            width,
+        ),
         Style::default()
             .fg(theme.title)
             .add_modifier(Modifier::BOLD),
     )));
 
     lines.push(Line::from(Span::styled(
-        weekday_headings(week_start).join(" "),
+        weekday_headings(week_start)[..day_columns].join(" "),
         Style::default().fg(theme.label),
     )));
 
@@ -195,11 +227,21 @@ fn month_block(
     for week in 0..WEEK_ROWS {
         let mut spans: Vec<Span<'static>> = Vec::with_capacity(13);
         for column in 0..7 {
+            let leading = week == 0 && column < blanks;
+            let drawn = !(leading || day > days);
+            // A dropped column still consumes its date: the month must go on
+            // advancing behind the edge of the panel, or the second week would
+            // start on the wrong day.
+            if column >= day_columns {
+                if drawn {
+                    day += 1;
+                }
+                continue;
+            }
             if column > 0 {
                 spans.push(Span::raw(" "));
             }
-            let leading = week == 0 && column < blanks;
-            if leading || day > days {
+            if !drawn {
                 spans.push(Span::raw("  "));
                 continue;
             }
@@ -349,6 +391,19 @@ impl Panel for CalendarPanel {
 
         let across = usize::from(self.config.months.clamp(1, 12));
         let (columns, rows) = grid_shape(area, across);
+
+        // A month is twenty cells and there is no honest way to squeeze one
+        // into fewer, so a panel narrower than that shows fewer weekdays rather
+        // than a narrower week. Below three cells not even one day fits and
+        // there is nothing to draw; the frame still says which panel this is.
+        let day_columns = if columns > 1 {
+            7
+        } else {
+            day_columns_for(area.width)
+        };
+        if day_columns == 0 {
+            return;
+        }
         let week_start = self.week_start();
         let anchor = first_of_month(self.today);
 
@@ -372,7 +427,14 @@ impl Panel for CalendarPanel {
                 };
                 drew_any = true;
 
-                let block = month_block(first, self.today, week_start, ctx.theme, ctx.focused);
+                let block = month_block(
+                    first,
+                    self.today,
+                    week_start,
+                    ctx.theme,
+                    ctx.focused,
+                    day_columns,
+                );
                 for (line_index, line) in block.into_iter().enumerate() {
                     let Some(target) = strip.get_mut(line_index) else {
                         continue;
@@ -415,7 +477,7 @@ mod tests {
     fn a_month_matches_what_cal_prints() {
         let july = Date::new(2026, 7, 1).unwrap();
         let theme = Theme::default();
-        let block = month_block(july, july, Weekday::Sunday, &theme, true);
+        let block = month_block(july, july, Weekday::Sunday, &theme, true, 7);
 
         let text: Vec<String> = block
             .iter()
@@ -446,7 +508,7 @@ mod tests {
         // it scrolls.
         for (year, month) in [(2026, 2), (2026, 8), (2026, 3)] {
             let first = Date::new(year, month, 1).unwrap();
-            let block = month_block(first, first, Weekday::Sunday, &theme, true);
+            let block = month_block(first, first, Weekday::Sunday, &theme, true, 7);
             assert_eq!(
                 block.len(),
                 usize::from(MONTH_HEIGHT),
@@ -460,7 +522,14 @@ mod tests {
     fn today_is_the_only_reversed_day() {
         let theme = Theme::default();
         let today = Date::new(2026, 7, 25).unwrap();
-        let block = month_block(today.first_of_month(), today, Weekday::Sunday, &theme, true);
+        let block = month_block(
+            today.first_of_month(),
+            today,
+            Weekday::Sunday,
+            &theme,
+            true,
+            7,
+        );
 
         let reversed: Vec<String> = block
             .iter()
@@ -477,7 +546,7 @@ mod tests {
         let theme = Theme::default();
         let today = Date::new(2026, 7, 25).unwrap();
         let august = Date::new(2026, 8, 1).unwrap();
-        let block = month_block(august, today, Weekday::Sunday, &theme, true);
+        let block = month_block(august, today, Weekday::Sunday, &theme, true, 7);
 
         assert!(
             !block
@@ -492,7 +561,7 @@ mod tests {
     fn a_monday_week_shifts_the_headings_and_the_blanks() {
         let theme = Theme::default();
         let july = Date::new(2026, 7, 1).unwrap();
-        let block = month_block(july, july, Weekday::Monday, &theme, true);
+        let block = month_block(july, july, Weekday::Monday, &theme, true, 7);
         let header: String = block[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(header, "Mo Tu We Th Fr Sa Su");
 
@@ -592,7 +661,7 @@ mod tests {
 
         for (year, month) in [(2026, 7), (2026, 8), (2026, 9), (2026, 12)] {
             let first = Date::new(year, month, 1).unwrap();
-            let block = month_block(first, july, Weekday::Sunday, &theme, true);
+            let block = month_block(first, july, Weekday::Sunday, &theme, true, 7);
             for (index, line) in block.iter().enumerate() {
                 let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                 assert_eq!(
@@ -612,7 +681,7 @@ mod tests {
         };
 
         for name in ["July 2026", "August 2026", "September 2026", "May 2026"] {
-            let line = centred(name);
+            let line = centred(name, usize::from(MONTH_WIDTH));
             let leading = line.len() - line.trim_start().len();
             let trailing = line.len() - line.trim_end().len();
             assert_eq!(line.chars().count(), usize::from(MONTH_WIDTH));
@@ -630,6 +699,7 @@ mod tests {
             Weekday::Sunday,
             &theme,
             true,
+            7,
         );
         assert_eq!(text_of(&block[1]), "Su Mo Tu We Th Fr Sa");
     }

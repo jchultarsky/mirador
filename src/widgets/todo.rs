@@ -93,7 +93,7 @@ const BINDINGS: &[Binding] = &[
 ///
 /// `done` and `pri` are glyph columns, but they still carry names: without a
 /// header the three-cell gauge is a guess.
-const COLUMNS: &[Column] = &[
+pub(crate) const COLUMNS: &[Column] = &[
     Column::fixed("done", 4),
     Column::fixed("pri", 3),
     Column::flex("task", 1),
@@ -681,52 +681,67 @@ impl TodoPanel {
     }
 
     /// The summary line: how much is open, and how it is sorted.
-    fn header(&self, theme: &Theme) -> Line<'static> {
+    ///
+    /// Assembled in priority order and cut at whole items, so a narrow panel
+    /// loses the sort mode before the overdue count and never shows `4 op`.
+    fn header(&self, theme: &Theme, width: u16) -> Line<'static> {
         let Counts {
             open,
             overdue,
             today,
         } = self.counts;
 
-        let mut spans = Vec::new();
-
         // Lead with whatever is actually wrong. On a calm day this line is
         // short and grey, which is the point: you should be able to tell at a
-        // glance that there is nothing to deal with.
+        // glance that there is nothing to deal with. That ordering is also the
+        // order things are given up in when the panel is narrow, which is the
+        // same judgement read from the other end.
+        let mut items: Vec<(String, Style)> = Vec::new();
         if overdue > 0 {
-            spans.push(Span::styled(
+            items.push((
                 format!("{overdue} overdue"),
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::styled("   ", Style::default().fg(theme.muted)));
         }
         if today > 0 {
-            spans.push(Span::styled(
+            items.push((
                 format!("{today} due today"),
                 Style::default().fg(theme.warning),
             ));
-            spans.push(Span::styled("   ", Style::default().fg(theme.muted)));
         }
-        spans.push(Span::styled(
-            format!("{open} open"),
-            Style::default().fg(theme.muted),
-        ));
-        spans.push(Span::styled(
-            format!("   by {}", self.sort.label()),
+        items.push((format!("{open} open"), Style::default().fg(theme.muted)));
+        items.push((
+            format!("by {}", self.sort.label()),
             Style::default().fg(theme.muted),
         ));
         if self.show_completed {
-            spans.push(Span::styled("   +done", Style::default().fg(theme.muted)));
+            items.push(("+done".to_string(), Style::default().fg(theme.muted)));
         }
         if !self.filter.is_empty() {
-            spans.push(Span::styled(
-                format!("   /{}", self.filter),
+            items.push((
+                format!("/{}", self.filter),
                 Style::default().fg(theme.accent),
             ));
         }
-        Line::from(spans)
+
+        // The gap belongs to the item it introduces, so dropping the item
+        // takes its gap with it and the line never ends in trailing space.
+        let parts = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, (text, style))| {
+                let text = if index == 0 {
+                    text
+                } else {
+                    format!("   {text}")
+                };
+                vec![Span::styled(text, style)]
+            })
+            .collect();
+
+        crate::grid::assemble(parts, width)
     }
 
     /// Draw the add/edit form as a centred modal.
@@ -1041,7 +1056,7 @@ impl Panel for TodoPanel {
         ])
         .split(area);
 
-        frame.render_widget(Paragraph::new(self.header(theme)), rows[0]);
+        frame.render_widget(Paragraph::new(self.header(theme, rows[0].width)), rows[0]);
 
         // Recorded every pass so a click maps to the rows actually on screen,
         // and cleared when there are none rather than left pointing at a stale

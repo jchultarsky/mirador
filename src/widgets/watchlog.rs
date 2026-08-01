@@ -147,7 +147,15 @@ impl Panel for WatchLogPanel {
                     format!("{} ", entry.at.strftime("%H:%M")),
                     Style::default().fg(theme.muted),
                 ),
-                Span::styled(entry.text.clone(), Style::default().fg(theme.text)),
+                // Truncated here rather than by the list. An entry is written
+                // by whichever panel reported it — a task title, a calendar
+                // summary — so its length is the user's, not this panel's, and
+                // `Renew the domain went over` reads as a sentence that
+                // happens to end there.
+                Span::styled(
+                    crate::grid::truncate(&entry.text, usize::from(area.width).saturating_sub(6)),
+                    Style::default().fg(theme.text),
+                ),
             ])));
         }
 
@@ -159,17 +167,26 @@ impl Panel for WatchLogPanel {
             // Somebody switched this on, waited, and reasonably concluded it
             // was the latter.
             let width = usize::from(area.width);
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    "Nothing has happened",
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                )),
-                Line::from(Span::styled(
-                    format!("since {}.", started(log.since())),
-                    Style::default().fg(theme.muted),
-                )),
-                Line::from(""),
-            ];
+            // Wrapped like the explanation below it, rather than trusted to
+            // fit. Hand-broken, the first row lost `happened` in a narrow panel
+            // and the two rows still read as a sentence — `Nothing has` above
+            // `since 00:30.` is a claim with a word missing from the middle,
+            // which is worse than one that takes an extra row.
+            let mut lines: Vec<Line<'static>> = crate::grid::wrap("Nothing has happened", width)
+                .into_iter()
+                .map(|row| {
+                    Line::from(Span::styled(
+                        row,
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                    ))
+                })
+                .collect();
+            lines.extend(
+                crate::grid::wrap(&format!("since {}.", started(log.since())), width)
+                    .into_iter()
+                    .map(|row| Line::from(Span::styled(row, Style::default().fg(theme.muted)))),
+            );
+            lines.push(Line::from(""));
 
             // Wrapped rather than hand-broken. The first version assumed a
             // width the panel does not have and lost its last line off the
