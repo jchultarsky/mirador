@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-08-01
+
+### Fixed
+
+- **The README's demo recording and its captions.** Both captions said "All
+  twelve panels"; the default layout has placed thirteen since the calculator
+  arrived, and the recording predated it. The GIF is referenced by absolute URL
+  because `/docs` is excluded from the crate, so replacing it updates the image
+  on every published version at once while the prose around it stays frozen at
+  whatever each release baked in — which is why the corrected captions need a
+  release of their own rather than riding along later.
+
+  The recording now shows the calculator, typed a character at a time so the
+  answer can be seen forming before Enter, with three sums chosen to demonstrate
+  the tape's decimal alignment.
+
 ## [1.3.1] - 2026-08-01
 
 ### Changed
