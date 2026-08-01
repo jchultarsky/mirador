@@ -4,6 +4,7 @@
 
 mod app;
 mod arrange;
+mod calc;
 mod chart;
 mod clipboard;
 mod config;

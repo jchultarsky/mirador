@@ -253,6 +253,17 @@ impl Default for CalendarConfig {
     }
 }
 
+/// Calculator settings.
+///
+/// Empty on purpose. Every key in this file is a promise that outlives the
+/// release it ships in — removing or renaming one costs a major version now —
+/// and no setting here has earned that yet. Thousands separators is the only
+/// candidate, and it can wait until somebody asks. Adding a key later is not a
+/// breaking change; taking one back is.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CalculatorConfig {}
+
 /// Pomodoro timer settings.
 ///
 /// These are the *starting* values. `+` and `-` change the timer in the panel,

@@ -43,7 +43,14 @@ impl Default for Layout {
                 // than columns of numbers, which is why they get a row instead
                 // of being squeezed in beside the lists — and why the default
                 // is four rows now rather than three.
-                row(24, &[("news", 55), ("watchlog", 45)]),
+                // The calculator sits here rather than on the instrument row
+                // below, and the reason is arithmetic rather than taste: a
+                // fifth panel in that row takes `stocks` from 36 cells to 30 at
+                // 120 columns, and it needs 35 to keep the change column that
+                // 1.1.2 went to some trouble to save. Prose gives way more
+                // gracefully than a table does — these two wrap, where a
+                // dropped column is a fact the reader no longer has.
+                row(24, &[("news", 48), ("watchlog", 38), ("calculator", 24)]),
                 row(
                     18,
                     &[
