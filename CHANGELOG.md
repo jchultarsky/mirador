@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-07-31
+
+### Fixed
+
+- **The markets panel was showing wrong numbers in the default layout.** Its row
+  was built at full width whatever the panel could show, and the terminal
+  clipped whatever hung over the edge — so a change of `+52.07` was drawn as
+  `+52.0`. Every column now has a width below which it is dropped instead, in
+  order of expendability: the sparkline first, then the percentage, then the
+  change, then the last price. A missing column reads as a narrow terminal; half
+  a number reads as a different number.
+
+  Even the symbol has a floor, because a ticker clipped to `BRK.` is as wrong as
+  a price clipped to `+52.0`.
+
+- **The markets panel gains two columns in the shipped layout**, taken from the
+  cpu graph, which scales to whatever it is given. Without them the fix above
+  would have cost the default dashboard its change column — and the change is
+  the answer to "what is the portfolio doing", which is one of the four
+  questions this dashboard exists to answer. Existing configs are untouched; a
+  config is seeded once and never rewritten.
+
 ## [1.1.1] - 2026-07-31
 
 Working notes and test coverage. **Nothing you can see changes** — the binary
@@ -1393,7 +1415,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/jchultarsky/mirador/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/jchultarsky/mirador/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jchultarsky/mirador/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/jchultarsky/mirador/compare/v1.0.3...v1.0.4
