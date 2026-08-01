@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-01
+
 ### Added
 
 - **Calculator results can be selected, copied and reused from the tape.**
@@ -14,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that answer to the terminal clipboard, and `p` pastes it into the live
   expression. Once a result exists, the focused panel's compact border hint
   advertises `y copy · p paste` at the default width.
+
+  Contributed by [@krflol](https://github.com/krflol) in
+  [#174](https://github.com/jchultarsky/mirador/pull/174) — the first change to
+  mirador from outside.
+
+### Fixed
+
+- Two tests spawned `true`, which does not exist on Windows, so the suite failed
+  for anyone building there. It passed in CI because GitHub's Windows runners
+  ship Git for Windows and it puts a `true.exe` on `PATH` — a green CI is
+  evidence about the runner as much as about the code. Found by @krflol running
+  the suite on their own machine.
 
 ## [1.3.2] - 2026-08-01
 
