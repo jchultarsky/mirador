@@ -22,7 +22,7 @@ OUT="${1:-$ROOT/docs/demo.gif}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mirador-demo.XXXXXX")"
 SESSION="mirador-demo-$$"
 
-# Wide enough for ten panels to be themselves rather than to survive. mirador
+# Wide enough for thirteen panels to be themselves rather than to survive. mirador
 # degrades gracefully — the clock drops its block numerals in a short row, the
 # forecast sheds columns, the watchlist drops its sparkline — and a recording
 # made in a cramped terminal shows every one of those fallbacks instead of the
@@ -220,8 +220,29 @@ key Down 0.4
 key Down 0.8
 tmux send-keys -t "$SESSION" 'x'; hold 1.0      # any other key closes it
 
-# Started last so the recording ends on something moving.
-tmux send-keys -t "$SESSION" '6'; hold 0.6
+# The calculator, which is the panel a reader is least likely to expect. Typed
+# a character at a time on purpose: the answer forms in the right-hand column
+# *before* Enter, which is the thing about it worth seeing, and a paste would
+# skip straight past it. The three sums are chosen so the tape shows its decimal
+# alignment — 384, 75 and 7.5 under one another.
+tmux send-keys -t "$SESSION" '9'; hold 0.8
+type_text "128*3"
+hold 0.9                                         # the answer, before Enter
+key Enter 0.8                                    # kept, and it feeds up the tape
+type_text "1200/16"
+hold 0.6
+key Enter 0.8
+type_text "22.5/3"
+hold 0.6
+key Enter 1.2
+
+# Started last so the recording ends on something moving. Reached with Tab
+# rather than by number: there are thirteen panels and only nine jump keys, and
+# the pomodoro is one of the four past the end. It sits immediately after the
+# calculator in layout order, so one Tab lands on it — and if that ever stops
+# being true, this ends on the wrong panel silently, which is exactly how `6`
+# came to mean notes.
+key Tab 0.6
 key space 2.8                                    # started, and counting down
 
 # -------------------------------------------------------------------------
