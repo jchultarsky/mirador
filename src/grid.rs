@@ -633,10 +633,6 @@ mod tests {
     /// truncated to the width before it gets there.
     #[test]
     fn only_the_two_known_places_use_ratatuis_own_wrapper() {
-        // Split so this test's own source is not a match.
-        let needle = concat!(".wr", "ap(");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-
         fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -669,6 +665,10 @@ mod tests {
                 }
             }
         }
+
+        // Split so this test's own source is not a match.
+        let needle = concat!(".wr", "ap(");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
 
         let mut found = Vec::new();
         walk(&root, needle, &mut found);
