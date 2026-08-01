@@ -324,7 +324,8 @@ impl NotesPanel {
     }
 
     /// Send the selected body text outward and retain it for an in-editor
-    /// paste. The injected writer keeps the OSC 52 side effect out of tests.
+    /// paste. The selection then collapses so another Ctrl+C can quit. The
+    /// injected writer keeps the OSC 52 side effect out of tests.
     fn copy_body_selection_with(
         &mut self,
         copy: impl FnOnce(&str) -> std::io::Result<()>,
@@ -349,6 +350,9 @@ impl NotesPanel {
                 true,
             ),
         });
+        if let Mode::Edit(form) = &mut self.mode {
+            form.body.clear_selection();
+        }
         KeyOutcome::Consumed
     }
 
@@ -1416,6 +1420,14 @@ mod tests {
             KeyOutcome::Consumed
         );
         assert_eq!(p.clipboard.as_deref(), Some("blue"));
+        let Mode::Edit(form) = &p.mode else {
+            unreachable!()
+        };
+        assert!(!form.body.has_selection(), "copy collapses the selection");
+        assert_eq!(
+            p.copy_body_selection_with(|_| panic!("a second Ctrl+C must fall through")),
+            KeyOutcome::Ignored
+        );
 
         // Select another word and replace it with the internal copy. This does
         // not depend on the terminal accepting OSC 52 or exposing a readable

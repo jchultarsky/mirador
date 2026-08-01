@@ -110,6 +110,11 @@ impl TextArea {
         self.selection().is_some()
     }
 
+    /// Collapse the active selection without moving the cursor.
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
     /// Text between the anchor and cursor, preserving hard line breaks.
     pub fn selected_text(&self) -> Option<String> {
         let ((start_row, start_col), (end_row, end_col)) = self.selection()?;
