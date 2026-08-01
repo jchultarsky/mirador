@@ -67,7 +67,7 @@ const BIG_CLOCK_ROWS: u16 = 5 * MAX_CLOCK_SCALE;
 /// time and truncates the marker away — and the marker is the half that carries
 /// the warning, so the column silently dropped the only part of the row a reader
 /// could get wrong. See the note on `day_marker` below.
-const COLUMNS: &[Column] = &[
+pub(crate) const COLUMNS: &[Column] = &[
     Column::flex("zone", 1),
     Column::fixed("time", 12),
     Column::fixed("vs local", 9).right().drops_below(30),

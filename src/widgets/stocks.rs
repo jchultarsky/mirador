@@ -83,7 +83,7 @@ const CHG_MIN_GRID: u16 = CORE_GRID + crate::grid::GUTTER + 9;
 const PCT_MIN_GRID: u16 = CHG_MIN_GRID + crate::grid::GUTTER + 8;
 const SPARK_MIN_GRID: u16 = PCT_MIN_GRID + crate::grid::GUTTER + SPARK_WIDTH;
 
-const COLUMNS: &[Column] = &[
+pub(crate) const COLUMNS: &[Column] = &[
     Column::fixed("symbol", 8).drops_below(8),
     Column::fixed("last", 10).right().drops_below(CORE_GRID),
     Column::fixed("chg", 9).right().drops_below(CHG_MIN_GRID),
@@ -513,7 +513,22 @@ impl StocksPanel {
         ])
     }
 
-    fn status_line(&self, theme: &Theme, board: &Board) -> Line<'static> {
+    /// The status line, cut to `width` with an ellipsis rather than by the
+    /// terminal.
+    ///
+    /// This used to be left at full length on the reasoning that "the
+    /// paragraph clips it to the panel, and the first words carry the useful
+    /// part". The first half of that is true and is the problem: a clip by the
+    /// terminal leaves no mark, so `network access is refused` and `network
+    /// access is refused in tests` look like the same complete sentence. One
+    /// cell of `…` is the whole difference between a message the reader knows
+    /// is abridged and one they do not.
+    fn status_line(&self, theme: &Theme, board: &Board, width: u16) -> Line<'static> {
+        let line = self.status_text(theme, board);
+        crate::grid::assemble(vec![line.spans], width)
+    }
+
+    fn status_text(&self, theme: &Theme, board: &Board) -> Line<'static> {
         match (&self.mode, &self.status) {
             (Mode::ConfirmRemove { symbol }, _) => Line::from(Span::styled(
                 format!("remove {symbol}?  y / n"),
@@ -548,8 +563,6 @@ impl StocksPanel {
                     })
                 });
                 match failure {
-                    // Left full length: the paragraph clips it to the panel,
-                    // and the first words carry the useful part.
                     Some(text) => Line::from(Span::styled(text, Style::default().fg(theme.error))),
                     None => Line::from(Span::styled(
                         format!("via {}", self.source_name),
@@ -783,7 +796,10 @@ impl Panel for StocksPanel {
                 )),
                 rows[1],
             );
-            frame.render_widget(Paragraph::new(self.status_line(theme, &board)), rows[2]);
+            frame.render_widget(
+                Paragraph::new(self.status_line(theme, &board, rows[2].width)),
+                rows[2],
+            );
             return;
         }
 
@@ -824,7 +840,10 @@ impl Panel for StocksPanel {
             });
         frame.render_stateful_widget(list, rows[1], &mut self.list_state);
 
-        frame.render_widget(Paragraph::new(self.status_line(theme, &board)), rows[2]);
+        frame.render_widget(
+            Paragraph::new(self.status_line(theme, &board, rows[2].width)),
+            rows[2],
+        );
     }
 
     fn shutdown(&mut self) {
@@ -1386,7 +1405,7 @@ mod tests {
         let board: Board = vec![("AAPL".into(), failed("HTTP 429"))];
 
         let text: String = p
-            .status_line(&theme, &board)
+            .status_line(&theme, &board, 80)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -1510,7 +1529,7 @@ mod tests {
         // And it is not passed off as current: the status line says how old it
         // is, and the row is muted rather than coloured by direction.
         let status: String = p
-            .status_line(&theme, &snapshot)
+            .status_line(&theme, &snapshot, 80)
             .spans
             .iter()
             .map(|s| s.content.as_ref())

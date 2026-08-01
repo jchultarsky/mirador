@@ -258,6 +258,45 @@ map, that one is the procedure.
     no file now seeds it. Panel tests write an empty file first, which is the
     branch every run after the first one takes.
 
+19. **Nothing may be drawn wider than the space it was given.** A line built at
+    its natural width and handed to a `Paragraph` is not truncated by mirador —
+    it is truncated by the *terminal*, which keeps the cells that fit and
+    discards the rest in silence. The terminal cannot tell a value from a
+    fragment, so it cuts wherever the edge falls, and a fragment of a value is
+    not a smaller truth. `↑ 6.4 KB` is a total where a rate was meant, `+52.0`
+    is a price nobody quoted, `humidity` with no figure is a label over nothing,
+    and `13 1` under a calendar's THU is Thursday the 1st.
+
+    Two mechanisms, and which one applies is decided by what the text *is*:
+
+    - **Values drop whole.** `grid::assemble` takes a line as a list of parts
+      and drops from the end until it fits; `Grid` does the same for table
+      columns via `drops_below`. A part is anything that means nothing on its
+      own — a figure and its unit, an arrow and what it points at. Put the
+      separator at the *front* of the part it introduces, so a dropped part
+      takes its separator with it and no line ends in a dangling `·`.
+    - **Prose is ellipsised.** `grid::truncate` for one line, `grid::wrap` for
+      several. The `…` is the whole point: it is the difference between a
+      message the reader knows is abridged and one they do not.
+
+    Where a value would be dropped only because of its own *padding*, drop the
+    padding first — the network and cpu readouts pad to a fixed field so the
+    figures hold still, and give that up rather than the second reading.
+
+    This was found late, and by looking rather than by any test failing: nine
+    modules built composite lines by hand and four were cutting values at
+    ordinary terminal sizes, one of them in the shipped 120-column default.
+    `no_grid_in_the_program_ever_overflows_its_width` sweeps every declared
+    column set at every width, `every_grid_in_the_program_is_on_this_list`
+    keeps that sweep complete, and
+    `every_hand_built_composite_line_in_a_widget_is_accounted_for` counts what
+    is left and makes a new one justify itself.
+
+    **A render-level sweep cannot check this, and it was tried first.** A
+    buffer records what the terminal *kept*, so an overflowing line and a line
+    that happens to end there are the same bytes. Overflow has to be caught
+    where the line is built.
+
 ## Visual system
 
 Design thesis: *the watch station*. The vernacular is a lookout's instrument

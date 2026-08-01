@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
@@ -160,27 +160,46 @@ impl Panel for CpuPanel {
         // The number takes its colour from the same ramp as the graph, so the
         // whole panel changes temperature together.
         let colour = gradient.at(self.current.round() as i64);
+        // Three parts, and the split is where the meaning is. The figure and
+        // its `%` are inseparable — a percentage with the sign cut off is a
+        // different quantity, and the terminal cuts wherever the edge falls.
+        // The word LOAD and the age of the history are both droppable, in that
+        // order: a bare `7.3%` in a panel titled CPU says everything the label
+        // does, where `7.3% LO…` says it worse.
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("{:>5.1}", self.current),
-                    Style::default().fg(colour).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("% ", Style::default().fg(theme.muted)),
-                Span::styled(
-                    crate::glyphs::utility("load"),
-                    Style::default()
-                        .fg(theme.label)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(
-                        "   {}s",
-                        self.history.len() as u64 * self.config.sample_secs.max(1)
-                    ),
-                    Style::default().fg(theme.muted),
-                ),
-            ])),
+            Paragraph::new(crate::grid::assemble(
+                vec![
+                    vec![
+                        Span::styled(
+                            // Padded to a fixed field so the figure holds still
+                            // as it changes, and unpadded when the padding is
+                            // the difference between a reading and an
+                            // ellipsis. Same trade as the network readout.
+                            if rows[0].width >= 6 {
+                                format!("{:>5.1}", self.current)
+                            } else {
+                                format!("{:.1}", self.current)
+                            },
+                            Style::default().fg(colour).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("%", Style::default().fg(theme.muted)),
+                    ],
+                    vec![Span::styled(
+                        format!(" {}", crate::glyphs::utility("load")),
+                        Style::default()
+                            .fg(theme.label)
+                            .add_modifier(Modifier::BOLD),
+                    )],
+                    vec![Span::styled(
+                        format!(
+                            "   {}s",
+                            self.history.len() as u64 * self.config.sample_secs.max(1)
+                        ),
+                        Style::default().fg(theme.muted),
+                    )],
+                ],
+                rows[0].width,
+            )),
             rows[0],
         );
 

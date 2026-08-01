@@ -785,19 +785,22 @@ impl AgendaPanel {
             } else {
                 format!("the next {} days", self.days)
             };
-            frame.render_widget(
-                Paragraph::new(vec![
-                    Line::from(TextSpan::styled(
-                        "Nothing scheduled",
-                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(TextSpan::styled(
-                        format!("in {horizon}."),
-                        Style::default().fg(theme.muted),
-                    )),
-                ]),
-                area,
+            // Wrapped, not hand-broken. Two lines written to fit a panel of the
+            // author's imagination lose a word each in a narrower one, and the
+            // pair still reads as a whole sentence — `Nothing schedule` above
+            // `in the next 7 da` looks like a rendering glitch, where the same
+            // words wrapped honestly just take four rows.
+            let mut lines = wrapped_lines(
+                "Nothing scheduled",
+                area.width,
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             );
+            lines.extend(wrapped_lines(
+                &format!("in {horizon}."),
+                area.width,
+                Style::default().fg(theme.muted),
+            ));
+            frame.render_widget(Paragraph::new(lines), area);
             return;
         }
 

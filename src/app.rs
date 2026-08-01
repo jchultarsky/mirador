@@ -1531,7 +1531,7 @@ impl App {
         // waits until `Enter` or `Esc` has lost nothing, because the thing it
         // names has already happened either way.
         if self.arranging.is_some() {
-            let mut spans = vec![Span::styled(
+            let spans = vec![Span::styled(
                 " ARRANGE",
                 Style::default()
                     .fg(theme.accent)
@@ -1546,7 +1546,7 @@ impl App {
             // Ordered so that the two that matter most survive a narrow
             // terminal: knowing how to get out of a mode beats knowing every
             // trick inside it.
-            let mut used = crate::grid::display_width(" ARRANGE");
+            let mut parts = vec![spans];
             // Both vertical hints were shortened when `Shift+↑↓` was added in
             // #100: a sixth entry does not fit beside the old wording at an
             // ordinary 110 columns, and dropping one was not an option —
@@ -1563,21 +1563,22 @@ impl App {
             ] {
                 // Dropped whole rather than clipped: half a hint reads as a
                 // rendering fault, where a missing one just reads as a narrow
-                // terminal.
-                let width = 3 + crate::grid::display_width(key) + 1 + action.len();
-                if used + width > usize::from(area.width) {
-                    break;
-                }
-                used += width;
-                spans.push(Span::styled("   ", muted));
-                spans.push(Span::styled(key, key_style));
-                spans.push(Span::styled(format!(" {action}"), muted));
+                // terminal. The gap leads the hint it introduces, so a dropped
+                // hint takes its gap with it.
+                parts.push(vec![
+                    Span::styled("   ", muted),
+                    Span::styled(key, key_style),
+                    Span::styled(format!(" {action}"), muted),
+                ]);
             }
-            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            frame.render_widget(
+                Paragraph::new(crate::grid::assemble(parts, area.width)),
+                area,
+            );
             return;
         }
 
-        let mut spans = vec![Span::styled(
+        let spans = vec![Span::styled(
             " mirador",
             Style::default()
                 .fg(theme.accent)
@@ -1590,19 +1591,13 @@ impl App {
         // need one while every primary was a single character — `t theme` was
         // the widest thing in it. Promoting the resize keys made it need one:
         // at 80 columns the bar ended `Ctrl+←`.
-        let mut used = crate::grid::display_width(" mirador");
+        let mut parts = vec![spans];
         for binding in GLOBAL.iter().filter(|b| b.primary) {
-            let width = 3
-                + crate::grid::display_width(binding.key)
-                + 1
-                + crate::grid::display_width(binding.action);
-            if used + width > usize::from(area.width) {
-                break;
-            }
-            used += width;
-            spans.push(Span::styled("   ", muted));
-            spans.push(Span::styled(binding.key, key_style));
-            spans.push(Span::styled(format!(" {}", binding.action), muted));
+            parts.push(vec![
+                Span::styled("   ", muted),
+                Span::styled(binding.key, key_style),
+                Span::styled(format!(" {}", binding.action), muted),
+            ]);
         }
 
         // An alert takes the whole bar rather than sharing it. It outranks both
@@ -1636,8 +1631,10 @@ impl App {
         // The hint rides on the right of the bar it shares with the global
         // keys, and gives way to them when the terminal is too narrow: knowing
         // how to quit matters more than knowing what you are not using.
+        let mut line = crate::grid::assemble(parts, area.width);
         if let Some(hint) = self.update_hint() {
-            let used: usize = spans
+            let used: usize = line
+                .spans
                 .iter()
                 .map(|s| crate::grid::display_width(&s.content))
                 .sum();
@@ -1645,15 +1642,16 @@ impl App {
             let total = usize::from(area.width);
             // One space of breathing room on each side of the gap.
             if used + hint_width + 3 <= total {
-                spans.push(Span::styled(
+                line.spans.push(Span::styled(
                     " ".repeat(total - used - hint_width - 1),
                     muted,
                 ));
-                spans.push(Span::styled(hint, Style::default().fg(theme.label)));
+                line.spans
+                    .push(Span::styled(hint, Style::default().fg(theme.label)));
             }
         }
 
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     /// The single most pressing thing, if anything is pressing.
