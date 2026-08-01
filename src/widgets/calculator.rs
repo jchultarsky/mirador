@@ -1,4 +1,4 @@
-//! A calculator: type an expression, press Enter, get the answer.
+//! A calculator, drawn as an adding machine's tape.
 //!
 //! The arithmetic lives in [`crate::calc`]; this is the instrument around it.
 //!
@@ -15,6 +15,32 @@
 //! is `bc` or `python3 -c` in a shell you have to go and find. This is the
 //! first panel that is purely an instrument, with no data source behind it at
 //! all.
+//!
+//! # Why a tape and not a big number
+//!
+//! **The first version drew the answer in block numerals, and it was wrong.**
+//! The reasoning behind it was "the clock and the pomodoro use them", which is
+//! a resemblance rather than a reason. Those two show one continuously changing
+//! value that you *glance* at, and the numerals exist so it reads from across
+//! the room. A calculated answer is not glanced at — it is read once and
+//! checked against the working that produced it. Different job, different
+//! instrument.
+//!
+//! There was an arithmetic tell as well: block numerals cost six cells a digit,
+//! so a twelve-digit result wants ninety-four columns. At any ordinary panel
+//! width the numerals only ever appeared for answers small enough not to need
+//! them.
+//!
+//! What replaced it is the adding machine's tape, and that is not nostalgia.
+//! The reason accountants still buy printing calculators is *audit*: the tape
+//! is what lets you check the entry you made three lines ago. It also belongs
+//! to the design thesis, which is a watch station — chronometer, weather glass,
+//! watch log. A tape sits on that bench; a seven-segment display does not.
+//!
+//! Built on [`crate::grid`] rather than hand-composed, which is what every
+//! other list panel here does and what makes it look like part of the same
+//! instrument. It also means "never show a truncated number" is enforced by the
+//! shared column machinery rather than by hand.
 //!
 //! # The input problem, and why `captures_input` stays false
 //!
@@ -36,34 +62,47 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::calc::{self, CalcError};
 use crate::config::CalculatorConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
-use crate::glyphs::{self, BigText};
-use crate::grid::display_width;
+use crate::grid::{Column, Grid, display_width};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 const BINDINGS: &[Binding] = &[
     Binding::primary("0-9 + - * /", "type"),
-    Binding::primary("Enter", "work it out"),
+    Binding::primary("Enter", "keep"),
+    Binding::primary("c", "clear"),
     Binding::primary("y", "copy"),
     Binding::extra("( )", "group"),
-    Binding::extra("Backspace", "rub out"),
-    Binding::extra("Esc", "clear"),
-    Binding::extra("↑ / ↓", "scroll the tape"),
     Binding::extra("x", "multiply"),
+    Binding::extra("C", "clear the tape too"),
+    Binding::extra("Backspace", "rub out"),
+    Binding::extra("↑ / ↓", "scroll the tape"),
 ];
 
-/// Numerals are never drawn larger than this.
+/// Widest the result column is drawn.
 ///
-/// One, for the reason the pomodoro's is one: a result occupying half a
-/// dashboard reads as an alarm. It also keeps `max_width` small enough to be
-/// worth declaring.
-const MAX_SCALE: u16 = 1;
+/// Twelve significant digits plus a sign and a point is the most `calc` can
+/// produce in decimal; past that it moves to scientific notation, which is
+/// shorter. So this is a ceiling derived from the formatter rather than a
+/// guess at what looks right.
+const RESULT_WIDTH: u16 = 14;
+
+/// The narrowest grid at which the working is still worth a column.
+///
+/// Below this the tape shows answers alone, which is the honest degradation:
+/// an answer with no visible sum is still an answer, where a sum with no answer
+/// is nothing at all.
+const WORKING_MIN: u16 = RESULT_WIDTH + crate::grid::GUTTER + 8;
+
+pub(crate) const COLUMNS: &[Column] = &[
+    Column::flex("working", 1).drops_below(WORKING_MIN),
+    Column::fixed("result", RESULT_WIDTH).right(),
+];
 
 /// Entries kept on the tape.
 ///
@@ -73,14 +112,15 @@ const MAX_TAPE: usize = 200;
 
 /// Interior width past which the panel gains nothing.
 ///
-/// An expression, a result and a tape line all fit comfortably; wider only buys
-/// whitespace, and taking room the task list could use would be worse. See
-/// invariant 15.
-const USEFUL_WIDTH: u16 = 44;
+/// Past this, extra cells only widen the gap between a sum and its answer, and
+/// taking room the task list could use would be worse. See invariant 15.
+const USEFUL_WIDTH: u16 = 46;
 
-/// Rows the panel needs besides the numerals: the expression line above, and
-/// one tape row below.
-const EXPRESSION_AND_TAPE: u16 = 2;
+/// Rows the panel always spends: the column header, the rule, the live entry.
+const CHROME_ROWS: u16 = 3;
+
+/// The live-entry marker, matching the task and notes lists.
+const MARKER: &str = "\u{25b8} ";
 
 /// One finished calculation.
 #[derive(Debug, Clone, PartialEq)]
@@ -89,27 +129,23 @@ struct Entry {
     result: f64,
 }
 
-/// What is on the display right now.
-#[derive(Debug, Clone, PartialEq)]
-enum Shown {
-    /// Nothing worked out yet this session.
-    Nothing,
-    /// The answer to the expression on the tape.
-    Answer(f64),
-    /// Why the last attempt did not work.
-    Failed(CalcError),
-}
-
 pub struct CalculatorPanel {
     #[allow(dead_code)]
     config: CalculatorConfig,
     /// What is being typed.
     typing: String,
-    shown: Shown,
-    /// Finished calculations, newest first.
+    /// What `typing` currently works out to, recomputed on every keystroke.
+    ///
+    /// Cached rather than evaluated at draw time: `render` runs every frame and
+    /// nothing guards it, so parsing there would put the parser on the frame
+    /// budget for a value that changes only when a key is pressed. Same
+    /// reasoning as the agenda's cache.
+    preview: Result<f64, CalcError>,
+    /// Finished calculations, oldest first — the order a tape feeds.
     tape: Vec<Entry>,
-    scroll: ListState,
-    /// Tape rows drawn last frame, so scrolling cannot leave what is on screen.
+    /// How far back through the tape the view is scrolled, in rows.
+    scrolled: usize,
+    /// Tape rows drawn last frame, so scrolling cannot run past what is there.
     drawn: usize,
     /// What the last `y` did. Cleared by the next keystroke.
     ///
@@ -122,7 +158,6 @@ impl std::fmt::Debug for CalculatorPanel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CalculatorPanel")
             .field("typing", &self.typing)
-            .field("shown", &self.shown)
             .field("tape", &self.tape.len())
             .finish_non_exhaustive()
     }
@@ -133,20 +168,23 @@ impl CalculatorPanel {
         Self {
             config,
             typing: String::new(),
-            shown: Shown::Nothing,
+            preview: Err(CalcError::Empty),
             tape: Vec::new(),
-            scroll: ListState::default(),
+            scrolled: 0,
             drawn: 0,
             action: None,
         }
     }
 
-    /// The answer currently on display, if there is one.
-    fn answer(&self) -> Option<f64> {
-        match self.shown {
-            Shown::Answer(value) => Some(value),
-            _ => None,
-        }
+    /// The answer on the tape's last line, which is what `y` copies.
+    fn last_result(&self) -> Option<f64> {
+        self.tape.last().map(|entry| entry.result)
+    }
+
+    /// Re-derive the preview. Called wherever `typing` changes, so the two
+    /// cannot drift.
+    fn reparse(&mut self) {
+        self.preview = calc::evaluate(&self.typing);
     }
 
     /// Add a character to the expression being typed.
@@ -157,93 +195,103 @@ impl CalculatorPanel {
     /// memory key: "and now add the tax" costs no extra concept.
     fn push(&mut self, c: char) {
         if self.typing.is_empty()
-            && let Some(value) = self.answer()
+            && let Some(value) = self.last_result()
             && matches!(c, '+' | '-' | '*' | '/' | 'x' | '\u{00D7}' | '\u{00F7}')
         {
             self.typing = calc::format_result(value);
         }
-        // Refused rather than silently dropped: past this the expression cannot
-        // be evaluated anyway, and a key that does nothing with no explanation
-        // reads as a stuck terminal.
-        if self.typing.chars().count() >= calc::MAX_LEN {
-            self.shown = Shown::Failed(CalcError::TooLong);
-            return;
+        // Past this the expression cannot be evaluated anyway.
+        if self.typing.chars().count() < calc::MAX_LEN {
+            self.typing.push(c);
         }
-        self.typing.push(c);
+        self.reparse();
     }
 
-    fn evaluate(&mut self) {
-        match calc::evaluate(&self.typing) {
-            Ok(value) => {
-                let expression = self.typing.trim().to_string();
-                self.tape.insert(
-                    0,
-                    Entry {
-                        expression,
-                        result: value,
-                    },
-                );
-                self.tape.truncate(MAX_TAPE);
-                self.shown = Shown::Answer(value);
-                self.typing.clear();
-                // A new entry belongs at the top of the tape, and the cursor
-                // with it; leaving it where it was would scroll the newest
-                // result off the moment it arrived.
-                self.scroll.select(None);
+    /// Commit the current entry to the tape, if it works out.
+    fn keep(&mut self) {
+        if let Ok(value) = self.preview {
+            self.tape.push(Entry {
+                expression: self.typing.trim().to_string(),
+                result: value,
+            });
+            // Oldest goes first: the part of a tape you have already scrolled
+            // past is the part you are least likely to want back.
+            if self.tape.len() > MAX_TAPE {
+                self.tape.remove(0);
             }
-            Err(error) => self.shown = Shown::Failed(error),
+            self.typing.clear();
+            self.reparse();
+            // Back to the foot of the tape, where the new entry is.
+            self.scrolled = 0;
         }
     }
 
-    /// The line above the numerals: what is being typed, or what went wrong.
-    fn expression_line(&self, theme: &crate::theme::Theme) -> (String, Color) {
-        if let Some(action) = &self.action {
-            return (action.clone(), theme.label);
+    /// The rows of the tape currently in view, oldest first.
+    ///
+    /// Only what fits is produced. A panel may allocate in proportion to what
+    /// is on screen and must not allocate in proportion to how much it holds.
+    fn visible(&self, rows: usize) -> &[Entry] {
+        if rows == 0 || self.tape.is_empty() {
+            return &[];
         }
-        if !self.typing.is_empty() {
-            return (self.typing.clone(), theme.text);
-        }
-        match &self.shown {
-            // Never blank: a panel showing nothing at all reads as broken
-            // rather than as idle (invariant 11).
-            Shown::Nothing => ("type a sum".to_string(), theme.muted),
-            Shown::Failed(error) => (error.message(), theme.error),
-            Shown::Answer(_) => (
-                self.tape
-                    .first()
-                    .map_or_else(String::new, |entry| entry.expression.clone()),
-                theme.muted,
-            ),
-        }
+        let end = self.tape.len().saturating_sub(self.scrolled).max(1);
+        let start = end.saturating_sub(rows);
+        &self.tape[start..end]
     }
 
-    /// What fills the display area, and whether it is a number.
-    ///
-    /// The distinction matters because only a number is drawn in block
-    /// numerals. Two bugs came out of not making it, and both were found by
-    /// running the thing rather than by any test:
-    ///
-    /// - `glyphs` has no glyph for `–`, and an unknown character renders as a
-    ///   *blank cell* rather than as anything visible. So an idle calculator
-    ///   drew five empty rows, which reads as a broken panel.
-    /// - A failed sum kept its text on the line above so it could be corrected,
-    ///   and the error message was written to that same line — where the text
-    ///   took priority. The message was unreachable, so `1/0` looked like a key
-    ///   that did nothing.
-    ///
-    /// Putting the reason in the display area fixes both at once, and it is the
-    /// better arrangement anyway: the expression stays where it is being edited
-    /// and the large empty space says what went wrong.
-    fn display(&self, width: u16) -> (String, bool) {
-        match &self.shown {
-            Shown::Answer(value) => (calc::fit_result(*value, usize::from(width)), true),
-            Shown::Failed(error) => (error.message(), false),
-            // A dash rather than a zero. Zero is an answer, and nothing has
-            // been asked yet — the same reason the markets panel shows `–`
-            // rather than a price it has not got.
-            Shown::Nothing => ("\u{2013}".to_string(), false),
-        }
+    /// How far back the view may be scrolled, given what fits.
+    fn max_scroll(&self) -> usize {
+        self.tape.len().saturating_sub(self.drawn)
     }
+}
+
+/// Results padded so their decimal points sit in the same column.
+///
+/// Right-alignment alone lines up the last *character*, which puts the `5` of
+/// `7.5` where the units of `384` are and makes a column of answers unreadable
+/// at a glance. Accounting tables have always aligned on the point, and this is
+/// the detail that makes a tape scan.
+///
+/// Padding goes on the right and the grid then right-aligns the whole cell, so
+/// the points land together whatever the column width.
+fn align_points(results: &[String], column: usize) -> Vec<String> {
+    let fraction = |text: &str| text.rfind('.').map_or(0, |at| text.len() - at - 1);
+    let padding = |text: &str, widest: usize| {
+        let pad = widest.saturating_sub(fraction(text));
+        // A whole number needs a cell for the point it has not got, or it sits
+        // one place right of everything that has a fraction.
+        pad + usize::from(pad > 0 && !text.contains('.'))
+    };
+
+    // Scientific notation stays out of the reckoning: the point in `1.2e11`
+    // means something else, and padding to it would shove every ordinary answer
+    // sideways to line up with a case that is already exceptional.
+    let ordinary = || results.iter().filter(|text| !text.contains('e'));
+    let mut widest = ordinary().map(|text| fraction(text)).max().unwrap_or(0);
+
+    // **Padding counts against the column.** The numbers arrive here already
+    // fitted, so adding cells to line up the points can push one back out —
+    // and the grid then ellipsises it, which undoes the whole reason
+    // `fit_result` exists. A ten-cell answer beside a two-place fraction came
+    // out as `123456789…`: the number rescued from truncation, truncated by
+    // the thing meant to make it readable.
+    //
+    // So the alignment gives way rather than the number. Losing a place of
+    // alignment costs neatness; losing a digit costs the answer.
+    while widest > 0 && ordinary().any(|text| text.chars().count() + padding(text, widest) > column)
+    {
+        widest -= 1;
+    }
+
+    results
+        .iter()
+        .map(|text| {
+            if text.contains('e') {
+                return text.clone();
+            }
+            format!("{text}{}", " ".repeat(padding(text, widest)))
+        })
+        .collect()
 }
 
 impl Panel for CalculatorPanel {
@@ -254,8 +302,7 @@ impl Panel for CalculatorPanel {
     /// Deliberately `None`.
     ///
     /// A count of tape entries is a badge, and a badge that only goes up is the
-    /// unread counter this dashboard turned down. Nothing here accumulates that
-    /// you are expected to deal with.
+    /// unread counter this dashboard turned down.
     fn counter(&self) -> Option<String> {
         None
     }
@@ -275,10 +322,6 @@ impl Panel for CalculatorPanel {
     }
 
     /// Nothing here changes on its own.
-    ///
-    /// The tick exists for panels with a data source behind them, and this one
-    /// has none — it moves only when a key is pressed. Reporting `false`
-    /// unconditionally is what keeps an idle dashboard from repainting for it.
     fn tick(&mut self) -> bool {
         false
     }
@@ -314,46 +357,49 @@ impl Panel for CalculatorPanel {
                 | '\u{00D7}'
                 | '\u{00F7}'),
             ) => self.push(c),
-            KeyCode::Char('=') | KeyCode::Enter => self.evaluate(),
+            KeyCode::Char('=') | KeyCode::Enter => self.keep(),
             KeyCode::Backspace => {
-                // With nothing typed, this clears the answer rather than doing
-                // nothing — the display is the only thing left to rub out.
-                if self.typing.pop().is_none() {
-                    self.shown = Shown::Nothing;
-                }
+                self.typing.pop();
+                self.reparse();
+            }
+            // `c` clears the entry and `C` the tape with it — the CE and AC of
+            // every desk calculator, a convention worth inheriting rather than
+            // inventing around. The first version had only `Esc`, listed as a
+            // secondary binding, which is why nobody could find it.
+            KeyCode::Char('c') => {
+                self.typing.clear();
+                self.reparse();
+            }
+            KeyCode::Char('C') => {
+                self.typing.clear();
+                self.tape.clear();
+                self.scrolled = 0;
+                self.reparse();
             }
             KeyCode::Esc => {
-                // Esc backs out of something everywhere in this program. Here
-                // there are two things to back out of, innermost first: what is
-                // half-typed, then the answer. It is consumed only while there
-                // is something to clear, so Esc on an empty calculator falls
-                // through to the shell like Esc anywhere else.
-                if !self.typing.is_empty() {
-                    self.typing.clear();
-                } else if self.shown != Shown::Nothing {
-                    self.shown = Shown::Nothing;
-                } else if !had_action {
+                // Consumed only while there is something to clear, so Esc on an
+                // empty calculator falls through to the shell as it does
+                // everywhere else.
+                if self.typing.is_empty() && !had_action {
                     return KeyOutcome::Ignored;
                 }
+                self.typing.clear();
+                self.reparse();
             }
             KeyCode::Char('y') => {
-                let Some(value) = self.answer() else {
+                let Some(value) = self.last_result() else {
                     return KeyOutcome::Consumed;
                 };
                 let text = calc::format_result(value);
                 self.action = Some(match crate::clipboard::copy(&text) {
                     // OSC 52 is write-only: the terminal never answers, so this
                     // says what was sent rather than that anything was copied.
-                    Ok(()) => format!("sent {text} to the clipboard"),
+                    Ok(()) => format!("sent {text}"),
                     Err(e) => format!("clipboard failed: {e}"),
                 });
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                crate::selection::down(&mut self.scroll, 1, self.drawn);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                crate::selection::up(&mut self.scroll, 1, self.drawn);
-            }
+            KeyCode::Up => self.scrolled = (self.scrolled + 1).min(self.max_scroll()),
+            KeyCode::Down => self.scrolled = self.scrolled.saturating_sub(1),
             _ => {
                 // A key this panel does not want goes to the shell — unless it
                 // only served to retire the copy notice, which is a visible
@@ -369,8 +415,8 @@ impl Panel for CalculatorPanel {
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
         match event.kind {
-            MouseEventKind::ScrollDown => crate::selection::down(&mut self.scroll, 1, self.drawn),
-            MouseEventKind::ScrollUp => crate::selection::up(&mut self.scroll, 1, self.drawn),
+            MouseEventKind::ScrollUp => self.scrolled = (self.scrolled + 1).min(self.max_scroll()),
+            MouseEventKind::ScrollDown => self.scrolled = self.scrolled.saturating_sub(1),
             _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
@@ -383,155 +429,175 @@ impl Panel for CalculatorPanel {
         }
         let theme = ctx.theme;
 
-        // What the display will say, decided before anything is laid out: the
-        // numerals are sized to the text, so the text has to exist first.
-        let (text, is_number) = self.display(area.width);
-        let colour = match self.shown {
-            Shown::Failed(_) => theme.error,
-            _ => theme.accent,
-        };
-
-        // Only a number is drawn in block numerals. Anything else — a reason,
-        // a resting dash — goes as plain text, because `glyphs` renders a
-        // character it does not know as a blank cell rather than as a
-        // substitute, so an error in numerals is an error nobody can read.
-        //
-        // The numerals give way before the expression line does. They are the
-        // decoration; the line above says what is being worked out, and losing
-        // that leaves a number with no question attached to it.
-        let scale = is_number
-            .then(|| {
-                glyphs::fitting_scale(
-                    &text,
-                    area.width,
-                    area.height.saturating_sub(EXPRESSION_AND_TAPE).max(1),
-                    MAX_SCALE,
-                )
-            })
-            .flatten();
-        let numeral_rows = scale.map_or(1, |s| BigText::new(&text, s).height);
+        // The marker's width comes off the grid and goes back as an indent, so
+        // the header lines up with the rows under it.
+        let marker = u16::try_from(display_width(MARKER)).unwrap_or(2);
+        let grid = Grid::new(COLUMNS, area.width.saturating_sub(marker));
+        let indent = " ".repeat(usize::from(marker));
 
         let bottom = area.y + area.height;
         let mut cursor = area.y;
 
-        // The expression, or the error, or what the last copy did.
+        // The header, in the utility face, exactly as the other list panels
+        // label their columns. It is also what makes an untouched calculator
+        // look ready rather than broken.
         if cursor < bottom {
-            let (line, line_colour) = self.expression_line(theme);
+            let mut spans = vec![Span::raw(indent.clone())];
+            spans.extend(grid.header(theme).spans);
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)),
+                Rect::new(area.x, cursor, area.width, 1),
+            );
+            cursor += 1;
+        }
+
+        let room = usize::from(
+            bottom
+                .saturating_sub(cursor)
+                .saturating_sub(CHROME_ROWS - 1),
+        );
+        // Cloned rather than borrowed: `self.drawn` has to be recorded before
+        // the rows are drawn, and holding a slice of `self.tape` across that
+        // would borrow the whole panel. The clone is of what is on screen, not
+        // of the tape — the rule is that a panel may allocate in proportion to
+        // what it displays.
+        let entries: Vec<Entry> = self.visible(room).to_vec();
+        self.drawn = entries.len();
+
+        // Fitted to the column *before* the grid sees it. The grid ellipsises a
+        // cell that will not fit, which is right for a name and wrong for a
+        // number — a narrow panel drew `123456789…` for 123456789000, which is
+        // the one thing this panel must never do. `fit_result` moves to
+        // scientific notation instead, and the grid then has nothing to cut.
+        let column = usize::from(grid.column_width("result"));
+        // The live answer is aligned *with* the tape, not separately. Aligning
+        // the two independently left the result being typed one cell right of
+        // the column above it, which is exactly the misalignment the padding
+        // exists to remove — and the most visible one, since those two rows sit
+        // either side of the rule.
+        let mut figures: Vec<String> = entries
+            .iter()
+            .map(|entry| calc::fit_result(entry.result, column))
+            .collect();
+        let live = self
+            .preview
+            .as_ref()
+            .ok()
+            .map(|v| calc::fit_result(*v, column));
+        if let Some(value) = &live {
+            figures.push(value.clone());
+        }
+        let mut aligned = align_points(&figures, column);
+        let live = live.map(|_| aligned.pop().unwrap_or_default());
+
+        // Attention runs *downwards*, to the line being typed. The tape recedes
+        // to muted, the entry just kept stays at full body weight, and the live
+        // row below is brighter than either. The first version had this
+        // backwards and put the faintest thing on screen where the cursor was.
+        let last = entries.len().saturating_sub(1);
+        for (index, entry) in entries.iter().enumerate() {
+            if cursor >= bottom {
+                break;
+            }
+            let style = Style::default().fg(if index == last {
+                theme.text
+            } else {
+                theme.muted
+            });
+            let mut spans = vec![Span::raw(indent.clone())];
+            spans.extend(
+                grid.row(&[
+                    Span::styled(entry.expression.clone(), style),
+                    Span::styled(aligned[index].clone(), style),
+                ])
+                .spans,
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)),
+                Rect::new(area.x, cursor, area.width, 1),
+            );
+            cursor += 1;
+        }
+
+        // The live entry sits at the foot of the panel, where a tape feeds
+        // from, rather than wandering up and down as the tape fills.
+        cursor = bottom.saturating_sub(2).max(cursor);
+
+        // The rule between what is kept and what is being typed. The notes
+        // panel uses the same device between its list and its detail.
+        if cursor < bottom {
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    crate::grid::truncate(&line, usize::from(area.width)),
-                    Style::default().fg(line_colour),
+                    "\u{2500}".repeat(usize::from(area.width)),
+                    Style::default().fg(theme.rule),
                 )),
                 Rect::new(area.x, cursor, area.width, 1),
             );
             cursor += 1;
         }
 
-        // The answer.
-        if let Some(scale) = scale {
-            let big = BigText::new(&text, scale);
-            let x = area.x + area.width.saturating_sub(big.width) / 2;
-            for (index, row) in big.rows.iter().enumerate() {
-                let y = cursor + u16::try_from(index).unwrap_or(0);
-                if y >= bottom {
-                    break;
-                }
-                frame.render_widget(
-                    Paragraph::new(Span::styled(row.clone(), Style::default().fg(colour))),
-                    Rect::new(x, y, big.width.min(area.width), 1),
-                );
-            }
-            cursor += numeral_rows;
-        } else if cursor < bottom {
-            // Everything the numerals cannot take: an answer too long for them,
-            // a reason a sum failed, the resting dash. Wrapped rather than cut,
-            // since a reason is prose and half a reason is no use — and wrapped
-            // here rather than by ratatui, which panics on text it was not
-            // given by this program (see `grid::wrapped`).
-            //
-            // Centred line by line so a one-line answer still sits under the
-            // expression the way the numerals would.
-            let rows = crate::grid::wrap(&text, usize::from(area.width));
-            let style = Style::default().fg(colour).add_modifier(Modifier::BOLD);
-            for row in rows {
-                if cursor >= bottom {
-                    break;
-                }
-                let width = u16::try_from(display_width(&row)).unwrap_or(area.width);
-                let x = area.x + area.width.saturating_sub(width) / 2;
-                frame.render_widget(
-                    Paragraph::new(Span::styled(row, style)),
-                    Rect::new(x, cursor, width.min(area.width), 1),
-                );
-                cursor += 1;
-            }
+        if cursor < bottom {
+            self.draw_entry(frame, area, cursor, &grid, theme, live.as_deref());
         }
-
-        self.draw_tape(frame, area, cursor, bottom, theme);
     }
 }
 
 impl CalculatorPanel {
-    /// The tape, filling whatever is left below the display.
-    ///
-    /// Rows are built only for the space there is, never for the whole buffer:
-    /// a panel may allocate in proportion to what is on screen, and must not
-    /// allocate in proportion to how much data it holds.
-    fn draw_tape(
-        &mut self,
+    /// The live entry: the brightest row in the panel, because it is the one
+    /// the cursor is on.
+    fn draw_entry(
+        &self,
         frame: &mut Frame,
         area: Rect,
-        cursor: u16,
-        bottom: u16,
+        row: u16,
+        grid: &Grid,
         theme: &crate::theme::Theme,
+        live: Option<&str>,
     ) {
-        let room = bottom.saturating_sub(cursor);
-        self.drawn = usize::from(room).min(self.tape.len());
-        if room == 0 || self.tape.is_empty() {
-            if room > 0 {
-                self.drawn = 0;
-            }
-            return;
-        }
+        // A half-typed sum is the state this panel spends most of its life in,
+        // so those say nothing at all rather than complaining. Only a sum that
+        // cannot ever work gets a word.
+        let complaint = match &self.preview {
+            Ok(_) | Err(CalcError::Empty | CalcError::Incomplete) => None,
+            Err(error) => Some(error.message()),
+        };
 
-        let width = usize::from(area.width);
-        let items: Vec<ListItem> = self
-            .tape
-            .iter()
-            .take(self.drawn)
-            .map(|entry| {
-                // The rule that governs the display governs the tape too, and
-                // it is easier to break here. Composing `expr = result` and
-                // trimming the whole line cut the *result* — a tape row reading
-                // ` = 123456789` for an answer of 123456789000, which is the
-                // exact lie this panel exists not to tell. So the answer is
-                // fitted first and never cut, and the expression takes what is
-                // left over.
-                const SEP: &str = " = ";
-                let sep_width = display_width(SEP);
-                let result = calc::fit_result(entry.result, width);
-                let used = display_width(&result);
+        let column = usize::from(grid.column_width("result"));
+        let (working, result, style) = if let Some(notice) = &self.action {
+            (
+                notice.clone(),
+                String::new(),
+                Style::default().fg(theme.label),
+            )
+        } else if let Some(message) = complaint {
+            (
+                format!("{}\u{258f}", self.typing),
+                crate::grid::truncate(&message, column),
+                Style::default().fg(theme.error),
+            )
+        } else {
+            // Already fitted and aligned with the tape by the caller.
+            let answer = live.unwrap_or_default().to_string();
+            (
+                format!("{}\u{258f}", self.typing),
+                answer,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
+        };
 
-                let line = if used + sep_width < width {
-                    let expression =
-                        crate::grid::truncate(&entry.expression, width - used - sep_width);
-                    if expression.is_empty() {
-                        result
-                    } else {
-                        format!("{expression}{SEP}{result}")
-                    }
-                } else {
-                    // No room for both. The answer is why the tape is here.
-                    result
-                };
-                ListItem::new(Span::styled(line, Style::default().fg(theme.muted)))
-            })
-            .collect();
-
-        frame.render_stateful_widget(
-            List::new(items).highlight_style(Style::default().fg(theme.text)),
-            Rect::new(area.x, cursor, area.width, room),
-            &mut self.scroll,
+        let mut spans = vec![Span::styled(MARKER, Style::default().fg(theme.accent))];
+        spans.extend(
+            grid.row(&[
+                Span::styled(working, Style::default().fg(theme.text)),
+                Span::styled(result, style),
+            ])
+            .spans,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)),
+            Rect::new(area.x, row, area.width, 1),
         );
     }
 }
@@ -541,8 +607,7 @@ impl CalculatorPanel {
 const _: u16 = FRAME_HEIGHT;
 
 // Exact comparison is the point: these are answers a calculator must get
-// exactly right, not measurements to be compared within a tolerance. `2 + 3 * 4`
-// is 14 or the panel is broken.
+// exactly right, not measurements to be compared within a tolerance.
 #[allow(clippy::float_cmp)]
 #[cfg(test)]
 mod tests {
@@ -564,7 +629,11 @@ mod tests {
         }
     }
 
-    fn draw(panel: &mut CalculatorPanel, width: u16, height: u16) -> String {
+    fn enter(panel: &mut CalculatorPanel) {
+        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+    }
+
+    fn buffer_of(panel: &mut CalculatorPanel, width: u16, height: u16) -> ratatui::buffer::Buffer {
         let config = crate::config::Config::default();
         let gradients = config.theme.gradients();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -582,7 +651,11 @@ mod tests {
                 );
             })
             .unwrap();
-        let buffer = terminal.backend().buffer().clone();
+        terminal.backend().buffer().clone()
+    }
+
+    fn draw(panel: &mut CalculatorPanel, width: u16, height: u16) -> String {
+        let buffer = buffer_of(panel, width, height);
         (0..height)
             .map(|y| {
                 (0..width)
@@ -597,8 +670,7 @@ mod tests {
     ///
     /// Digits must reach the calculator, and everything the shell owns must
     /// still reach the shell. Get the first half wrong and the panel is
-    /// useless; get the second half wrong and it is a room with no door — no
-    /// `Tab` to leave by, no `q` to quit with, no `?` for help.
+    /// useless; get the second half wrong and it is a room with no door.
     #[test]
     fn digits_are_taken_and_the_shell_keys_are_left_alone() {
         let mut panel = new_panel();
@@ -626,91 +698,242 @@ mod tests {
                 "{code:?} belongs to the shell; consuming it locks the user in"
             );
         }
+        assert!(!panel.captures_input());
+    }
+
+    #[test]
+    fn the_answer_forms_as_you_type_and_enter_keeps_it() {
+        let mut panel = new_panel();
+        type_in(&mut panel, "2+3*4");
+        assert_eq!(panel.preview, Ok(14.0), "the answer forms before Enter");
+        assert!(panel.tape.is_empty(), "but nothing is kept until Enter");
+
+        enter(&mut panel);
+        assert_eq!(panel.tape.len(), 1);
+        assert_eq!(panel.tape[0].expression, "2+3*4");
+        assert!(panel.typing.is_empty());
+    }
+
+    /// The tape feeds like a tape: newest at the bottom, beside the cursor.
+    #[test]
+    fn the_newest_entry_is_at_the_foot_of_the_tape() {
+        let mut panel = new_panel();
+        for sum in ["1+1", "2+2", "3+3"] {
+            type_in(&mut panel, sum);
+            enter(&mut panel);
+        }
+        assert_eq!(panel.last_result(), Some(6.0));
+
+        let screen = draw(&mut panel, 36, 9);
+        let rows: Vec<&str> = screen.lines().collect();
+        let at = |needle: &str| rows.iter().position(|r| r.contains(needle)).unwrap();
         assert!(
-            !panel.captures_input(),
-            "capturing input would veto every global key, which is the trap this design avoids"
+            at("1+1") < at("2+2") && at("2+2") < at("3+3"),
+            "the tape must read oldest to newest downwards:\n{screen}"
+        );
+    }
+
+    /// The correction that came out of looking at it on screen.
+    ///
+    /// The live row is where the cursor is, so it cannot be the faintest thing
+    /// in the panel. Only that row carries the accent; the tape must not.
+    #[test]
+    fn only_the_live_row_is_accented() {
+        let mut panel = new_panel();
+        type_in(&mut panel, "1+1");
+        enter(&mut panel);
+        type_in(&mut panel, "9*9");
+
+        let config = crate::config::Config::default();
+        let buffer = buffer_of(&mut panel, 36, 9);
+
+        let mut accented = Vec::new();
+        for y in 0..9u16 {
+            if (0..36u16).any(|x| buffer[(x, y)].style().fg == Some(config.theme.accent)) {
+                accented.push(y);
+            }
+        }
+        assert_eq!(
+            accented.len(),
+            1,
+            "exactly one row should be accented, got {accented:?}"
+        );
+        assert_eq!(
+            accented[0], 8,
+            "and it should be the live entry at the foot of the panel"
         );
     }
 
     #[test]
-    fn typing_a_sum_and_pressing_enter_works_it_out() {
+    fn c_clears_the_entry_and_shift_c_clears_the_tape() {
         let mut panel = new_panel();
-        type_in(&mut panel, "2+3*4");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(panel.answer(), Some(14.0));
-        assert_eq!(panel.tape.len(), 1);
-        assert_eq!(panel.tape[0].expression, "2+3*4");
-        assert!(panel.typing.is_empty(), "the line clears for the next sum");
+        type_in(&mut panel, "1+1");
+        enter(&mut panel);
+        type_in(&mut panel, "99");
+
+        press(&mut panel, 'c');
+        assert!(panel.typing.is_empty(), "c clears what is being typed");
+        assert_eq!(panel.tape.len(), 1, "and leaves the tape alone");
+
+        press(&mut panel, 'C');
+        assert!(panel.tape.is_empty(), "C clears the tape as well");
     }
 
-    /// Chaining, which is what removes the need for a memory key.
     #[test]
     fn an_operator_after_an_answer_carries_it_forward() {
         let mut panel = new_panel();
         type_in(&mut panel, "50+7");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+        enter(&mut panel);
         press(&mut panel, '+');
         assert_eq!(panel.typing, "57+");
         type_in(&mut panel, "10");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(panel.answer(), Some(67.0));
+        enter(&mut panel);
+        assert_eq!(panel.last_result(), Some(67.0));
     }
 
     #[test]
     fn a_digit_after_an_answer_starts_over() {
         let mut panel = new_panel();
         type_in(&mut panel, "50+7");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
+        enter(&mut panel);
         press(&mut panel, '9');
-        assert_eq!(
-            panel.typing, "9",
-            "a digit begins a new sum, not a longer one"
-        );
+        assert_eq!(panel.typing, "9");
     }
 
     #[test]
-    fn a_failed_sum_says_why_and_keeps_what_was_typed() {
+    fn a_sum_that_cannot_work_says_why_on_screen() {
         let mut panel = new_panel();
         type_in(&mut panel, "1/0");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert!(matches!(
-            panel.shown,
-            Shown::Failed(CalcError::DivideByZero)
-        ));
-        assert_eq!(
-            panel.typing, "1/0",
-            "a rejected sum must stay on the line so it can be corrected"
-        );
+        let screen = draw(&mut panel, 44, 9);
         assert!(
-            panel.tape.is_empty(),
-            "nothing that failed reaches the tape"
+            screen.contains("\u{00f7} by zero"),
+            "the reason has to be on screen, not just in the state:\n{screen}"
+        );
+        enter(&mut panel);
+        assert!(panel.tape.is_empty(), "nothing that failed is kept");
+        assert_eq!(panel.typing, "1/0", "and it stays there to be corrected");
+    }
+
+    /// Half-typed is the normal state, so it must not look like a failure.
+    #[test]
+    fn a_half_typed_sum_is_not_scolded() {
+        let mut panel = new_panel();
+        type_in(&mut panel, "2+");
+        let screen = draw(&mut panel, 44, 9);
+        assert!(
+            !screen.contains("unfinished"),
+            "an expression mid-typing must not be complained about:\n{screen}"
         );
     }
 
+    /// Decimal points line up, which is what makes a column of answers scan.
     #[test]
-    fn esc_clears_what_is_typed_then_the_answer_then_gives_up_the_key() {
+    fn results_are_aligned_on_the_decimal_point() {
+        let aligned = align_points(
+            &[
+                "384".to_string(),
+                "7.5".to_string(),
+                "0.25".to_string(),
+                "60".to_string(),
+            ],
+            14,
+        );
+        for (text, original) in aligned.iter().zip(["384", "7.5", "0.25", "60"]) {
+            assert!(
+                text.starts_with(original),
+                "{text:?} should keep {original:?}"
+            );
+        }
+        // The property that matters is visual, so it is checked visually:
+        // right-align the padded cells the way the grid will, then every units
+        // digit must land in the same column. An earlier version of this test
+        // compared fraction widths instead, and failed on `384` — which has no
+        // decimal point at all, and was nonetheless aligned correctly.
+        let width = aligned.iter().map(String::len).max().unwrap();
+        let placed: Vec<String> = aligned.iter().map(|t| format!("{t:>width$}")).collect();
+        let units = |row: &str| {
+            row.rfind('.')
+                .unwrap_or_else(|| row.trim_end().len())
+                .saturating_sub(1)
+        };
+        let columns: Vec<usize> = placed.iter().map(|r| units(r)).collect();
+        assert!(
+            columns.windows(2).all(|w| w[0] == w[1]),
+            "units digits land in different columns:\n{}",
+            placed.join("\n")
+        );
+    }
+
+    /// Alignment padding must not push a result back out of its column.
+    ///
+    /// `fit_result` fits the number, then `align_points` adds cells to line the
+    /// decimal points up — and those cells count. A ten-cell answer beside a
+    /// two-place fraction was padded to thirteen, which the grid then cut back
+    /// to `123456789…`: the number rescued from truncation, truncated by the
+    /// thing that was meant to make it readable.
+    #[test]
+    fn alignment_padding_never_pushes_a_result_out_of_its_column() {
         let mut panel = new_panel();
-        type_in(&mut panel, "12+3");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-        type_in(&mut panel, "99");
+        type_in(&mut panel, "0.25*1");
+        enter(&mut panel);
+        type_in(&mut panel, "1234567890*1");
+        enter(&mut panel);
 
-        assert_eq!(
-            panel.handle_key(KeyEvent::from(KeyCode::Esc)),
-            KeyOutcome::Consumed
-        );
-        assert!(panel.typing.is_empty());
+        // The *result* is what may never be ellipsised. The working is prose
+        // and is allowed to be cut — an earlier version of this assertion did
+        // not distinguish them and failed on `1234567890*1` in the left column,
+        // which was behaving correctly.
+        for width in 12u16..=40 {
+            for row in draw(&mut panel, width, 8).lines() {
+                assert!(
+                    !row.trim_end().ends_with('\u{2026}'),
+                    "the result column was ellipsised at width {width}: {row:?}"
+                );
+            }
+        }
+    }
 
+    #[test]
+    fn scientific_results_are_left_out_of_the_alignment() {
+        let aligned = align_points(&["1.2346e11".to_string(), "7.5".to_string()], 14);
         assert_eq!(
-            panel.handle_key(KeyEvent::from(KeyCode::Esc)),
-            KeyOutcome::Consumed
+            aligned[0], "1.2346e11",
+            "an exponent's point is not a place"
         );
-        assert_eq!(panel.shown, Shown::Nothing);
+    }
 
-        // With nothing left to clear, Esc means what it means everywhere else.
-        assert_eq!(
-            panel.handle_key(KeyEvent::from(KeyCode::Esc)),
-            KeyOutcome::Ignored
-        );
+    /// The rule this panel is held to more strictly than any other.
+    #[test]
+    fn no_row_is_ever_wider_than_the_panel() {
+        let mut panel = new_panel();
+        for sum in ["123456789 * 1000", "1/3", "2+2", "0.1+0.2", "999999*999999"] {
+            type_in(&mut panel, sum);
+            enter(&mut panel);
+        }
+        type_in(&mut panel, "42*42");
+        for width in 1u16..=50 {
+            for row in draw(&mut panel, width, 10).lines() {
+                assert!(
+                    display_width(row) <= usize::from(width),
+                    "a {}-cell row in a {width}-cell panel: {row:?}",
+                    display_width(row)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_result_too_wide_is_never_shown_truncated() {
+        let mut panel = new_panel();
+        type_in(&mut panel, "123456789*1000");
+        enter(&mut panel);
+        for row in draw(&mut panel, 12, 8).lines() {
+            let stripped: String = row.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                !stripped.contains("123456789") || stripped.contains('e'),
+                "a prefix of the answer reached the screen: {row:?}"
+            );
+        }
     }
 
     #[test]
@@ -718,180 +941,76 @@ mod tests {
         let mut panel = new_panel();
         for n in 0..MAX_TAPE + 50 {
             panel.typing = format!("{n}+1");
-            panel.evaluate();
+            panel.reparse();
+            panel.keep();
         }
         assert_eq!(panel.tape.len(), MAX_TAPE);
         assert_eq!(
-            panel.tape[0].expression,
+            panel.tape.last().unwrap().expression,
             format!("{}+1", MAX_TAPE + 49),
-            "newest first"
+            "the newest survives; the oldest is dropped"
         );
     }
 
     #[test]
-    fn an_over_long_expression_is_refused_rather_than_swallowed() {
+    fn only_the_rows_that_fit_are_built() {
         let mut panel = new_panel();
-        for _ in 0..calc::MAX_LEN + 20 {
-            press(&mut panel, '1');
+        for n in 0..MAX_TAPE {
+            panel.typing = format!("{n}+1");
+            panel.reparse();
+            panel.keep();
         }
-        assert_eq!(panel.typing.chars().count(), calc::MAX_LEN);
+        draw(&mut panel, 36, 10);
         assert!(
-            matches!(panel.shown, Shown::Failed(CalcError::TooLong)),
-            "a key that does nothing with no explanation reads as a stuck terminal"
+            panel.drawn <= 10,
+            "{} rows for a ten-row panel",
+            panel.drawn
         );
+        assert!(panel.drawn > 0);
     }
 
-    /// The rule this panel is held to more strictly than any other.
-    ///
-    /// Everywhere else in mirador a clipped value reads as a narrow terminal.
-    /// Here it reads as a different answer, because a prefix of a number is a
-    /// number. Checked on screen rather than on the formatter, since the screen
-    /// is where the lie would appear.
+    /// Scrolling cannot run off either end of the tape.
     #[test]
-    fn a_result_too_wide_for_the_panel_is_never_shown_truncated() {
+    fn scrolling_is_bounded_at_both_ends() {
         let mut panel = new_panel();
-        panel.typing = "123456789 * 1000".to_string();
-        panel.evaluate();
-        assert_eq!(calc::format_result(panel.answer().unwrap()), "123456789000");
-
-        // Narrow enough that twelve digits cannot fit, tall enough that the
-        // tape is drawn as well as the display. Both are checked, because the
-        // first version of this only looked at the display and the bug was in
-        // the tape: composing `expr = result` and trimming the finished line
-        // cut the answer down to ` = 123456789`, which is a real number and
-        // the wrong one.
-        for row in draw(&mut panel, 8, 6).lines() {
-            let stripped: String = row.chars().filter(|c| !c.is_whitespace()).collect();
-            assert!(
-                !stripped.contains("123456789") || stripped.contains('e'),
-                "a prefix of the answer reached the screen: {row:?}"
-            );
+        for n in 0..40 {
+            panel.typing = format!("{n}+1");
+            panel.reparse();
+            panel.keep();
         }
-
-        // And the honest form did arrive.
-        assert!(
-            draw(&mut panel, 8, 6).contains('e'),
-            "the answer should have become scientific"
-        );
-    }
-
-    /// Every row a tape draws has to fit the panel, for the same reason.
-    #[test]
-    fn no_tape_row_is_ever_wider_than_the_panel() {
-        let mut panel = new_panel();
-        for expression in [
-            "123456789 * 1000",
-            "1/3",
-            "2+2",
-            "999999 * 999999 * 999999",
-            "0.1+0.2",
-        ] {
-            panel.typing = expression.to_string();
-            panel.evaluate();
+        draw(&mut panel, 36, 12);
+        for _ in 0..200 {
+            panel.handle_key(KeyEvent::from(KeyCode::Up));
         }
-        for width in 1u16..=44 {
-            for row in draw(&mut panel, width, 10).lines() {
-                assert!(
-                    crate::grid::display_width(row) <= usize::from(width),
-                    "a {}-cell row was drawn into a {width}-cell panel: {row:?}",
-                    crate::grid::display_width(row)
-                );
-            }
+        assert_eq!(panel.scrolled, panel.max_scroll());
+        draw(&mut panel, 36, 12);
+        for _ in 0..200 {
+            panel.handle_key(KeyEvent::from(KeyCode::Down));
         }
+        assert_eq!(panel.scrolled, 0, "back at the foot of the tape");
     }
 
     #[test]
     fn the_panel_draws_at_any_size_without_panicking() {
         let mut panel = new_panel();
         type_in(&mut panel, "12345+6789");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-        for width in [1u16, 2, 3, 7, 12, 20, 44, 120] {
+        enter(&mut panel);
+        type_in(&mut panel, "1/0");
+        for width in [1u16, 2, 3, 7, 12, 20, 36, 46, 120] {
             for height in [1u16, 2, 3, 5, 9, 30] {
                 let _ = draw(&mut panel, width, height);
             }
         }
     }
 
-    /// Both bugs a real terminal found, and neither test existed before it did.
-    ///
-    /// The unit tests all passed while `1/0` looked like a key that did
-    /// nothing: the reason was written to the line above, where the text being
-    /// corrected already sat and took priority, so it was never drawn. And the
-    /// resting `–` was handed to the block numerals, which render an unknown
-    /// character as a *blank cell* — five empty rows that read as a panel that
-    /// had crashed.
-    ///
-    /// Neither is visible from the state; both are obvious on screen. That is
-    /// the argument for driving the thing.
+    /// An empty panel must look ready rather than broken (invariant 11).
     #[test]
-    fn a_failed_sum_says_why_on_screen() {
+    fn an_untouched_calculator_shows_its_columns() {
         let mut panel = new_panel();
-        type_in(&mut panel, "1/0");
-        panel.handle_key(KeyEvent::from(KeyCode::Enter));
-
-        let screen = draw(&mut panel, 30, 9);
+        let screen = draw(&mut panel, 36, 9);
         assert!(
-            screen.contains("cannot divide by zero"),
-            "the reason has to reach the screen, not just the state:\n{screen}"
+            screen.contains("WORKING") && screen.contains("RESULT"),
+            "the header is what says the panel is ready:\n{screen}"
         );
-        assert!(
-            screen.contains("1/0"),
-            "and what was typed has to stay there to be corrected:\n{screen}"
-        );
-    }
-
-    #[test]
-    fn the_resting_display_is_visible_rather_than_blank() {
-        let mut panel = new_panel();
-        let screen = draw(&mut panel, 30, 9);
-        assert!(
-            screen.contains('\u{2013}'),
-            "an idle calculator draws a dash, not five blank rows — `glyphs` has \
-             no numeral for it and renders unknown characters as empty cells:\n{screen}"
-        );
-    }
-
-    /// A panel with nothing in it must not look broken (invariant 11).
-    #[test]
-    fn an_untouched_calculator_says_what_to_do() {
-        let mut panel = new_panel();
-        let screen = draw(&mut panel, 30, 8);
-        assert!(
-            screen.contains("type a sum"),
-            "an empty calculator has to invite the first keystroke:\n{screen}"
-        );
-    }
-
-    /// The tape must cost what is on screen, not what is in the buffer.
-    #[test]
-    fn only_the_tape_rows_that_fit_are_built() {
-        let mut panel = new_panel();
-        for n in 0..MAX_TAPE {
-            panel.typing = format!("{n}+1");
-            panel.evaluate();
-        }
-        draw(&mut panel, 30, 9);
-        assert!(
-            panel.drawn <= 9,
-            "{} rows were built for a nine-row panel",
-            panel.drawn
-        );
-        assert!(panel.drawn > 0, "a tall panel should show some of the tape");
-    }
-
-    /// Scrolling is bounded by what was drawn, so a shorter panel cannot leave
-    /// the cursor past the end — the defect `selection::up` had.
-    #[test]
-    fn the_cursor_cannot_leave_the_visible_tape() {
-        let mut panel = new_panel();
-        for n in 0..40 {
-            panel.typing = format!("{n}+1");
-            panel.evaluate();
-        }
-        draw(&mut panel, 30, 12);
-        for _ in 0..100 {
-            panel.handle_key(KeyEvent::from(KeyCode::Down));
-        }
-        assert!(panel.scroll.selected().is_some_and(|i| i < panel.drawn));
     }
 }
