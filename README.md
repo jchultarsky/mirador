@@ -666,33 +666,40 @@ none at all.
 
 Type an expression and press Enter. `2 + 3 * 4` is 14, not 20 — precedence is
 the arithmetic kind, and brackets work — because what this replaces is `bc` or
-`python3 -c`, not a pocket calculator. What you worked out lands on a tape below
-the answer.
+`python3 -c`, not a pocket calculator. The answer forms beside the line as you
+type; Enter keeps it, and what you have kept feeds up the tape above.
 
 | Key | Action |
 | --- | --- |
 | `0`–`9` `.` | Type a number |
 | `+` `-` `*` `/` | Operators; `x` also multiplies |
 | `(` `)` | Group |
-| `Enter` or `=` | Work it out |
+| `Enter` or `=` | Keep the answer |
+| `c` | Clear the entry |
+| `C` | Clear the tape as well |
 | `Backspace` | Rub out the last character |
-| `Esc` | Clear what is typed, then the answer |
-| `y` | Send the answer to the clipboard |
-| `↑` / `↓` | Scroll the tape |
+| `y` | Send the last answer to the clipboard |
+| `↑` / `↓` | Scroll back through the tape |
 
-**While this panel has focus, `1`–`9` type digits instead of jumping to a
-panel.** It is the only panel that changes what a global key does, and it is
-unavoidable — a calculator needs the digits. `Tab` still moves focus, and `q`,
-`?`, `w`, `m` and `t` all still work.
+An operator typed straight after an answer carries it forward, so `+ 10` after
+a result of 57 reads as `57 + 10`. That is what a memory key was for.
+
+Results are aligned on the decimal point, and the row you are typing is the
+brightest thing in the panel with its answer in brass; the tape behind it
+recedes. **While this panel has focus, `1`–`9` type digits instead of jumping
+to a panel.** It is the only panel that changes what a global key does, and it
+is unavoidable — a calculator needs the digits. `Tab` still moves focus, and
+`q`, `?`, `w`, `m` and `t` all still work.
 
 An answer too wide for the panel is shown in scientific notation rather than
-cut. Everywhere else in mirador a value that does not fit reads as a narrow
-terminal; here a number with its tail missing is a different number, and there
-would be nothing on screen to say so.
+cut. Everywhere else in mirador a value that will not fit reads as a narrow
+terminal; here a number missing its tail is a different number, and there would
+be nothing on screen to say so. Narrower still, the working column goes and the
+answers stay: an answer without its sum is still an answer.
 
 Nothing is kept when you quit. There is no memory key, no percent key and no
-functions — the tape and chaining an answer into the next sum cover what those
-were for.
+functions — the tape and carrying an answer forward cover what those were for.
+
 ### CPU and network
 
 CPU shows average load, a moving history graph and a per-core meter row.
@@ -863,7 +870,7 @@ rather than failing quietly.
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
 | `agenda` | What is next, from a local `.ics` file |
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
-| `calculator` | Type a sum, press Enter; a tape of what you worked out |
+| `calculator` | Type a sum, press Enter; an adding machine's tape of what you worked out |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 

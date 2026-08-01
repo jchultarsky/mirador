@@ -72,14 +72,14 @@ rows = [
   # numbers, so they get a row to themselves rather than being squeezed in
   # beside the lists.
   { height = 24, panels = [
-    { widget = "news",     width = 48 },
+    { widget = "news",     width = 42 },
     # What happened while you were not looking. Empty most of the time, which
     # is the point.
-    { widget = "watchlog", width = 38 },
+    { widget = "watchlog", width = 34 },
     # Type a sum, press Enter. It sits on this row rather than beside the
     # markets panel because a fifth panel down there would narrow `stocks`
     # below the width its change column needs.
-    { widget = "calculator", width = 24 },
+    { widget = "calculator", width = 32 },
   ] },
   { height = 18, panels = [
     # The timer draws block numerals when it has the width for them and falls

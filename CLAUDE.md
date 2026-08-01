@@ -753,6 +753,43 @@ the seed run again. The same is true of the task and notes examples, which
 
 ## Recently settled, so it is not re-litigated
 
+**The calculator is a tape, and the first version was a big number.** It shipped
+in 1.3.0 drawing the answer in block numerals, and the owner rejected it on
+sight as "too plain … the result is a giant number". The reasoning that produced
+it was *the clock and the pomodoro use them*, which is a resemblance and not a
+reason. Those two show one continuously changing value you **glance** at, and
+the numerals exist so it reads across a room. A calculated answer is read once
+and checked against the working that produced it — a different job.
+
+There was an arithmetic tell available the whole time and nobody did the sum:
+block numerals cost six cells a digit, so a twelve-digit result wants ninety-four
+columns. In the shipped slot the numerals only ever appeared for answers small
+enough not to need them.
+
+What replaced it came out of reading what calculators actually are.
+[Soulver](https://soulver.app/) was built on the observation that copying a
+physical calculator wastes the display, and that the answer belongs *beside* each
+line rather than in one register. Printing calculators survive in accounting
+because a tape is an **audit trail** — it is what lets you check the entry three
+lines back — and they have printed in two ink colours for a century. And
+right-alignment of figures is not decoration: it is what puts units under units
+so a column can be scanned.
+
+So: the shared grid, a `WORKING` and `RESULT` column, oldest at the top and the
+live entry at the foot where a tape feeds from. It is also the design thesis
+being followed rather than decorated — the watch station has an adding machine on
+it, not a seven-segment display.
+
+Two details are worth keeping. **Results are aligned on the decimal point**, and
+the padding that does it counts against the column: a ten-cell answer beside a
+two-place fraction was pushed back over the edge and the grid ellipsised it,
+which undid the whole reason `fit_result` exists. Alignment gives way before a
+digit does. And **the live row is the brightest thing in the panel**, because it
+is where the cursor is — the first draft had it dim, which put the faintest
+thing on screen exactly where the eye was. Attention runs *down* the panel:
+muted tape, body-weight last entry, brass live answer.
+
+
 **The layout grid stays two levels** — `rows: Vec<Row{height, panels}>` — rather
 than becoming recursive splits. Nested splits would make `[layout]` unreadable
 and un-hand-editable, and would break the textual-edit approach the whole

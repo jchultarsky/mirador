@@ -50,7 +50,7 @@ impl Default for Layout {
                 // 1.1.2 went to some trouble to save. Prose gives way more
                 // gracefully than a table does — these two wrap, where a
                 // dropped column is a fact the reader no longer has.
-                row(24, &[("news", 48), ("watchlog", 38), ("calculator", 24)]),
+                row(24, &[("news", 42), ("watchlog", 34), ("calculator", 32)]),
                 row(
                     18,
                     &[

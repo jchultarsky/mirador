@@ -72,16 +72,21 @@ pub enum CalcError {
 
 impl CalcError {
     /// The phrase shown in place of the answer.
+    ///
+    /// Short on purpose: these are drawn in the calculator's result column,
+    /// which is fourteen cells, and a reason that has to be ellipsised is a
+    /// reason nobody can read. `cannot divide by zero` came out as
+    /// `cannot divid…`, which is worse than the terse version.
     pub fn message(&self) -> String {
         match self {
-            Self::Empty => "nothing to work out".to_string(),
-            Self::TooLong => format!("too long — {MAX_LEN} characters at most"),
-            Self::TooDeep => "too many brackets".to_string(),
-            Self::UnbalancedParens => "a bracket is unclosed".to_string(),
+            Self::Empty => "nothing yet".to_string(),
+            Self::TooLong => "too long".to_string(),
+            Self::TooDeep => "too nested".to_string(),
+            Self::UnbalancedParens => "unclosed (".to_string(),
             Self::Incomplete => "unfinished".to_string(),
-            Self::DivideByZero => "cannot divide by zero".to_string(),
-            Self::Unexpected(c) => format!("`{c}` means nothing here"),
-            Self::OutOfRange => "the answer is too large".to_string(),
+            Self::DivideByZero => "\u{00f7} by zero".to_string(),
+            Self::Unexpected(c) => format!("{c}?"),
+            Self::OutOfRange => "too large".to_string(),
         }
     }
 }

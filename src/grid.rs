@@ -980,6 +980,7 @@ mod tests {
     /// the declarations in the tree. A grid that is not here is not checked,
     /// and an unchecked grid is what this whole module exists to prevent.
     const EVERY_GRID: &[(&str, &[Column])] = &[
+        ("calculator", crate::widgets::calculator::COLUMNS),
         ("clocks", crate::widgets::clocks::COLUMNS),
         ("notes", crate::widgets::notes::COLUMNS),
         ("stocks", crate::widgets::stocks::COLUMNS),
