@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-07-31
+
+Working notes and test coverage. **Nothing you can see changes** — the binary
+behaves identically, and the README and shipped config are untouched. Published
+so the source on crates.io matches the repository.
+
+### Changed
+
+- The working notes now record what shaped the two reset flags: why they are
+  separate commands rather than degrees of one, why resetting the config has to
+  clear the remembered preferences with it, and why a factory reset decides what
+  it may touch by which program wrote the file rather than by where it sits.
+- A test now checks those notes for the kinds of staleness a machine can see — a
+  test cited by name that no longer exists, a released version disagreeing with
+  the manifest, a cited path that has moved. It found one on its first run. Most
+  of that file is prose about the world and stays unchecked, which the test says
+  out loud rather than implying otherwise.
+
 ## [1.1.0] - 2026-07-31
 
 ### Added
@@ -1375,7 +1393,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/jchultarsky/mirador/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jchultarsky/mirador/compare/v1.0.4...v1.1.0
 [1.0.4]: https://github.com/jchultarsky/mirador/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/jchultarsky/mirador/compare/v1.0.2...v1.0.3
