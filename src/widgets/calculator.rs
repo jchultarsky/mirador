@@ -72,31 +72,45 @@ use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::grid::{Column, Grid, display_width};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
-const ENTRY_BINDINGS: &[Binding] = &[
-    Binding::primary("0-9 + - * /", "type"),
-    Binding::primary("Enter", "keep"),
-    Binding::primary("c", "clear"),
-    Binding::extra("( )", "group"),
-    Binding::extra("x", "multiply"),
-    Binding::extra("C", "clear the tape too"),
-    Binding::extra("Backspace", "rub out"),
-];
+/// This panel's bindings, written once, with the tape actions optional.
+///
+/// A macro rather than two arrays. The two lists share seven entries, and a
+/// `Binding` declaration feeds three surfaces — border hint, status bar, help
+/// overlay — so a list duplicated is hint text that will drift (invariant 3).
+/// Only the two lines that genuinely differ are written twice, which is to say
+/// once each.
+///
+/// The order matters because `frame::hint_line` fills the border with
+/// *primaries* until it runs out of room: whatever is first is what a reader
+/// sees without pressing `?`. Extras never reach the border, so their position
+/// is free.
+macro_rules! calculator_bindings {
+    ($($tape:expr),* $(,)?) => {
+        &[
+            $($tape,)*
+            Binding::primary("0-9 + - * /", "type"),
+            Binding::primary("Enter", "keep"),
+            Binding::primary("c", "clear"),
+            Binding::extra("( )", "group"),
+            Binding::extra("x", "multiply"),
+            Binding::extra("C", "clear the tape too"),
+            Binding::extra("Backspace", "rub out"),
+            Binding::extra("\u{2191} / \u{2193}", "select on the tape"),
+        ]
+    };
+}
+
+/// Before anything has been worked out, the only thing worth advertising is
+/// that the number keys type.
+const ENTRY_BINDINGS: &[Binding] = calculator_bindings!();
 
 /// Once there is a tape, its result actions outrank another reminder that the
-/// number keys type. At the default width this puts `y copy · p paste` in the
-/// border together instead of leaving both behind `?`.
-const TAPE_BINDINGS: &[Binding] = &[
+/// number keys type. At the default width this puts `y copy \u{00b7} p paste` in
+/// the border together instead of leaving both behind `?`.
+const TAPE_BINDINGS: &[Binding] = calculator_bindings!(
     Binding::primary("y", "copy"),
     Binding::primary("p", "paste"),
-    Binding::primary("0-9 + - * /", "type"),
-    Binding::primary("Enter", "keep"),
-    Binding::primary("c", "clear"),
-    Binding::extra("( )", "group"),
-    Binding::extra("x", "multiply"),
-    Binding::extra("C", "clear the tape too"),
-    Binding::extra("Backspace", "rub out"),
-    Binding::extra("↑ / ↓", "select on the tape"),
-];
+);
 
 /// Widest the result column is drawn.
 ///
@@ -922,6 +936,32 @@ mod tests {
         assert_eq!(panel.preview, Ok(12.0));
         assert_eq!(panel.selected_back, 0, "the view returns to the tape foot");
         assert_eq!(panel.scrolled, 0);
+    }
+
+    /// The two binding lists must differ only by the tape actions.
+    ///
+    /// They were two hand-written arrays sharing seven entries, which is the
+    /// shape invariant 3 warns about: a `Binding` feeds the border hint, the
+    /// status bar and the help overlay, so a list kept in two places is hint
+    /// text waiting to disagree with itself. Now one macro emits both. This
+    /// pins the property so a future edit cannot quietly unpick it.
+    #[test]
+    fn the_two_binding_lists_share_everything_but_the_tape_actions() {
+        let tail: Vec<(&str, &str)> = TAPE_BINDINGS
+            .iter()
+            .skip(2)
+            .map(|b| (b.key, b.action))
+            .collect();
+        let entry: Vec<(&str, &str)> = ENTRY_BINDINGS.iter().map(|b| (b.key, b.action)).collect();
+        assert_eq!(
+            entry, tail,
+            "the shared part of the two lists has drifted apart"
+        );
+        assert_eq!(
+            TAPE_BINDINGS[..2].iter().map(|b| b.key).collect::<Vec<_>>(),
+            vec!["y", "p"],
+            "the tape actions lead, because the border fills with primaries in order"
+        );
     }
 
     #[test]
