@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-08-01
+
+### Fixed
+
+- **The agenda panel's "no calendar yet" message was cutting off the path.** That
+  message exists to tell you where to put your `.ics`, and it stopped mid-path —
+  `Looked in /var/folders/zj/blsvny` — which is not an instruction. It wraps now,
+  as does the prose above it, which had been hand-wrapped for one panel width and
+  clipped at every narrower one, and as does the failure reason when a calendar
+  cannot be read.
+
+  Same shape as the markets fix in 1.1.2: the terminal clips whatever does not
+  fit, so anything built without asking how wide the panel is will eventually say
+  something untrue or unreadable.
+
 ## [1.1.2] - 2026-07-31
 
 ### Fixed
@@ -1415,7 +1430,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/jchultarsky/mirador/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/jchultarsky/mirador/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/jchultarsky/mirador/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jchultarsky/mirador/compare/v1.0.4...v1.1.0
