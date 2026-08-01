@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Calculator results can be selected, copied and reused from the tape.**
+  `↑`/`↓` moves the full-weight selection through earlier answers, `y` sends
+  that answer to the terminal clipboard, and `p` pastes it into the live
+  expression. Once a result exists, the focused panel's compact border hint
+  advertises `y copy · p paste` at the default width.
+
 ## [1.3.2] - 2026-08-01
 
 ### Fixed

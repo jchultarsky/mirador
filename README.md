@@ -680,11 +680,18 @@ type; Enter keeps it, and what you have kept feeds up the tape above.
 | `c` | Clear the entry |
 | `C` | Clear the tape as well |
 | `Backspace` | Rub out the last character |
-| `y` | Send the last answer to the clipboard |
-| `↑` / `↓` | Scroll back through the tape |
+| `y` | Send the selected answer to the clipboard |
+| `p` | Paste the selected answer into the live expression |
+| `↑` / `↓` | Select an answer on the tape |
 
 An operator typed straight after an answer carries it forward, so `+ 10` after
 a result of 57 reads as `57 + 10`. That is what a memory key was for.
+
+The selected tape row stays at full body weight while the others recede. Use
+`↑`/`↓` to choose an older answer, then `y` to copy it or `p` to append it to
+the expression you are typing. Once the tape has a result, those two actions
+replace the typing reminder in the focused panel's border so they remain
+discoverable at the default width.
 
 Results are aligned on the decimal point, and the row you are typing is the
 brightest thing in the panel with its answer in brass; the tape behind it
