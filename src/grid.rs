@@ -299,7 +299,7 @@ pub struct Grid {
 }
 
 /// Space between adjacent columns.
-const GUTTER: u16 = 1;
+pub(crate) const GUTTER: u16 = 1;
 
 impl Grid {
     /// Resolve `columns` against a total width.

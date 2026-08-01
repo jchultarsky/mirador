@@ -57,23 +57,37 @@ const SPARK_WIDTH: u16 = 12;
 /// Columns the `▸ ` selection marker occupies to the left of the grid.
 const SELECTION_MARKER: u16 = 2;
 
-/// Width the four fixed columns and the gutters between all five occupy.
-const FIXED_COLUMNS: u16 = 8 + 10 + 9 + 8 + 4;
-
-/// Grid width at which the sparkline column earns its place: everything else,
-/// plus a sparkline drawn at full size.
+/// Every column's threshold, each derived from the one before it.
 ///
-/// Derived rather than written down, because this figure appears in three
-/// places — the column's own drop threshold, the panel's maximum width, and the
-/// width the sparkline is drawn at — and the three drifting apart is exactly
-/// how the column ends up allocated but empty.
-const SPARK_MIN_GRID: u16 = FIXED_COLUMNS + SPARK_WIDTH;
+/// A row used to be built at its full width whatever the panel could show, and
+/// the renderer clipped whatever hung over the edge — so the shipped layout,
+/// which gives this panel about 32 columns at 120, drew `+52.0` for a change of
+/// `+52.07`. **A dropped column reads as a narrow terminal; a clipped number
+/// reads as a different number**, which is the same argument that made the
+/// status bar drop whole hints rather than half of one.
+///
+/// Derived rather than written down because these figures appear in the column
+/// thresholds, the panel's maximum width and the width the sparkline is drawn
+/// at, and drifting apart is how a column ends up allocated but empty.
+///
+/// The order of expendability is the order of derivation. Symbol and last price
+/// are what a watchlist *is*; the change is what you look at next; the
+/// percentage restates the change; the sparkline is texture.
+///
+/// Even the symbol has a floor. A ticker clipped to `BRK.` is as wrong as a
+/// price clipped to `+52.0`, and below eight cells there is no honest way to
+/// draw one — so the row comes out empty, which is a panel with no room rather
+/// than a panel telling you something untrue.
+const CORE_GRID: u16 = 8 + crate::grid::GUTTER + 10;
+const CHG_MIN_GRID: u16 = CORE_GRID + crate::grid::GUTTER + 9;
+const PCT_MIN_GRID: u16 = CHG_MIN_GRID + crate::grid::GUTTER + 8;
+const SPARK_MIN_GRID: u16 = PCT_MIN_GRID + crate::grid::GUTTER + SPARK_WIDTH;
 
 const COLUMNS: &[Column] = &[
-    Column::fixed("symbol", 8),
-    Column::fixed("last", 10).right(),
-    Column::fixed("chg", 9).right(),
-    Column::fixed("%", 8).right(),
+    Column::fixed("symbol", 8).drops_below(8),
+    Column::fixed("last", 10).right().drops_below(CORE_GRID),
+    Column::fixed("chg", 9).right().drops_below(CHG_MIN_GRID),
+    Column::fixed("%", 8).right().drops_below(PCT_MIN_GRID),
     Column::flex("today", 1).drops_below(SPARK_MIN_GRID),
 ];
 
@@ -1172,6 +1186,115 @@ mod tests {
             guard.refresh,
             "and is woken rather than waiting an interval"
         );
+    }
+
+    /// A row must never be wider than the grid it was built for.
+    ///
+    /// It used to be built at full width whatever the panel could show, and the
+    /// renderer clipped the overhang — so the shipped layout, which gives this
+    /// panel about 32 columns at 120, drew `+52.0` for a change of `+52.07`.
+    /// Wrong numbers, in the default configuration, in the one panel where a
+    /// wrong number costs something.
+    #[test]
+    fn a_row_is_never_wider_than_the_grid_it_was_built_for() {
+        let theme = Theme::default();
+        let quote = Quote {
+            symbol: "^GSPC".into(),
+            price: 7489.72,
+            previous_close: 7437.65,
+            currency: Some("USD".into()),
+            series: vec![7437.0, 7489.72],
+            delayed: false,
+        };
+
+        for width in 0..64u16 {
+            let grid = Grid::new(COLUMNS, width);
+            for cell in [
+                ready(quote.clone()),
+                Cell::default(),
+                failed("network request failed"),
+            ] {
+                let line = StocksPanel::row("^GSPC", &cell, false, &theme, &grid, 8);
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert!(
+                    crate::grid::display_width(text.trim_end()) <= usize::from(width),
+                    "a {}-cell row was built for a {width}-cell grid: {text:?}",
+                    crate::grid::display_width(text.trim_end())
+                );
+            }
+        }
+    }
+
+    /// Whichever value columns survive a narrow panel carry their *whole*
+    /// value, **as drawn**.
+    ///
+    /// This renders rather than inspecting the row, and that is the whole
+    /// point. `StocksPanel::row` never clips anything — the *renderer* clips
+    /// what will not fit — so a test that reads the row back can assert
+    /// complete values all day and pass with the defect in place. Two such
+    /// tests were written here first and both passed against the bug they were
+    /// meant to catch. The buffer is the only place the truth shows.
+    #[test]
+    fn every_value_on_screen_is_a_whole_value() {
+        use crate::panel::RenderContext;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = Theme::default();
+        let gradients = theme.gradients();
+        let quote = Quote {
+            symbol: "^GSPC".into(),
+            price: 7489.72,
+            previous_close: 7437.65,
+            currency: Some("USD".into()),
+            series: vec![7437.0, 7489.72],
+            delayed: false,
+        };
+
+        // Each value with the prefix a clip would leave behind. Seeing the
+        // prefix without the whole is the defect.
+        let whole = ["7489.72", "+52.07", "+0.70%", "^GSPC"];
+
+        for width in 4..64u16 {
+            let (mut p, _g) = panel(&format!("draw{width}"), &["^GSPC"]);
+            update(&p.board, &p.generation, "^GSPC", Ok(quote.clone()));
+
+            let mut t = Terminal::new(TestBackend::new(width, 6)).expect("backend");
+            t.draw(|f| {
+                p.render(
+                    f,
+                    Rect::new(0, 0, width, 6),
+                    RenderContext {
+                        theme: &theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .expect("draws");
+
+            let buffer = t.backend().buffer();
+            let screen: String = (0..6)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            for value in whole {
+                let clipped = &value[..value.len() - 1];
+                if screen.contains(clipped) {
+                    assert!(
+                        screen.contains(value),
+                        "at width {width} the screen shows `{clipped}` but not the \
+                         whole `{value}` — a clipped value is a wrong value:\n{screen}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
