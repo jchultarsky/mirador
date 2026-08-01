@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-01
+
+### Fixed
+
+- **A long note or task note no longer slows the whole dashboard down.** The
+  notes reader wrapped a note's entire body on every frame and then scrolled
+  past most of it, and the task panel did the same to fill a two-row preview —
+  so the cost of drawing was proportional to what you had written rather than
+  to what was on screen. A two-megabyte note cost 62ms a frame against a 250ms
+  tick; it now costs under a third of a millisecond, and the cost no longer
+  grows with the note.
+
+  Nothing about what is drawn has changed.
+
 ## [1.4.0] - 2026-08-01
 
 ### Added
