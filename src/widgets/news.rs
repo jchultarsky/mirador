@@ -1168,9 +1168,8 @@ mod tests {
     #[test]
     fn a_named_command_runs_with_the_link_as_its_own_argument() {
         let mut panel = loaded_panel();
-        // `true` exists everywhere and ignores its arguments, so this checks the
-        // spawn path without depending on a browser.
-        panel.open_command = vec!["true".into()];
+        // Checks the spawn path without depending on a browser being present.
+        panel.open_command = harmless_command();
 
         panel.handle_key(KeyEvent::from(KeyCode::Enter));
 
@@ -1235,13 +1234,32 @@ mod tests {
             "`o` shows the marked story"
         );
 
-        panel.open_command = vec!["true".into()];
+        panel.open_command = harmless_command();
         panel.handle_key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(
             panel.selected.selected(),
             Some(marked),
             "`Enter` must not move the cursor to a different story"
         );
+    }
+
+    /// A command that exists on every platform mirador ships to, and does
+    /// nothing when run.
+    ///
+    /// **Not `true`.** That was used here for a year on the reasoning, written
+    /// into the comment, that "`true` exists everywhere" — and it does not
+    /// exist on Windows. What hid it is that GitHub's Windows runners ship Git
+    /// for Windows, which puts a `true.exe` on `PATH`: the test passed in CI
+    /// and failed for anyone building on an ordinary Windows machine. It took
+    /// an outside contributor running the suite on their own box to find it
+    /// (#174), which is a reminder that a green CI is evidence about the
+    /// runner as much as about the code.
+    fn harmless_command() -> Vec<String> {
+        if cfg!(windows) {
+            vec!["cmd".into(), "/c".into(), "exit".into()]
+        } else {
+            vec!["true".into()]
+        }
     }
 
     /// A panel holding twelve stories, the number the shipped config produces.
