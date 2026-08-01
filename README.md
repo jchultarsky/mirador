@@ -16,19 +16,21 @@ nothing shimmers, and nothing is designed to pull you back to it.
 
 A *mirador* is a lookout — the tower you climb to see everything at once.
 
-![All twelve mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a news panel of headlines, a watch log, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
+![All thirteen mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a news panel of headlines, a watch log, a calculator, a pomodoro timer, and a market watchlist beside live CPU and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, three sums are typed into the calculator and feed up its tape, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
-*All twelve panels on a first run, at 200x50 — wide enough that nothing has to fall
+*All thirteen panels on a first run, at 200x50 — wide enough that nothing has to fall
 back. The lit frame is the focused panel, with its own keys in its bottom
 border; every other panel is dimmed, so exactly one thing is at full brightness.*
 
-*Forty seconds of it in use. Focus moves with `Tab`; a task is typed in and
+*A minute of it in use. Focus moves with `Tab`; a task is typed in and
 lands in the list, which goes from four open to five. `w` opens the panel picker,
 switches one off, and the grid closes over the gap. `m` starts arranging: the
 task panel moves along its row, then up into the row above, then past the top
 edge into a row of its own — the real panels move as the keys are pressed, and
 `Esc` puts it all back. `?` lists every binding for the focused panel and
-scrolls when there are more than fit.*
+scrolls when there are more than fit. Then three sums go into the calculator:
+each answer appears in the right-hand column as it is typed, and Enter feeds it
+up the tape, where the results line up on their decimal points.*
 
 *The tasks and the note are the examples mirador seeds on a first run, and the
 weather, the prices and the graphs are whatever was true while it recorded —
