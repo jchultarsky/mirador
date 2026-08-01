@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-01
+
+### Fixed
+
+- **Panels no longer let the terminal cut a value in half.** A line built at its
+  natural width and handed to the renderer is not truncated by mirador — it is
+  truncated by the terminal, which keeps the cells that fit and drops the rest
+  without saying so. The terminal cannot tell a value from a fragment, so it cuts
+  wherever the edge falls, and a fragment of a value is not a smaller truth.
+
+  Found by rendering every panel across a range of widths rather than by reading
+  the code. Four panels were cutting values at ordinary terminal sizes:
+
+  - the **network** readout showed a bare `↑` with no upload figure beside it at
+    100 columns, and `6.4 KB` — a total — where `6.4 KB/s` was meant;
+  - **weather** showed `humidity` with its percentage gone;
+  - the **pomodoro** footer trailed off as `25m focus ·` at the shipped default
+    of 120 columns;
+  - the **calendar** cut a date down the middle, so `14` under THU became
+    Thursday the 1st, with nothing on screen to say otherwise.
+
+  Values are now dropped whole — a figure leaves with its unit, an arrow with the
+  number it points at — and prose is ellipsised, so an abridged message says that
+  it is. Where a reading would be dropped only because of the padding that keeps
+  it from jiggling, the padding goes first. The calendar drops whole weekday
+  columns instead of half a date.
+
+- **The empty-state messages in the agenda and watch log lost a word** when the
+  panel was narrow. Both were hand-broken into two lines that still read as a
+  whole sentence — `Nothing has` above `since 00:30.` — so the omission was
+  invisible. They wrap now.
+
+- **A table could build a row wider than the panel it was resolved for.** Column
+  widths are declared without reference to the total, so a pane narrower than
+  their sum overflowed and the last value on the row lost its tail. Long-standing
+  and only reachable at small sizes, but the same defect as the four above.
+
+- The status bar and the arrange-mode legend were doing this arithmetic by hand,
+  and one of them measured bytes rather than display cells.
+
 ## [1.1.3] - 2026-08-01
 
 ### Fixed
