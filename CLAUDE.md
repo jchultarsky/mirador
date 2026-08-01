@@ -438,7 +438,7 @@ the alternative is someone editing a config line that does nothing.
 
 Invariant 17 holds for it by construction — the baseline is `config.theme.name`
 taken before `apply_state_theme`, so picking the theme the config already names
-*retracts* the entry. Note that `a_dashboard_nobody_has_touched_writes_nothing`
+*retracts* the entry. Note that `an_untouched_default_config_records_nothing`
 cannot see this field: a default config carries an inline table and so names no
 theme, leaving both sides `None` whether or not `theme` is in
 `only_changes_from`'s hand-written list. `a_theme_matching_the_config_is_not_recorded`

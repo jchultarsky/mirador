@@ -8,6 +8,9 @@ mod chart;
 mod clipboard;
 mod config;
 mod dateinput;
+/// Working-notes checks; test builds only, so nothing ships with it.
+#[cfg(test)]
+mod docs;
 mod feed;
 mod frame;
 mod glyphs;
