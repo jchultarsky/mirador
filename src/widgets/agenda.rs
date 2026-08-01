@@ -720,44 +720,54 @@ impl AgendaPanel {
                 // Not an error, and not red. This is a panel nobody has set up
                 // yet, which is an ordinary state — the same standing as an
                 // empty task list.
-                Trouble::NoFile => vec![
-                    Line::from(TextSpan::styled(
-                        "No agenda file",
-                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(TextSpan::styled("Nothing to show.", muted)),
-                    Line::from(""),
-                    Line::from(TextSpan::styled(
-                        "Set [agenda].file to an .ics you already",
+                Trouble::NoFile => {
+                    let mut lines = vec![
+                        Line::from(TextSpan::styled(
+                            "No agenda file",
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(TextSpan::styled("Nothing to show.", muted)),
+                        Line::from(""),
+                    ];
+                    lines.extend(wrapped_lines(
+                        "Set [agenda].file to an .ics you already have — an export, \
+                         or whatever your calendar syncs to, or press f.",
+                        area.width,
                         muted,
-                    )),
-                    Line::from(TextSpan::styled(
-                        "have — an export, or whatever your",
+                    ));
+                    lines.push(Line::from(""));
+                    // Wrapped, not truncated. This line exists to tell you
+                    // where to put the file, and a path cut off at the panel
+                    // edge — `Looked in /var/folders/zj/blsvny` — fails at the
+                    // one job the message has.
+                    lines.extend(wrapped_lines(
+                        &format!("Looked in {}", current_path(&self.path).display()),
+                        area.width,
                         muted,
-                    )),
-                    Line::from(TextSpan::styled("calendar syncs to, or press f.", muted)),
-                    Line::from(""),
-                    Line::from(TextSpan::styled(
-                        format!("Looked in {}", current_path(&self.path).display()),
-                        muted,
-                    )),
-                ],
+                    ));
+                    lines
+                }
                 // This one *is* a fault: the file is there and something went
                 // wrong reading it.
-                Trouble::Unreadable(why) => vec![
-                    Line::from(TextSpan::styled(
+                Trouble::Unreadable(why) => {
+                    let mut lines = vec![Line::from(TextSpan::styled(
                         "Cannot read the agenda file",
                         Style::default()
                             .fg(theme.error)
                             .add_modifier(Modifier::BOLD),
-                    )),
-                    Line::from(TextSpan::styled(why.clone(), muted)),
-                    Line::from(""),
-                    Line::from(TextSpan::styled(
-                        current_path(&self.path).display().to_string(),
+                    ))];
+                    // The reason comes off the filesystem and can be any
+                    // length; the path is the reader's own and can be deep.
+                    // Neither is ours to truncate.
+                    lines.extend(wrapped_lines(why, area.width, muted));
+                    lines.push(Line::from(""));
+                    lines.extend(wrapped_lines(
+                        &current_path(&self.path).display().to_string(),
+                        area.width,
                         muted,
-                    )),
-                ],
+                    ));
+                    lines
+                }
             };
             if let Some(age) = state.read_at.map(|at| describe_age(at.elapsed())) {
                 lines.push(Line::from(TextSpan::styled(
@@ -901,6 +911,20 @@ fn event_line(
     ])
 }
 
+/// One styled `Line` per row of `text` wrapped to `width`.
+///
+/// The empty-state messages used to be hand-wrapped into fixed lines and the
+/// path printed as one long line, so both were cut at the panel edge by the
+/// renderer. A message that says where to put your calendar file is worth
+/// nothing if you cannot read the path, and prose broken for a 40-cell panel
+/// reads badly in a 30-cell one.
+fn wrapped_lines(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
+    crate::grid::wrap(text, usize::from(width))
+        .into_iter()
+        .map(|row| Line::from(TextSpan::styled(row, style)))
+        .collect()
+}
+
 /// Rows the frame costs, re-exported so `max_height` reads the same as the
 /// other panels even though this one does not declare a maximum.
 #[allow(dead_code)]
@@ -924,6 +948,87 @@ mod tests {
             start,
             all_day,
         }
+    }
+
+    /// The empty-state message exists to say where to put your calendar, so a
+    /// path cut off at the panel edge fails at the only job it has. It used to
+    /// be one long `Line` and the renderer clipped it — the dashboard showed
+    /// `Looked in /var/folders/zj/blsvny` and stopped.
+    ///
+    /// Asserted on the drawn buffer rather than the lines, because clipping
+    /// happens at draw time: a test that inspected the `Line` would pass with
+    /// the defect in place, which is a trap this repository has fallen into
+    /// twice.
+    #[test]
+    fn the_path_in_the_empty_message_is_wrapped_rather_than_cut_off() {
+        use crate::panel::RenderContext;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let dir = std::env::temp_dir().join(format!("mirador-agendapath-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let missing = dir.join("no-such-calendar.ics");
+
+        let theme = crate::theme::Theme::default();
+        let gradients = theme.gradients();
+
+        for width in [24u16, 30, 40, 60] {
+            let mut panel =
+                AgendaPanel::new(&crate::config::AgendaConfig::default(), missing.clone());
+            // Let the reader thread notice the file is absent.
+            for _ in 0..50 {
+                if panel.tick() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+
+            let mut terminal = Terminal::new(TestBackend::new(width, 24)).expect("backend");
+            terminal
+                .draw(|f| {
+                    panel.render(
+                        f,
+                        Rect::new(0, 0, width, 24),
+                        RenderContext {
+                            theme: &theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .expect("draws");
+
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..24)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect();
+            let screen = rows.join("\n");
+
+            // Nothing may be drawn wider than the panel.
+            for row in &rows {
+                assert!(
+                    crate::grid::display_width(row.trim_end()) <= usize::from(width),
+                    "a row overflowed at width {width}: {row:?}"
+                );
+            }
+
+            // The end of the path has to survive. A clipped path stops before
+            // its filename, which is exactly the part that tells you what to
+            // create.
+            let joined: String = rows.iter().map(|r| r.trim_end()).collect();
+            assert!(
+                joined.contains("no-such-calendar.ics"),
+                "the path was cut before its filename at width {width}:\n{screen}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A calendar is written by somebody else's software and grows without
