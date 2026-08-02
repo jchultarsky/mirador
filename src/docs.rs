@@ -196,6 +196,62 @@ mod tests {
         );
     }
 
+    /// Every released version has a changelog link definition.
+    ///
+    /// `CHANGELOG.md` uses reference-style headings — `## [1.5.0]` — which
+    /// render as plain text unless a matching `[1.5.0]: <url>` sits at the foot
+    /// of the file. Seven consecutive releases shipped without one, so seven
+    /// version headings on GitHub read as literal brackets rather than as
+    /// compare links.
+    ///
+    /// Nothing noticed, because the file still parsed, the release still went
+    /// out, and the defect is only visible rendered. That is the shape of every
+    /// entry in this module: true-looking prose that no build step reads.
+    #[test]
+    fn every_released_version_has_a_changelog_link() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("CHANGELOG.md");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+            .replace("\r\n", "\n");
+
+        let versions: Vec<String> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## ["))
+            .filter_map(|rest| rest.split(']').next())
+            .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+            .map(str::to_string)
+            .collect();
+        assert!(
+            versions.len() > 10,
+            "only {} version headings found — the format probably changed and \
+             this check has stopped looking at anything",
+            versions.len()
+        );
+
+        let missing: Vec<&String> = versions
+            .iter()
+            .filter(|v| !text.contains(&format!("\n[{v}]: http")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} released version(s) have no link definition: {missing:?}\n\n\
+             Add `[X.Y.Z]: <compare url>` at the foot of CHANGELOG.md beside \
+             the others. Without it the heading renders as literal brackets.",
+            missing.len()
+        );
+
+        // The moving one, which is wrong rather than merely absent when stale.
+        let newest = versions.first().expect("at least one version");
+        assert!(
+            text.contains(&format!(
+                "[Unreleased]: https://github.com/jchultarsky/mirador/compare/v{newest}...HEAD"
+            )),
+            "[Unreleased] should compare against v{newest}, the newest release. \
+             A stale one presents shipped work as unreleased, which is worse \
+             than a missing link."
+        );
+    }
+
     /// Every module in `src/` appears in the architecture map.
     ///
     /// The map is the first thing a reader consults and the easiest thing to

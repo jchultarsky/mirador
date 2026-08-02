@@ -56,7 +56,7 @@ impl Default for Layout {
                     &[
                         ("pomodoro", 24),
                         // 30 rather than 28 so the change column survives at
-                        // 120 columns. Below a panel width of 33 the grid drops
+                        // 120 columns. Below a panel width of 35 the grid drops
                         // it rather than clipping a number, which is right — but
                         // "what is the portfolio doing" is one of the four
                         // questions, and the answer is the change, not the last
