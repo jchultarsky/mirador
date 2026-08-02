@@ -2583,7 +2583,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        // One panel out of twelve, so eleven are unused — the loudest possible
+        // One panel out of thirteen, so twelve are unused — the loudest possible
         // case for the hint that used to be here.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         let screen = |app: &mut App, help: bool| -> String {

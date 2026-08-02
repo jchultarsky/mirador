@@ -53,9 +53,13 @@ cargo metadata --format-version 1 | \
   jq -r '[.packages[].rust_version | select(.)] | max'
 ```
 
-It currently comes from `sysinfo`, not from anything this crate does. Five
-places have to agree: `Cargo.toml`, `.github/workflows/ci.yml` (twice), the
-README and CONTRIBUTING.
+It currently comes from `sysinfo`, not from anything this crate does. **Seven
+places have to agree, across four files**: `Cargo.toml`;
+`.github/workflows/ci.yml` twice, the step name and the toolchain; `README.md`
+twice, the badge URL and the prose; and `CONTRIBUTING.md` twice, the prose and
+the `cargo +1.95.0` invocation. This note said "five" and counted the README
+and CONTRIBUTING once each — and the two it missed, a badge and a pinned
+toolchain, are exactly the two that fail loudly and late.
 
 Note that `rust-version` also changes what clippy suggests — raising
 the MSRV to 1.88 turned every nested `if let` into a `collapsible_if` error,
@@ -132,7 +136,8 @@ feed.rs      enough RSS for a headline; quick-xml, unlike ical.rs — see below
 task.rs      task model + TOML store
 note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
-poll.rs      the sliced sleep the two fetch threads share
+poll.rs      the sliced sleep the background threads share — weather,
+             stocks and news fetch; agenda reloads a file
 samples.rs   the bounded history behind the cpu and network graphs
 selection.rs list cursor movement and click-to-row
 clipboard.rs OSC 52, with base64 hand-rolled rather than taken as a dependency
@@ -408,7 +413,7 @@ rather than of notifications, which is exactly why it got built. `w` remains a
 primary binding, so the *capability* is still one keystroke and on the status
 bar; what is gone is being told you should use it.
 `a_layout_missing_widgets_is_not_advertised_anywhere` renders the dashboard and
-the help overlay at 200x40 with eleven widgets unplaced and fails on the word
+the help overlay at 200x40 with twelve widgets unplaced and fails on the word
 "unused".
 
 **Calendar must be independent** — no connecting to the user's mail or calendar
@@ -559,7 +564,7 @@ minutes",** and holding that line is the whole feature. An overdue task does not
 qualify — notable, already red in its own panel, and identically overdue in an
 hour. A signal lit for it is lit permanently, and a permanently lit alarm is
 furniture: the unread-badge failure reached from the other direction. Eight of
-the twelve panels already show what is wrong in their own frames, so the gap
+the thirteen panels already show what is wrong in their own frames, so the gap
 this fills was aggregation, never detection.
 
 **No all-clear, ever.** An indicator saying everything is fine is a light you
@@ -727,7 +732,7 @@ panel, beside the help overlay and the picker. This is not tidiness: panels are
 drawn in order, so anything a panel paints outside its own rectangle is painted
 over by the panels after it. The zone picker was first written to draw itself
 and came out interleaved with the task list, because the clock is panel one and
-nine panels are drawn on top of it.
+twelve panels are drawn on top of it.
 
 The corollary is that a panel's `render` must stay inside the rectangle it is
 given. Nothing enforces it; the failure looks like a corrupt terminal.
@@ -776,6 +781,43 @@ the seed run again. The same is true of the task and notes examples, which
 
 `free_backup_path` lives in `store.rs` beside `write_atomic`, not in `config` —
 "do not lose the old file" is that module's job, and three callers need it now.
+
+## Contributions from outside — the first two, and what they cost
+
+The project took its first outside changes on 2026-08-01, both from
+[@krflol](https://github.com/krflol): notes clipboard editing (#177) and
+`mirador --update` (#182). Recorded because the *process* findings outlived
+the features.
+
+**Both surfaced a defect of ours rather than only adding one of theirs.** The
+first found that two tests spawned `true`, which does not exist on Windows —
+green in CI because GitHub's Windows runners ship Git for Windows and it puts a
+`true.exe` on `PATH`, red on any ordinary Windows machine. **A green CI is
+evidence about the runner as much as about the code.** The second was the reason
+anyone looked at the notes reader closely enough to find #178.
+
+**A contributor's PR is measured against a `main` they cannot see the future
+of.** Both of theirs passed CI and then failed to merge cleanly, once on a
+CHANGELOG collision and once on something sharper: with #177 and #182 both in,
+`run()` came to 101 lines against clippy's 100. Neither branch could see it,
+because each was measured against a `main` lacking the other. **Test-merge
+before merging** — the check that matters is the merged result, not either side.
+
+**`maintainerCanModify` did not work.** The flag was true on both PRs and
+pushing to the fork was refused. What actually helps is telling the contributor
+exactly what the conflict is — they rebased #177 themselves, unprompted, within
+hours of being told the resolution was keep-both.
+
+**The identity question arrives from outside too.**
+[Discussion #188](https://github.com/jchultarsky/mirador/discussions/188) asked
+for a terminal widget, opened as a discussion rather than a PR *after* the
+feature was already built and tested — which is the right way round, and worth
+saying so. The answer was that mirador is a pane inside a multiplexer rather
+than a replacement for one; that a terminal panel needs `Ctrl+C` for its child,
+which is the one key the project guarantees always gets you out; and that what
+the case actually wants is a panel that *watches* a process rather than hosts
+one. The filter in "Product decisions already settled" now has to hold against
+people who do not know it exists.
 
 ## Recently settled, so it is not re-litigated
 
@@ -839,9 +881,13 @@ narrower paragraph is still the whole paragraph, where a dropped column is a
 fact the reader no longer has.
 
 The knock-on is worth knowing rather than fixing: jump keys only go up to `9`,
-so a thirteenth panel means `pomodoro` joins `cpu` and `network` in having none.
-The dashboard already had more panels than digits; this changes which three are
-past the end. The blank space in the clock is
+and slots are numbered in row-major order, so the last **four** — `pomodoro`,
+`stocks`, `cpu` and `network` — have none.
+
+This paragraph first said `pomodoro` joined `cpu` and `network`. That undercounts
+by one and names the wrong set: adding the calculator pushed `stocks` past the
+end as well. Worth having recorded, and it went unrecorded in the very paragraph
+that spends four lines protecting `stocks` from losing width. The blank space in the clock is
 inherent to a row sharing its height with weather rather than being waste to
 reclaim. Arrange mode can open, close and now reorder rows, so the row count is a
 gesture rather than a number shipped for everyone.
@@ -933,7 +979,8 @@ The rule is not only "compare against the config"; it is **compare against the
 config in the same terms the panel will report**. A test now asserts that an
 untouched default dashboard writes nothing at all.
 
-**Per-frame allocation, swept across all twelve panels: no further offenders.**
+**Per-frame allocation, swept across twelve of the thirteen panels: no further
+offenders.**
 Three fixes of the same shape in one day looked systemic, so it was measured
 rather than argued about. It was not systemic; the agenda was an outlier.
 
@@ -953,6 +1000,12 @@ notes 1118   calendar 892   todo 885   weather 755   clocks 438
 pomodoro 404  stocks 348    watchlog 271  news 252
 agenda 175    cpu 174       network 159      (whole dashboard: 1345)
 ```
+
+The calculator is the thirteenth and is **not** in that table: it shipped after
+the sweep and has never been measured. It looks compliant — the tape is capped
+and `render` builds only the rows it draws — but nobody has put a counting
+allocator behind it, and a panel that accumulates is the one most worth
+checking.
 
 Nothing here is worth optimising. A thousand small allocations a frame at about
 one frame a second is ordinary work for building styled spans, and the
@@ -1422,7 +1475,9 @@ count what it actually compared so a vacuous pass cannot look like a real one.
 
 ## Feature freeze — lifted 2026-07-30
 
-**The freeze is over.** Features may land again, in a release *before* 1.0.0.
+**The freeze is over**, and has been since before 1.0.0 — it ended the day it
+was lifted, in the releases leading up to that tag. Nothing below is a live
+constraint; it is kept for the reasoning.
 The owner lifted it on 2026-07-30. What is written below is what it was for and
 why it was allowed to end, because the reasoning is the part worth keeping —
 the rule itself is now history.
@@ -1468,12 +1523,24 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**The tracker is empty.** [#153](https://github.com/jchultarsky/mirador/issues/153)
-was the last entry and shipped across 1.0.4 and 1.1.0 — `--reset-config` left
-`state.toml` in place, so the remembered preferences were applied straight back
-over the config it had just restored. See the reset flags section above; the
-half that wanted a decision rather than a patch was whether a true factory reset
-should exist, and it does now.
+**The tracker is empty.** [#178](https://github.com/jchultarsky/mirador/issues/178)
+was the last entry and shipped in 1.4.1 — the notes reader wrapped a whole note
+body on every frame and then scrolled past most of it, so drawing cost what the
+note weighed rather than what the pane showed. The task panel had the identical
+defect one panel over. Both are cached now, and the cost is flat in the size of
+the note.
+
+There is an open **discussion**, which is not the same as an open issue:
+[#188](https://github.com/jchultarsky/mirador/discussions/188) proposes a
+terminal widget. The answer given was that mirador is a pane *inside* tmux or
+zellij rather than a replacement for one, and that what the proposer actually
+wants — to be told when a long task finishes — is a panel that *watches* a
+process rather than one that hosts a shell. Recorded here because it is the
+first identity question the project has been asked from outside.
+
+This heading has now described the wrong issue as the last one three times —
+#132, then #153, now #153 again after #178 closed. The entry is written when
+work starts and nothing makes anybody revisit it when the work lands.
 
 This heading has twice described an issue as open for a day after it was closed
 — #132 before #153. That is the failure it is most prone to, and it is the same
