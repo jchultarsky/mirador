@@ -196,6 +196,59 @@ mod tests {
         );
     }
 
+    /// Every module in `src/` appears in the architecture map.
+    ///
+    /// The map is the first thing a reader consults and the easiest thing to
+    /// forget: it was missing `docs.rs`, `upgrade.rs` and `clipboard.rs` at
+    /// once — one added by a maintainer, one by an outside contributor, one
+    /// mentioned in the prose below but never in the list. None of the other
+    /// checks here could see it, because a module that is absent cites no test
+    /// and no path.
+    ///
+    /// Absence is the failure mode this file exists to catch, and it is the
+    /// one that a citation-based check is structurally blind to. So this
+    /// compares the map against the tree instead.
+    #[test]
+    fn every_module_is_named_in_the_architecture_map() {
+        let notes = notes();
+        let map = notes
+            .split("## Architecture")
+            .nth(1)
+            .and_then(|rest| rest.split("```").nth(1))
+            .expect("CLAUDE.md must carry an ```-fenced map under `## Architecture`");
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = Vec::new();
+        for entry in std::fs::read_dir(&root).expect("src/ must exist").flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                // `main.rs` is the entry point rather than a component, and the
+                // map opens by describing it in prose instead of listing it.
+                if name == "main.rs" {
+                    continue;
+                }
+                if !map.contains(&name) {
+                    missing.push(name);
+                }
+            }
+        }
+        missing.sort();
+
+        assert!(
+            missing.is_empty(),
+            "the architecture map does not mention {}: {missing:?}\n\n\
+             Add a line for each. The map is what a reader consults first, and \
+             a module missing from it is a module they will not know exists — \
+             which is exactly how three of them went unlisted at once.",
+            missing.len()
+        );
+    }
+
     /// The discriminator is empirical, so it is worth knowing when it stops
     /// selecting anything — a filter that matches nothing passes every time
     /// and checks nothing, which is the shape of failure this whole module

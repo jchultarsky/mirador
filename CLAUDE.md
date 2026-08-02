@@ -125,6 +125,8 @@ layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
 store.rs     write_atomic — every file mirador owns goes through it
 state.rs     UI-changed preferences, remembered across restarts
 update.rs    the opt-in update check — off unless the config turns it on
+upgrade.rs   `--update`: hands an installer copy to `mirador-update` and a
+             crates.io copy back to Cargo, and refuses anything it does not own
 watch.rs     the watch log's events and the rule that decides what is one
 feed.rs      enough RSS for a headline; quick-xml, unlike ical.rs — see below
 task.rs      task model + TOML store
@@ -133,11 +135,15 @@ quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
 poll.rs      the sliced sleep the two fetch threads share
 samples.rs   the bounded history behind the cpu and network graphs
 selection.rs list cursor movement and click-to-row
+clipboard.rs OSC 52, with base64 hand-rolled rather than taken as a dependency
 textfield.rs single-line text editor used by task entry
-textarea.rs  multi-line text editor used by note bodies
+textarea.rs  multi-line text editor used by note bodies, with the
+             selection the notes clipboard acts on
 dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 calc.rs      the calculator's parser: precedence, brackets, bounded depth
+docs.rs      the guard on *this file* — cited tests, version, paths, and that
+             every module below is listed
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, network, calculator
 ```
