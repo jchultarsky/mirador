@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Notes can select, copy and paste body text as a scratchpad.** Shift plus
+  the navigation keys extend a visible selection and `Ctrl+A` selects the
+  whole body. `Ctrl+C` sends the selection to the terminal clipboard while
+  retaining an internal copy, and `Ctrl+V` inserts or replaces from that copy
+  even when the terminal declines OSC 52. Typing and deletion replace selected
+  text as expected, bracketed terminal paste preserves outside multiline text,
+  and the editing border and footer expose the active keys.
 - **`mirador --update` upgrades both installer- and Cargo-managed copies.** It
   hands release installs to the existing `mirador-update` helper and crates.io
   installs back to Cargo, so the dashboard can advertise one command without

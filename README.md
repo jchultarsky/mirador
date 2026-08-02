@@ -386,6 +386,15 @@ it turns "glance at the dashboard" into "operate the dashboard". `/` searches
 bodies as well as titles, because the title you wrote in a hurry is often not
 what you later search for.
 
+Open a note with `Enter`, then move to its body with `Tab`. `Shift` plus the
+arrow keys (or `Home`/`End`) selects text, and `Ctrl+A` selects the whole body.
+`Ctrl+C` sends that selection to the terminal clipboard and also keeps an
+in-Mirador copy; `Ctrl+V` pastes that copy at the cursor or replaces the next
+selection. Typing, Backspace and Delete replace selected text too. With
+nothing selected, `Ctrl+C` keeps its ordinary terminal meaning and quits.
+Your terminal's normal paste shortcut remains the way to bring outside text
+into the note; multiline pastes and literal tabs are kept intact in the body.
+
 ### Clock and calendar
 
 The first configured zone renders large; the rest become a table showing their

@@ -46,8 +46,9 @@ use crate::theme::{Gradients, Theme};
 /// Whether a panel handled an input event, or wants it to fall through to the
 /// application's global bindings.
 ///
-/// Shared by [`Panel::handle_key`] and [`Panel::handle_mouse`]: the two differ
-/// in what they receive, not in how the shell reacts to the answer.
+/// Shared by [`Panel::handle_key`], [`Panel::copy_selection`],
+/// [`Panel::handle_paste`] and [`Panel::handle_mouse`]: they differ in what
+/// they receive, not in how the shell reacts to the answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOutcome {
     /// The panel used the event; the app should not act on it.
@@ -271,6 +272,20 @@ pub trait Panel {
 
     /// Handle a key event while focused.
     fn handle_key(&mut self, _key: KeyEvent) -> KeyOutcome {
+        KeyOutcome::Ignored
+    }
+
+    /// Copy an active editor selection before the shell treats `Ctrl+C` as
+    /// quit. Returning [`KeyOutcome::Ignored`] preserves the ordinary terminal
+    /// interrupt everywhere there is no text selected.
+    fn copy_selection(&mut self) -> KeyOutcome {
+        KeyOutcome::Ignored
+    }
+
+    /// Insert one bracketed paste while focused. Editors that care about hard
+    /// lines or literal tabs override this; the shell retains a key-by-key
+    /// fallback for older single-line forms.
+    fn handle_paste(&mut self, _text: &str) -> KeyOutcome {
         KeyOutcome::Ignored
     }
 

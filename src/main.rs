@@ -47,7 +47,8 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
-    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture,
 };
 use ratatui::crossterm::execute;
 
@@ -310,6 +311,52 @@ fn factory_reset(config_path: &Path, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Ask the terminal for the reporting modes the dashboard needs, and arrange
+/// for every one of them to be released again.
+///
+/// Split out of [`run`] because that function was one line over the length
+/// clippy allows — and it was two independent pull requests that pushed it
+/// there, neither of which was long on its own. The grouping is not arbitrary:
+/// everything here is a mode that outlives the process if it is not turned
+/// off, which is why each one is paired with a panic hook rather than only an
+/// exit path.
+fn enable_terminal_modes(mouse: bool) -> Result<()> {
+    // Asks the terminal to say when its window gains or loses focus, which is
+    // the only signal there is for "the reader is actually here" — everything
+    // else measures interaction, and a dashboard you glance at is precisely one
+    // you do not touch. Bracketed paste comes along beside it so a multiline
+    // paste arrives as one block rather than as a burst of keystrokes.
+    //
+    // Failure is ignored on purpose: plenty of terminals implement neither, and
+    // the watch log falls back to the last keypress.
+    let _ = execute!(std::io::stdout(), EnableFocusChange, EnableBracketedPaste);
+
+    // Focus reporting and bracketed paste are released on the way out, and on
+    // a panic, for the same reason mouse capture is: either mode left enabled
+    // writes control sequences into the user's shell after mirador is gone.
+    {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
+            previous(info);
+        }));
+    }
+
+    if mouse {
+        // ratatui's hook knows nothing about mouse capture, and a terminal
+        // left holding the mouse turns every later click in the user's shell
+        // into escape-sequence garbage. Chain a hook that releases it first.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            previous(info);
+        }));
+        execute!(std::io::stdout(), EnableMouseCapture).context("enabling mouse reporting")?;
+    }
+
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = parse_args(std::env::args().skip(1))?;
 
@@ -409,41 +456,14 @@ fn run() -> Result<()> {
     // panic leaves the user with a working shell rather than a broken one.
     let mut terminal = ratatui::init();
 
-    // Asks the terminal to say when its window gains or loses focus, which is
-    // the only signal there is for "the reader is actually here" — everything
-    // else measures interaction, and a dashboard you glance at is precisely one
-    // you do not touch. Failure is ignored on purpose: plenty of terminals do
-    // not implement it, and the watch log falls back to the last keypress.
-    let _ = execute!(std::io::stdout(), EnableFocusChange);
-
-    // Released on the way out, and on a panic, for the same reason mouse
-    // capture is: a terminal left reporting focus writes escape sequences into
-    // the user's shell every time they switch windows.
-    {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableFocusChange);
-            previous(info);
-        }));
-    }
-
-    if mouse {
-        // ratatui's hook knows nothing about mouse capture, and a terminal
-        // left holding the mouse turns every later click in the user's shell
-        // into escape-sequence garbage. Chain a hook that releases it first.
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableMouseCapture);
-            previous(info);
-        }));
-        execute!(std::io::stdout(), EnableMouseCapture).context("enabling mouse reporting")?;
-    }
+    enable_terminal_modes(mouse)?;
 
     let result = app.run(&mut terminal);
 
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
+    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     let _ = execute!(std::io::stdout(), DisableFocusChange);
     ratatui::restore();
     result
