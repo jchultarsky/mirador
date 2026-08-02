@@ -32,7 +32,7 @@ use crate::theme::Theme;
 /// One declaration feeds the border hint, the status bar and the help overlay,
 /// and `every_documented_key_works_and_every_working_key_is_documented` fails
 /// if this list and the code drift apart.
-const BINDINGS: &[Binding] = &[
+const LIST_BINDINGS: &[Binding] = &[
     Binding::primary("a", "new"),
     Binding::primary("↵", "edit"),
     Binding::primary("d", "delete"),
@@ -46,6 +46,37 @@ const BINDINGS: &[Binding] = &[
     Binding::extra("/", "search"),
     Binding::extra("Esc", "clear search"),
     Binding::extra("o", "show file path"),
+];
+
+/// Editing has a different vocabulary from browsing. Keeping it separate puts
+/// the scratchpad's selection and clipboard actions in the border while the
+/// form is open instead of continuing to advertise list actions that cannot
+/// work there.
+const TITLE_EDIT_BINDINGS: &[Binding] = &[
+    Binding::primary("Tab", "body"),
+    Binding::primary("Ctrl+S", "save"),
+    Binding::primary("Esc", "cancel"),
+];
+
+const BODY_EDIT_BINDINGS: &[Binding] = &[
+    Binding::primary("Shift+←↑→↓", "select"),
+    Binding::primary("Ctrl+V", "paste"),
+    Binding::primary("Ctrl+S", "save"),
+    Binding::extra("Ctrl+A", "select all"),
+    Binding::extra("Ctrl+C", "copy selection"),
+    Binding::extra("Tab", "change field"),
+    Binding::extra("Esc", "cancel"),
+];
+
+/// Once text is selected, the next useful action is copying or replacing it.
+const SELECTION_BINDINGS: &[Binding] = &[
+    Binding::primary("Ctrl+C", "copy"),
+    Binding::primary("Ctrl+V", "paste"),
+    Binding::primary("Ctrl+S", "save"),
+    Binding::extra("Shift+←↑→↓", "adjust selection"),
+    Binding::extra("Ctrl+A", "select all"),
+    Binding::extra("Tab", "change field"),
+    Binding::extra("Esc", "cancel"),
 ];
 
 /// Columns of the note list. The date is right-aligned so the dates line up.
@@ -144,6 +175,10 @@ pub struct NotesPanel {
     body_area: Option<Rect>,
     /// The selected body, already wrapped. See [`WrappedBody`].
     wrapped_body: Option<WrappedBody>,
+    /// The last body selection copied in this session. OSC 52 cannot read a
+    /// system clipboard back, so keeping the text here is what makes Ctrl+V
+    /// dependable even when the terminal declines the external copy request.
+    clipboard: Option<String>,
 }
 
 impl NotesPanel {
@@ -164,6 +199,7 @@ impl NotesPanel {
             detail_area: None,
             body_area: None,
             wrapped_body: None,
+            clipboard: None,
         };
         panel.refresh_view();
         Ok(panel)
@@ -287,6 +323,59 @@ impl NotesPanel {
         self.status = Some((message.into(), false));
     }
 
+    /// Send the selected body text outward and retain it for an in-editor
+    /// paste. The selection then collapses so another Ctrl+C can quit. The
+    /// injected writer keeps the OSC 52 side effect out of tests.
+    fn copy_body_selection_with(
+        &mut self,
+        copy: impl FnOnce(&str) -> std::io::Result<()>,
+    ) -> KeyOutcome {
+        let selected = match &self.mode {
+            Mode::Edit(form) => form.body.selected_text(),
+            _ => None,
+        };
+        let Some(text) = selected else {
+            return KeyOutcome::Ignored;
+        };
+
+        let count = text.chars().count();
+        self.clipboard = Some(text.clone());
+        self.status = Some(match copy(&text) {
+            // OSC 52 is write-only. "Sent" is true; "copied" is unknowable.
+            Ok(()) => (format!("sent {count} chars — Ctrl+V pastes here"), false),
+            // The internal copy still succeeded, so lead with what remains
+            // usable rather than making the whole action sound lost.
+            Err(error) => (
+                format!("ready to paste; terminal clipboard failed: {error}"),
+                true,
+            ),
+        });
+        if let Mode::Edit(form) = &mut self.mode {
+            form.body.clear_selection();
+        }
+        KeyOutcome::Consumed
+    }
+
+    fn paste_body_clipboard(&mut self) -> KeyOutcome {
+        let Mode::Edit(form) = &mut self.mode else {
+            return KeyOutcome::Ignored;
+        };
+        if form.field != Field::Body {
+            self.set_status("Tab to the body to paste copied text");
+            return KeyOutcome::Consumed;
+        }
+        let Some(text) = self.clipboard.clone() else {
+            self.set_status("nothing copied here yet; terminal paste still works");
+            return KeyOutcome::Consumed;
+        };
+
+        let count = text.chars().count();
+        form.body.insert_text(&text);
+        form.error = None;
+        self.set_status(format!("pasted {count} chars"));
+        KeyOutcome::Consumed
+    }
+
     /// Write the form back, returning an error message to show in the form.
     fn commit_form(&mut self) -> Result<(), String> {
         let Mode::Edit(form) = &self.mode else {
@@ -381,6 +470,10 @@ impl NotesPanel {
     }
 
     fn handle_edit_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('v')) {
+            return self.paste_body_clipboard();
+        }
+
         let Mode::Edit(form) = &mut self.mode else {
             return KeyOutcome::Ignored;
         };
@@ -430,6 +523,7 @@ impl NotesPanel {
                 form.body.handle_key(key);
             }
         }
+        form.error = None;
         KeyOutcome::Consumed
     }
 
@@ -631,8 +725,59 @@ impl NotesPanel {
         }
     }
 
+    /// One editor row, split wherever the selection or caret changes style.
+    fn editor_line(
+        text: &str,
+        caret: Option<usize>,
+        selection: Option<std::ops::Range<usize>>,
+        theme: &Theme,
+    ) -> Line<'static> {
+        let selection = selection.filter(|range| range.start < range.end);
+        let mut cuts = vec![0, text.len()];
+        if let Some(range) = &selection {
+            cuts.extend([range.start, range.end]);
+        }
+        if let Some(at) = caret {
+            cuts.push(at);
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        let mut spans = Vec::new();
+        for pair in cuts.windows(2) {
+            let (start, end) = (pair[0], pair[1]);
+            if caret == Some(start) {
+                spans.push(Span::styled("▏", Style::default().fg(theme.accent)));
+            }
+            if start == end {
+                continue;
+            }
+            let selected = selection
+                .as_ref()
+                .is_some_and(|range| start >= range.start && end <= range.end);
+            let style = if selected {
+                Style::default()
+                    .fg(theme.text)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            spans.push(Span::styled(text[start..end].to_string(), style));
+        }
+        if caret == Some(text.len()) {
+            spans.push(Span::styled("▏", Style::default().fg(theme.accent)));
+        }
+        Line::from(spans)
+    }
+
     /// The edit form, drawn over the whole panel.
-    fn render_form(frame: &mut Frame, area: Rect, theme: &Theme, form: &EditForm) {
+    fn render_form(
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        form: &EditForm,
+        status: Option<(&str, bool)>,
+    ) {
         let rows = Layout::vertical([
             Constraint::Length(1), // heading
             Constraint::Length(1), // title field
@@ -692,31 +837,36 @@ impl NotesPanel {
                 .map(|index| {
                     // The editor scrolls sideways as well as down, so a long
                     // line does not carry the caret off the right-hand edge.
-                    // `visible` owns the arithmetic — it is measured in display
-                    // cells, and getting that wrong here is what invariant 9 is
-                    // about.
-                    let (text, caret) = form.body.visible(index, width);
-                    match caret.filter(|_| editing) {
-                        // Draw the caret inline rather than moving the terminal
-                        // cursor: the panel does not own the screen cursor, and
-                        // a caret that only appears in the focused field is
-                        // what tells the user where typing will land.
-                        Some(at) => Line::from(vec![
-                            Span::styled(text[..at].to_string(), Style::default().fg(theme.text)),
-                            Span::styled("▏", Style::default().fg(theme.accent)),
-                            Span::styled(text[at..].to_string(), Style::default().fg(theme.text)),
-                        ]),
-                        None => Line::from(Span::styled(text, Style::default().fg(theme.text))),
-                    }
+                    // `visible_with_selection` owns the arithmetic — it is
+                    // measured in display cells, and getting that wrong here
+                    // is what invariant 9 is about.
+                    let (text, caret, selection) = form.body.visible_with_selection(index, width);
+                    // Draw the caret inline rather than moving the terminal
+                    // cursor: the panel does not own the screen cursor, and a
+                    // caret that only appears in the focused field is what
+                    // tells the user where typing will land.
+                    Self::editor_line(&text, caret.filter(|_| editing), selection, theme)
                 })
                 .collect();
             frame.render_widget(Paragraph::new(lines), rows[3]);
         }
 
-        let footer = match &form.error {
-            Some(message) => Span::styled(message.clone(), Style::default().fg(theme.error)),
-            None => Span::styled(
-                "Tab field   Ctrl+S save   Esc cancel",
+        let footer = match (&form.error, status) {
+            (Some(message), _) => Span::styled(message.clone(), Style::default().fg(theme.error)),
+            (None, Some((message, is_error))) => Span::styled(
+                message.to_string(),
+                Style::default().fg(if is_error { theme.error } else { theme.muted }),
+            ),
+            (None, None) if form.body.has_selection() => Span::styled(
+                "Ctrl+C copy   Ctrl+V replace   Ctrl+S save",
+                Style::default().fg(theme.muted),
+            ),
+            (None, None) if form.field == Field::Body => Span::styled(
+                "Shift+arrows select   Ctrl+A all   Ctrl+V paste",
+                Style::default().fg(theme.muted),
+            ),
+            (None, None) => Span::styled(
+                "Tab body   Ctrl+S save   Esc cancel",
                 Style::default().fg(theme.muted),
             ),
         };
@@ -749,7 +899,12 @@ impl Panel for NotesPanel {
     }
 
     fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+        match &self.mode {
+            Mode::Edit(form) if form.body.has_selection() => SELECTION_BINDINGS,
+            Mode::Edit(form) if form.field == Field::Body => BODY_EDIT_BINDINGS,
+            Mode::Edit(_) => TITLE_EDIT_BINDINGS,
+            _ => LIST_BINDINGS,
+        }
     }
 
     fn refresh_interval(&self) -> std::time::Duration {
@@ -788,6 +943,37 @@ impl Panel for NotesPanel {
             Mode::Search(_) => self.handle_search_key(key),
             Mode::ConfirmDelete { .. } => self.handle_confirm_key(key),
         }
+    }
+
+    fn copy_selection(&mut self) -> KeyOutcome {
+        self.copy_body_selection_with(crate::clipboard::copy)
+    }
+
+    fn handle_paste(&mut self, text: &str) -> KeyOutcome {
+        self.status = None;
+        let Mode::Edit(form) = &mut self.mode else {
+            return KeyOutcome::Ignored;
+        };
+
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let count = text.chars().count();
+        match form.field {
+            Field::Body => form.body.insert_text(&text),
+            Field::Title => {
+                // A title is one line. Preserve the words from a multiline
+                // paste without letting Enter accidentally submit the form.
+                for character in text.chars() {
+                    match character {
+                        '\n' | '\t' => form.title.insert(' '),
+                        c if !c.is_control() => form.title.insert(c),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        form.error = None;
+        self.set_status(format!("pasted {count} chars from terminal"));
+        KeyOutcome::Consumed
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
@@ -833,7 +1019,11 @@ impl Panel for NotesPanel {
         self.detail_area = None;
 
         if let Mode::Edit(form) = &self.mode {
-            Self::render_form(frame, area, theme, form);
+            let status = self
+                .status
+                .as_ref()
+                .map(|(message, is_error)| (message.as_str(), *is_error));
+            Self::render_form(frame, area, theme, form, status);
             return;
         }
 
@@ -966,6 +1156,10 @@ mod tests {
 
     fn press(p: &mut NotesPanel, code: KeyCode) {
         p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn chord(p: &mut NotesPanel, code: KeyCode, modifiers: KeyModifiers) {
+        p.handle_key(KeyEvent::new(code, modifiers));
     }
 
     fn type_str(p: &mut NotesPanel, text: &str) {
@@ -1206,6 +1400,120 @@ mod tests {
     }
 
     #[test]
+    fn selected_body_text_can_be_copied_and_reused() {
+        let (mut p, _g) = panel("copy-paste");
+        add_note(&mut p, "Scratch", "red blue");
+        press(&mut p, KeyCode::Enter);
+        assert_eq!(p.bindings()[0].key, "Tab", "the title points to the body");
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(p.bindings()[0].action, "select");
+
+        for _ in 0..4 {
+            chord(&mut p, KeyCode::Left, KeyModifiers::SHIFT);
+        }
+        assert_eq!(p.bindings()[0].key, "Ctrl+C");
+        assert_eq!(
+            p.copy_body_selection_with(|text| {
+                assert_eq!(text, "blue");
+                Ok(())
+            }),
+            KeyOutcome::Consumed
+        );
+        assert_eq!(p.clipboard.as_deref(), Some("blue"));
+        let Mode::Edit(form) = &p.mode else {
+            unreachable!()
+        };
+        assert!(!form.body.has_selection(), "copy collapses the selection");
+        assert_eq!(
+            p.copy_body_selection_with(|_| panic!("a second Ctrl+C must fall through")),
+            KeyOutcome::Ignored
+        );
+
+        // Select another word and replace it with the internal copy. This does
+        // not depend on the terminal accepting OSC 52 or exposing a readable
+        // system clipboard.
+        press(&mut p, KeyCode::Home);
+        for _ in 0..3 {
+            chord(&mut p, KeyCode::Right, KeyModifiers::SHIFT);
+        }
+        chord(&mut p, KeyCode::Char('v'), KeyModifiers::CONTROL);
+
+        let Mode::Edit(form) = &p.mode else {
+            unreachable!()
+        };
+        assert_eq!(form.body.value(), "blue blue");
+        assert!(!form.body.has_selection(), "paste consumes the selection");
+        assert_eq!(
+            p.status.as_ref().map(|s| s.0.as_str()),
+            Some("pasted 4 chars")
+        );
+    }
+
+    #[test]
+    fn terminal_paste_preserves_multiline_scratchpad_text() {
+        let (mut p, _g) = panel("terminal-paste");
+        add_note(&mut p, "Scratch", "red blue");
+        press(&mut p, KeyCode::Enter);
+        press(&mut p, KeyCode::Tab);
+        press(&mut p, KeyCode::Home);
+        for _ in 0..3 {
+            chord(&mut p, KeyCode::Right, KeyModifiers::SHIFT);
+        }
+
+        assert_eq!(p.handle_paste("one\r\ntwo\t"), KeyOutcome::Consumed);
+        let Mode::Edit(form) = &p.mode else {
+            unreachable!()
+        };
+        assert_eq!(form.body.value(), "one\ntwo\t blue");
+        assert!(!form.body.has_selection());
+        assert_eq!(
+            p.status.as_ref().map(|s| s.0.as_str()),
+            Some("pasted 8 chars from terminal")
+        );
+    }
+
+    #[test]
+    fn ctrl_c_remains_quit_when_the_editor_has_nothing_to_copy() {
+        let (mut p, _g) = panel("copy-empty");
+        press(&mut p, KeyCode::Char('a'));
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(
+            p.copy_body_selection_with(|_| panic!("copy must not be called")),
+            KeyOutcome::Ignored
+        );
+    }
+
+    #[test]
+    fn a_body_selection_is_visibly_reversed() {
+        let theme = Theme::default();
+        let line = NotesPanel::editor_line("abcd", Some(3), Some(1..3), &theme);
+        let selected: String = line
+            .spans
+            .iter()
+            .filter(|span| span.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(selected, "bc");
+        assert!(line.spans.iter().any(|span| span.content == "▏"));
+    }
+
+    #[test]
+    fn copy_and_paste_both_reach_the_border_at_the_default_width() {
+        let line = crate::frame::hint_line(
+            SELECTION_BINDINGS,
+            &Theme::default(),
+            28, // a 36-column default Notes panel reserves eight for its frame
+        )
+        .expect("the selected-text actions should fit");
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(text.contains("Ctrl+C copy · Ctrl+V paste"), "got {text:?}");
+    }
+
+    #[test]
     fn editing_an_existing_note_updates_it_in_place() {
         let (mut p, _g) = panel("edit");
         add_note(&mut p, "Original", "body");
@@ -1329,7 +1637,7 @@ mod tests {
     fn every_documented_key_works_and_every_working_key_is_documented() {
         for (code, key) in DOCUMENTED_LIST_KEYS {
             assert!(
-                BINDINGS.iter().any(|b| b.key == *key),
+                LIST_BINDINGS.iter().any(|b| b.key == *key),
                 "`{key}` is handled but missing from BINDINGS, so nothing tells the user it exists"
             );
 

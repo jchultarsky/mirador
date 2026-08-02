@@ -10,6 +10,8 @@
 //! soft wrap that moves as you type makes the cursor impossible to follow. The
 //! reader wraps; the editor does not.
 
+use std::ops::Range;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone)]
@@ -20,6 +22,8 @@ pub struct TextArea {
     row: usize,
     /// Cursor position within the line, in characters.
     col: usize,
+    /// Fixed end of a keyboard selection. The cursor is its moving end.
+    selection_anchor: Option<(usize, usize)>,
 }
 
 impl Default for TextArea {
@@ -34,6 +38,7 @@ impl TextArea {
             lines: vec![String::new()],
             row: 0,
             col: 0,
+            selection_anchor: None,
         }
     }
 
@@ -46,7 +51,12 @@ impl TextArea {
         }
         let row = lines.len() - 1;
         let col = lines[row].chars().count();
-        Self { lines, row, col }
+        Self {
+            lines,
+            row,
+            col,
+            selection_anchor: None,
+        }
     }
 
     /// The text, with lines joined by `\n`.
@@ -78,14 +88,135 @@ impl TextArea {
         self.lines.get(row).map_or(0, |l| l.chars().count())
     }
 
-    pub fn insert(&mut self, c: char) {
+    fn position(&self) -> (usize, usize) {
+        (self.row, self.col)
+    }
+
+    /// The selection in document order, excluding a collapsed anchor.
+    fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.position();
+        if anchor == cursor {
+            return None;
+        }
+        Some(if anchor < cursor {
+            (anchor, cursor)
+        } else {
+            (cursor, anchor)
+        })
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection().is_some()
+    }
+
+    /// Collapse the active selection without moving the cursor.
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    /// Text between the anchor and cursor, preserving hard line breaks.
+    pub fn selected_text(&self) -> Option<String> {
+        let ((start_row, start_col), (end_row, end_col)) = self.selection()?;
+        if start_row == end_row {
+            let line = &self.lines[start_row];
+            return Some(
+                line[Self::byte_at(line, start_col)..Self::byte_at(line, end_col)].to_string(),
+            );
+        }
+
+        let mut selected = String::new();
+        let first = &self.lines[start_row];
+        selected.push_str(&first[Self::byte_at(first, start_col)..]);
+        selected.push('\n');
+        for row in start_row + 1..end_row {
+            selected.push_str(&self.lines[row]);
+            selected.push('\n');
+        }
+        let last = &self.lines[end_row];
+        selected.push_str(&last[..Self::byte_at(last, end_col)]);
+        Some(selected)
+    }
+
+    /// Select the complete body. An empty body has nothing to select.
+    pub fn select_all(&mut self) {
+        let end_row = self.lines.len() - 1;
+        let end_col = self.line_len(end_row);
+        self.row = end_row;
+        self.col = end_col;
+        self.selection_anchor = ((end_row, end_col) != (0, 0)).then_some((0, 0));
+    }
+
+    /// Delete the selected range and leave the cursor where it began.
+    fn delete_selection(&mut self) -> bool {
+        let Some(((start_row, start_col), (end_row, end_col))) = self.selection() else {
+            self.selection_anchor = None;
+            return false;
+        };
+
+        if start_row == end_row {
+            let line = &mut self.lines[start_row];
+            let start = Self::byte_at(line, start_col);
+            let end = Self::byte_at(line, end_col);
+            line.replace_range(start..end, "");
+        } else {
+            let first = &self.lines[start_row];
+            let mut joined = first[..Self::byte_at(first, start_col)].to_string();
+            let last = &self.lines[end_row];
+            joined.push_str(&last[Self::byte_at(last, end_col)..]);
+            self.lines
+                .splice(start_row..=end_row, std::iter::once(joined));
+        }
+
+        self.row = start_row;
+        self.col = start_col;
+        self.selection_anchor = None;
+        true
+    }
+
+    fn insert_at_cursor(&mut self, c: char) {
         let byte = Self::byte_at(&self.lines[self.row], self.col);
         self.lines[self.row].insert(byte, c);
         self.col += 1;
     }
 
+    pub fn insert(&mut self, c: char) {
+        self.delete_selection();
+        self.insert_at_cursor(c);
+    }
+
+    /// Insert a block at the cursor, replacing the active selection.
+    /// Windows and old-Mac line endings become the editor's `\n` hard lines.
+    pub fn insert_text(&mut self, text: &str) {
+        self.delete_selection();
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut parts = text.split('\n');
+        let first = parts.next().unwrap_or_default();
+        let rest: Vec<&str> = parts.collect();
+
+        let byte = Self::byte_at(&self.lines[self.row], self.col);
+        let tail = self.lines[self.row].split_off(byte);
+        self.lines[self.row].push_str(first);
+        self.col += first.chars().count();
+
+        if rest.is_empty() {
+            self.lines[self.row].push_str(&tail);
+            return;
+        }
+
+        let start_row = self.row;
+        for (offset, part) in rest.iter().enumerate() {
+            self.lines
+                .insert(start_row + offset + 1, (*part).to_string());
+        }
+        self.row = start_row + rest.len();
+        self.col = rest.last().map_or(0, |part| part.chars().count());
+        self.lines[self.row].push_str(&tail);
+    }
+
     /// Split the current line at the cursor.
     pub fn newline(&mut self) {
+        self.delete_selection();
         let byte = Self::byte_at(&self.lines[self.row], self.col);
         let tail = self.lines[self.row].split_off(byte);
         self.lines.insert(self.row + 1, tail);
@@ -95,6 +226,9 @@ impl TextArea {
 
     /// Delete backwards, joining with the previous line at the start of a line.
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.col > 0 {
             let byte = Self::byte_at(&self.lines[self.row], self.col - 1);
             self.lines[self.row].remove(byte);
@@ -109,6 +243,9 @@ impl TextArea {
 
     /// Delete forwards, pulling the next line up at the end of a line.
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if self.col < self.line_len(self.row) {
             let byte = Self::byte_at(&self.lines[self.row], self.col);
             self.lines[self.row].remove(byte);
@@ -118,7 +255,7 @@ impl TextArea {
         }
     }
 
-    pub fn left(&mut self) {
+    fn move_left(&mut self) {
         if self.col > 0 {
             self.col -= 1;
         } else if self.row > 0 {
@@ -127,7 +264,7 @@ impl TextArea {
         }
     }
 
-    pub fn right(&mut self) {
+    fn move_right(&mut self) {
         if self.col < self.line_len(self.row) {
             self.col += 1;
         } else if self.row + 1 < self.lines.len() {
@@ -136,7 +273,7 @@ impl TextArea {
         }
     }
 
-    pub fn up(&mut self) {
+    fn move_up(&mut self) {
         if self.row > 0 {
             self.row -= 1;
             // Keep the column where it was if the new line is long enough,
@@ -145,19 +282,69 @@ impl TextArea {
         }
     }
 
-    pub fn down(&mut self) {
+    fn move_down(&mut self) {
         if self.row + 1 < self.lines.len() {
             self.row += 1;
             self.col = self.col.min(self.line_len(self.row));
         }
     }
 
-    pub fn home(&mut self) {
+    fn move_home(&mut self) {
         self.col = 0;
     }
 
-    pub fn end(&mut self) {
+    fn move_end(&mut self) {
         self.col = self.line_len(self.row);
+    }
+
+    fn extend(&mut self, movement: fn(&mut Self)) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.position());
+        }
+        movement(self);
+        if self.selection_anchor == Some(self.position()) {
+            self.selection_anchor = None;
+        }
+    }
+
+    pub fn left(&mut self) {
+        if let Some((start, _)) = self.selection() {
+            (self.row, self.col) = start;
+            self.selection_anchor = None;
+        } else {
+            self.selection_anchor = None;
+            self.move_left();
+        }
+    }
+
+    pub fn right(&mut self) {
+        if let Some((_, end)) = self.selection() {
+            (self.row, self.col) = end;
+            self.selection_anchor = None;
+        } else {
+            self.selection_anchor = None;
+            self.move_right();
+        }
+    }
+
+    pub fn up(&mut self) {
+        self.selection_anchor = None;
+        self.move_up();
+    }
+
+    pub fn down(&mut self) {
+        self.selection_anchor = None;
+        self.move_down();
+    }
+
+    pub fn home(&mut self) {
+        self.selection_anchor = None;
+        self.move_home();
+    }
+
+    pub fn end(&mut self) {
+        self.selection_anchor = None;
+        self.move_end();
     }
 
     /// Handle a key, returning whether it was used.
@@ -167,7 +354,12 @@ impl TextArea {
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            KeyCode::Char('a') if ctrl => {
+                self.select_all();
+                true
+            }
             // Alt is excluded as well as Ctrl, which it was not: `Alt+x` typed
             // an `x` into the note. `TextField` had always excluded both, and
             // two editors sitting side by side disagreeing about what a chord
@@ -187,6 +379,30 @@ impl TextArea {
             }
             KeyCode::Delete => {
                 self.delete();
+                true
+            }
+            KeyCode::Left if shift => {
+                self.extend(Self::move_left);
+                true
+            }
+            KeyCode::Right if shift => {
+                self.extend(Self::move_right);
+                true
+            }
+            KeyCode::Up if shift => {
+                self.extend(Self::move_up);
+                true
+            }
+            KeyCode::Down if shift => {
+                self.extend(Self::move_down);
+                true
+            }
+            KeyCode::Home if shift => {
+                self.extend(Self::move_home);
+                true
+            }
+            KeyCode::End if shift => {
+                self.extend(Self::move_end);
                 true
             }
             KeyCode::Left => {
@@ -261,13 +477,27 @@ impl TextArea {
     ///
     /// Measured in cells throughout, per invariant 9: a note written in
     /// Japanese would otherwise scroll by half a glyph at a time.
+    #[cfg(test)]
     pub fn visible(&self, row: usize, width: usize) -> (String, Option<usize>) {
+        let (text, caret, _) = self.visible_with_selection(row, width);
+        (text, caret)
+    }
+
+    /// The visible line plus the selected byte range inside that visible text.
+    /// Byte offsets are safe to slice because they are recorded only at UTF-8
+    /// character boundaries while the string is assembled.
+    pub fn visible_with_selection(
+        &self,
+        row: usize,
+        width: usize,
+    ) -> (String, Option<usize>, Option<Range<usize>>) {
         if width == 0 {
-            return (String::new(), None);
+            return (String::new(), None, None);
         }
         let line = self.lines.get(row).map_or("", String::as_str);
         let skip = self.h_offset(width);
         let here = row == self.row;
+        let selection = self.selection();
         // The caret occupies a cell of its own on the row that carries it.
         let budget = if here { width - 1 } else { width };
 
@@ -275,6 +505,8 @@ impl TextArea {
         let mut consumed = 0usize;
         let mut drawn = 0usize;
         let mut caret = None;
+        let mut selected_start = None;
+        let mut selected_end = 0usize;
         for (index, c) in line.chars().enumerate() {
             if here && index == self.col && caret.is_none() && consumed >= skip {
                 caret = Some(out.len());
@@ -284,7 +516,16 @@ impl TextArea {
                 if drawn + w > budget {
                     break;
                 }
+                let selected = selection
+                    .is_some_and(|(start, end)| (row, index) >= start && (row, index) < end);
+                let at = out.len();
                 out.push(c);
+                if selected {
+                    if selected_start.is_none() {
+                        selected_start = Some(at);
+                    }
+                    selected_end = out.len();
+                }
                 drawn += w;
             }
             consumed += w;
@@ -294,7 +535,24 @@ impl TextArea {
         if here && caret.is_none() && self.col >= line.chars().count() {
             caret = Some(out.len());
         }
-        (out, caret)
+        // A line break is text too. Represent a selected newline with one
+        // reversed cell at the line's end; without it, selecting the break
+        // between two lines (or an empty line) looked exactly like selecting
+        // nothing even though copy and replacement included `\n`.
+        let line_end = (row, line.chars().count());
+        let newline_selected = row + 1 < self.lines.len()
+            && selection.is_some_and(|(start, end)| start <= line_end && end > line_end);
+        let reached_line_end = consumed >= crate::grid::display_width(line);
+        if newline_selected && reached_line_end && drawn < budget {
+            let at = out.len();
+            out.push(' ');
+            if selected_start.is_none() {
+                selected_start = Some(at);
+            }
+            selected_end = out.len();
+        }
+        let selected = selected_start.map(|start| start..selected_end);
+        (out, caret, selected)
     }
 }
 
@@ -308,6 +566,10 @@ mod tests {
 
     fn press(a: &mut TextArea, code: KeyCode) -> bool {
         a.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn chord(a: &mut TextArea, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        a.handle_key(KeyEvent::new(code, modifiers))
     }
 
     #[test]
@@ -419,6 +681,77 @@ mod tests {
         let mut a = TextArea::new();
         assert!(!a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert_eq!(a.value(), "", "Ctrl+C must not insert a `c`");
+    }
+
+    #[test]
+    fn shift_navigation_selects_exact_text_in_either_direction() {
+        let mut a = area("one\ntwö");
+        for _ in 0..3 {
+            chord(&mut a, KeyCode::Left, KeyModifiers::SHIFT);
+        }
+        assert_eq!(a.selected_text().as_deref(), Some("twö"));
+
+        chord(&mut a, KeyCode::Up, KeyModifiers::SHIFT);
+        assert_eq!(
+            a.selected_text().as_deref(),
+            Some("one\ntwö"),
+            "a backwards multi-line selection keeps its hard line break"
+        );
+        assert_eq!(a.cursor(), (0, 0), "the cursor is the moving end");
+    }
+
+    #[test]
+    fn typing_and_deletion_replace_the_selection() {
+        for key in [KeyCode::Char('x'), KeyCode::Backspace, KeyCode::Delete] {
+            let mut a = area("red blue");
+            for _ in 0..4 {
+                chord(&mut a, KeyCode::Left, KeyModifiers::SHIFT);
+            }
+            press(&mut a, key);
+            let want = if matches!(key, KeyCode::Char(_)) {
+                "red x"
+            } else {
+                "red "
+            };
+            assert_eq!(a.value(), want, "replacement with {key:?}");
+            assert!(!a.has_selection());
+        }
+    }
+
+    #[test]
+    fn ctrl_a_selects_the_whole_body_and_paste_replaces_it() {
+        let mut a = area("first\nsecond");
+        chord(&mut a, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(a.selected_text().as_deref(), Some("first\nsecond"));
+
+        a.insert_text("new\r\nbody");
+        assert_eq!(a.value(), "new\nbody");
+        assert_eq!(a.cursor(), (1, 4));
+        assert!(!a.has_selection());
+    }
+
+    #[test]
+    fn the_visible_window_reports_which_bytes_are_selected() {
+        let mut a = area("aé日z");
+        a.home();
+        for _ in 0..3 {
+            chord(&mut a, KeyCode::Right, KeyModifiers::SHIFT);
+        }
+        let (text, caret, selected) = a.visible_with_selection(0, 20);
+        assert_eq!(text, "aé日z");
+        assert_eq!(caret, Some("aé日".len()));
+        assert_eq!(selected, Some(0.."aé日".len()));
+    }
+
+    #[test]
+    fn selecting_only_a_line_break_is_still_visible() {
+        let mut a = area("one\n");
+        chord(&mut a, KeyCode::Left, KeyModifiers::SHIFT);
+        assert_eq!(a.selected_text().as_deref(), Some("\n"));
+
+        let (text, _, selected) = a.visible_with_selection(0, 20);
+        assert_eq!(text, "one ");
+        assert_eq!(selected, Some(3..4), "the final cell marks the newline");
     }
 
     /// The two editors have to agree about this. `TextField` excluded Alt from

@@ -565,6 +565,7 @@ impl App {
                         self.persist_preferences();
                         dirty = true;
                     }
+                    Event::Paste(text) => dirty |= self.handle_paste(&text),
                     Event::Mouse(mouse) => dirty |= self.handle_mouse(mouse),
                     // Resize re-runs layout against the new frame size, which
                     // is the next draw's job — but that draw has to happen.
@@ -767,9 +768,17 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+C always quits, even mid-form, because a terminal user expects
-        // it to and there is no state we would lose: panels save as they go.
+        // Ctrl+C remains the terminal's quit key unless the focused editor has
+        // an actual text selection to copy. Merely being inside a form is not
+        // enough to steal the interrupt: with no selection, it still quits as
+        // it always has.
         if ctrl && matches!(key.code, KeyCode::Char('c')) {
+            let copied = self.slots.get_mut(self.focus).is_some_and(|slot| {
+                slot.panel.copy_selection() == crate::panel::KeyOutcome::Consumed
+            });
+            if copied {
+                return;
+            }
             self.should_quit = true;
             return;
         }
@@ -850,6 +859,53 @@ impl App {
         }
 
         self.dispatch_key(key);
+    }
+
+    /// Route a terminal bracketed paste to the focused editor.
+    ///
+    /// A panel can consume the whole block so a multiline editor preserves
+    /// hard lines and literal tabs. Older form fields still receive the same
+    /// printable key stream they did before bracketed paste was enabled; it is
+    /// dispatched straight to the capturing panel so pasted `q` cannot become
+    /// a global quit command.
+    fn handle_paste(&mut self, text: &str) -> bool {
+        self.show_update_hint = false;
+        self.watch.mark_seen();
+
+        if self.show_help {
+            self.show_help = false;
+            return true;
+        }
+        if self.theme_picker.is_some() || self.picker.is_some() || self.arranging.is_some() {
+            return false;
+        }
+
+        let Some(slot) = self.slots.get_mut(self.focus) else {
+            return false;
+        };
+        if slot.panel.handle_paste(text) == crate::panel::KeyOutcome::Consumed {
+            return true;
+        }
+        if !slot.panel.captures_input() {
+            return false;
+        }
+
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut used = false;
+        for character in text.chars() {
+            let code = match character {
+                '\n' => KeyCode::Enter,
+                '\t' => KeyCode::Tab,
+                c if !c.is_control() => KeyCode::Char(c),
+                _ => continue,
+            };
+            used = slot
+                .panel
+                .handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+                == crate::panel::KeyOutcome::Consumed
+                || used;
+        }
+        used
     }
 
     /// Open arrange mode, remembering what to go back to.
@@ -3170,6 +3226,56 @@ mod tests {
             !app.should_quit,
             "Esc means back out of something, not quit"
         );
+    }
+
+    #[test]
+    fn clipboard_inputs_reach_the_editor_before_global_keys() {
+        struct CopyPanel {
+            selected: bool,
+            pasted: std::rc::Rc<std::cell::RefCell<String>>,
+        }
+
+        impl crate::panel::Panel for CopyPanel {
+            fn title(&self) -> String {
+                "copy test".to_string()
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+
+            fn copy_selection(&mut self) -> crate::panel::KeyOutcome {
+                if std::mem::take(&mut self.selected) {
+                    crate::panel::KeyOutcome::Consumed
+                } else {
+                    crate::panel::KeyOutcome::Ignored
+                }
+            }
+
+            fn handle_paste(&mut self, text: &str) -> crate::panel::KeyOutcome {
+                self.pasted.borrow_mut().push_str(text);
+                crate::panel::KeyOutcome::Consumed
+            }
+        }
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        let pasted = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        app.slots[0].panel = Box::new(CopyPanel {
+            selected: true,
+            pasted: pasted.clone(),
+        });
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        app.handle_key(ctrl_c);
+        assert!(!app.should_quit, "the selection gets Ctrl+C first");
+        assert!(app.handle_paste("one\n\ttwo"));
+        assert_eq!(&*pasted.borrow(), "one\n\ttwo", "paste stays one block");
+        app.handle_key(ctrl_c);
+        assert!(app.should_quit, "without a selection Ctrl+C still quits");
     }
 
     #[test]

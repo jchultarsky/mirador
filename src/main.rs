@@ -46,7 +46,8 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use ratatui::crossterm::event::{
-    DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture,
+    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, EnableMouseCapture,
 };
 use ratatui::crossterm::execute;
 
@@ -407,15 +408,15 @@ fn run() -> Result<()> {
     // else measures interaction, and a dashboard you glance at is precisely one
     // you do not touch. Failure is ignored on purpose: plenty of terminals do
     // not implement it, and the watch log falls back to the last keypress.
-    let _ = execute!(std::io::stdout(), EnableFocusChange);
+    let _ = execute!(std::io::stdout(), EnableFocusChange, EnableBracketedPaste);
 
-    // Released on the way out, and on a panic, for the same reason mouse
-    // capture is: a terminal left reporting focus writes escape sequences into
-    // the user's shell every time they switch windows.
+    // Focus reporting and bracketed paste are released on the way out, and on
+    // a panic, for the same reason mouse capture is: either mode left enabled
+    // writes control sequences into the user's shell after mirador is gone.
     {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableFocusChange);
+            let _ = execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
             previous(info);
         }));
     }
@@ -437,6 +438,7 @@ fn run() -> Result<()> {
     if mouse {
         let _ = execute!(std::io::stdout(), DisableMouseCapture);
     }
+    let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     let _ = execute!(std::io::stdout(), DisableFocusChange);
     ratatui::restore();
     result

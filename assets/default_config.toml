@@ -225,8 +225,8 @@ horizon_days   = 0             # hide tasks due further out than this; 0 = show 
 #
 # Free-form notes, listed by title and date with the selected one's body beside
 # the list. `a` writes one, `Enter` opens it, `d` deletes, `/` searches both
-# titles and bodies. In the editor, Tab moves between title and body, Enter in
-# the body is a new line, and Ctrl+S saves.
+# titles and bodies. Editor: Tab changes field, Enter makes a body line, Ctrl+S
+# saves; Shift+arrows selects, Ctrl+A all, Ctrl+C copies, and Ctrl+V pastes.
 #
 # `preview` puts the note body "below" the list or "beside" it. Below by
 # default: beside splits a finite width between a list that wants room for
