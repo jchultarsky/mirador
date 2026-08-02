@@ -1625,6 +1625,36 @@ and had to be added back was the one that did not.
   been installed alongside by the same installer and never run there. Every
   shipped binary on every shipped target has now been executed at least once.
 
+  **Running an installer edits the real shell profile, and `HOME` does not stop
+  it.** The shell and PowerShell installers append a `. <prefix>/env` line to
+  `~/.zshrc` and `~/.profile` so the new binary lands on `PATH`. Pointing `HOME`
+  at a scratch directory contains the *install* and not the *profile edit*, so
+  the lines are written to the real files and outlive the test.
+
+  This is not hypothetical. Two such lines sat in `~/.zshrc` and two more in
+  `~/.profile` from an installer test that used a temporary directory; the
+  directory was later reaped and every new terminal then opened with
+
+  ```
+  /Users/julian/.zshrc:.:127: no such file or directory: /private/tmp/.../scratchpad/inst/env
+  ```
+
+  Nothing failed at the time, which is what made it survive. The install worked,
+  the test passed, and the breakage arrived weeks later when something unrelated
+  cleaned up the directory — by which time the cause was nowhere near the
+  symptom.
+
+  So: **after testing an installer, grep the shell profiles and take the lines
+  back out.**
+
+  ```sh
+  grep -n "$TMPDIR\|/private/tmp\|/var/folders" ~/.zshrc ~/.profile ~/.zprofile ~/.zshenv
+  ```
+
+  Back the files up before editing them, and start a real login shell
+  afterwards — `zsh -l -i -c true` — because a profile that fails to source is
+  the one kind of damage you cannot see from inside the session that caused it.
+
   `aarch64-pc-windows-msvc` is deliberately absent because `ring`, reached
   through `ureq`'s TLS, does not build for it. musl is absent for the same
   C-toolchain reason. `ring` is also why the Windows target cannot be
