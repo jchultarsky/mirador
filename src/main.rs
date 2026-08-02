@@ -36,6 +36,7 @@ mod theme;
 mod theme_picker;
 mod themes;
 mod update;
+mod upgrade;
 mod watch;
 mod widgets;
 mod zones;
@@ -70,6 +71,7 @@ OPTIONS:
         --reset-config     Replace the config with the defaults, keeping a copy
         --factory-reset    Start over: config, preferences, tasks, notes and
                            watchlist all set aside, nothing deleted
+        --update           Update through the installer or Cargo and exit
     -y, --yes              Do not ask for confirmation
     -h, --help             Print this help and exit
     -V, --version          Print the version and exit
@@ -101,13 +103,14 @@ struct Args {
     migrate_config: bool,
     reset_config: bool,
     factory_reset: bool,
+    update: bool,
     /// Skip the confirmation `--reset-config` would otherwise ask for.
     assume_yes: bool,
     help: bool,
     version: bool,
 }
 
-/// Parse arguments without pulling in a CLI framework for four flags.
+/// Parse arguments without pulling in a CLI framework for this small flag set.
 fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
     let mut args = Args::default();
     let mut iter = raw.into_iter();
@@ -121,6 +124,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
             "--migrate-config" => args.migrate_config = true,
             "--reset-config" => args.reset_config = true,
             "--factory-reset" => args.factory_reset = true,
+            "--update" => args.update = true,
             "-y" | "--yes" => args.assume_yes = true,
             "-c" | "--config" => {
                 let value = iter.next().ok_or_else(|| {
@@ -140,6 +144,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
 }
 
 fn main() -> ExitCode {
+    upgrade::cleanup_stale();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -306,6 +311,52 @@ fn factory_reset(config_path: &Path, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
+/// Ask the terminal for the reporting modes the dashboard needs, and arrange
+/// for every one of them to be released again.
+///
+/// Split out of [`run`] because that function was one line over the length
+/// clippy allows — and it was two independent pull requests that pushed it
+/// there, neither of which was long on its own. The grouping is not arbitrary:
+/// everything here is a mode that outlives the process if it is not turned
+/// off, which is why each one is paired with a panic hook rather than only an
+/// exit path.
+fn enable_terminal_modes(mouse: bool) -> Result<()> {
+    // Asks the terminal to say when its window gains or loses focus, which is
+    // the only signal there is for "the reader is actually here" — everything
+    // else measures interaction, and a dashboard you glance at is precisely one
+    // you do not touch. Bracketed paste comes along beside it so a multiline
+    // paste arrives as one block rather than as a burst of keystrokes.
+    //
+    // Failure is ignored on purpose: plenty of terminals implement neither, and
+    // the watch log falls back to the last keypress.
+    let _ = execute!(std::io::stdout(), EnableFocusChange, EnableBracketedPaste);
+
+    // Focus reporting and bracketed paste are released on the way out, and on
+    // a panic, for the same reason mouse capture is: either mode left enabled
+    // writes control sequences into the user's shell after mirador is gone.
+    {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
+            previous(info);
+        }));
+    }
+
+    if mouse {
+        // ratatui's hook knows nothing about mouse capture, and a terminal
+        // left holding the mouse turns every later click in the user's shell
+        // into escape-sequence garbage. Chain a hook that releases it first.
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = execute!(std::io::stdout(), DisableMouseCapture);
+            previous(info);
+        }));
+        execute!(std::io::stdout(), EnableMouseCapture).context("enabling mouse reporting")?;
+    }
+
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = parse_args(std::env::args().skip(1))?;
 
@@ -316,6 +367,8 @@ fn run() -> Result<()> {
     if args.version {
         println!("mirador {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    } else if args.update {
+        return upgrade::run();
     }
     if args.print_config {
         print!("{}", config::DEFAULT_CONFIG);
@@ -403,35 +456,7 @@ fn run() -> Result<()> {
     // panic leaves the user with a working shell rather than a broken one.
     let mut terminal = ratatui::init();
 
-    // Asks the terminal to say when its window gains or loses focus, which is
-    // the only signal there is for "the reader is actually here" — everything
-    // else measures interaction, and a dashboard you glance at is precisely one
-    // you do not touch. Failure is ignored on purpose: plenty of terminals do
-    // not implement it, and the watch log falls back to the last keypress.
-    let _ = execute!(std::io::stdout(), EnableFocusChange, EnableBracketedPaste);
-
-    // Focus reporting and bracketed paste are released on the way out, and on
-    // a panic, for the same reason mouse capture is: either mode left enabled
-    // writes control sequences into the user's shell after mirador is gone.
-    {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableBracketedPaste, DisableFocusChange);
-            previous(info);
-        }));
-    }
-
-    if mouse {
-        // ratatui's hook knows nothing about mouse capture, and a terminal
-        // left holding the mouse turns every later click in the user's shell
-        // into escape-sequence garbage. Chain a hook that releases it first.
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            let _ = execute!(std::io::stdout(), DisableMouseCapture);
-            previous(info);
-        }));
-        execute!(std::io::stdout(), EnableMouseCapture).context("enabling mouse reporting")?;
-    }
+    enable_terminal_modes(mouse)?;
 
     let result = app.run(&mut terminal);
 
@@ -470,6 +495,7 @@ mod tests {
         assert!(parse(&["--migrate-config"]).unwrap().migrate_config);
         assert!(parse(&["--reset-config"]).unwrap().reset_config);
         assert!(parse(&["--factory-reset"]).unwrap().factory_reset);
+        assert!(parse(&["--update"]).unwrap().update);
         // The two are separate commands, not degrees of one: a config reset
         // must never quietly take the tasks with it.
         assert!(!parse(&["--reset-config"]).unwrap().factory_reset);
@@ -530,6 +556,8 @@ mod tests {
             "--config-path",
             "--migrate-config",
             "--reset-config",
+            "--factory-reset",
+            "--update",
             "--yes",
             "--help",
             "--version",

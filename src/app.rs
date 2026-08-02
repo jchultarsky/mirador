@@ -1759,7 +1759,7 @@ impl App {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }?;
-        Some(format!("mirador {latest} is out   mirador-update "))
+        Some(format!("mirador {latest} is out   mirador --update "))
     }
 
     fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
@@ -2534,7 +2534,7 @@ mod tests {
         let hint = app.update_hint().expect("a found version should show");
         assert!(hint.contains("9.9.9"), "got `{hint}`");
         assert!(
-            hint.contains("mirador-update"),
+            hint.contains("mirador --update"),
             "the notice must say what to do about it: `{hint}`"
         );
     }
