@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-02
+
+Both features in this release came from outside the project, contributed by
+[@krflol](https://github.com/krflol).
+
 ### Added
 
 - **Notes can select, copy and paste body text as a scratchpad.** Shift plus
