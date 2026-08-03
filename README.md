@@ -284,9 +284,13 @@ widget mirador has and which of them your layout places:
 │    ■ notes                           │
 │    ■ stocks                          │
 │    ■ calendar                        │
+│    ■ agenda                          │
 │  ▸ □ pomodoro                        │
+│    ■ watchlog                        │
+│    ■ news                            │
 │    ■ cpu                             │
 │    ■ network                         │
+│    ■ calculator                      │
 │                                      │
 │   written to your config on close    │
 │   space toggle   esc close           │
@@ -331,7 +335,7 @@ overwritten, so resetting twice still leaves the first one recoverable.
 
 ## The panels
 
-Twelve widgets, each answering one question. Put the ones you want in the
+Thirteen widgets, each answering one question. Put the ones you want in the
 layout and drop the rest — a widget your layout leaves out is never built, and
 nothing will nag you about it.
 
@@ -394,6 +398,11 @@ selection. Typing, Backspace and Delete replace selected text too. With
 nothing selected, `Ctrl+C` keeps its ordinary terminal meaning and quits.
 Your terminal's normal paste shortcut remains the way to bring outside text
 into the note; multiline pastes and literal tabs are kept intact in the body.
+
+**`Ctrl+S` saves, from either field.** `Enter` also saves, but only from the
+title, where it cannot be mistaken for a newline — in the body it starts one.
+`Esc` cancels and keeps nothing. It is worth knowing which of those you pressed:
+trusting the footer and reaching for `Esc` is how a note gets lost.
 
 ### Clock and calendar
 
@@ -746,6 +755,28 @@ changes, not merely because time passed.
 Both buffers grow to fill the panel, so `history` is a floor on what is kept
 rather than a cap on what a wider panel can draw.
 
+## Command line
+
+Every flag is optional; with none of them mirador opens the dashboard.
+
+| Flag | What it does |
+| --- | --- |
+| `-c`, `--config <PATH>` | Use a specific config file |
+| `--config-path` | Print the resolved config path and exit |
+| `--print-config` | Print the default config to stdout and exit |
+| `--migrate-config` | Update a config written by an older version |
+| `--reset-config` | Replace the config with the defaults, keeping a copy |
+| `--factory-reset` | Start over: config, preferences, tasks, notes and watchlist all set aside |
+| `--update` | Update through the installer or Cargo and exit |
+| `-y`, `--yes` | Do not ask for confirmation |
+| `-h`, `--help` | Print help and exit |
+| `-V`, `--version` | Print the version and exit |
+
+Neither reset deletes anything. Every file they touch is renamed to a numbered
+`.bak` beside itself, and both list what they will affect before doing it.
+They are also separate commands rather than degrees of one: `--reset-config` is
+about configuration, `--factory-reset` about everything mirador has written.
+
 ## Keys
 
 | Key | Action |
@@ -892,6 +923,8 @@ rather than failing quietly.
 | `stocks` | A watchlist: last price, the day's change, and an intraday sparkline |
 | `calendar` | Month grids in the shape `cal` prints, with today marked |
 | `agenda` | What is next, from a local `.ics` file |
+| `watchlog` | The watch log: what changed while you were not looking |
+| `news` | Headlines from the RSS feeds you choose |
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
 | `calculator` | Type a sum, press Enter; an adding machine's tape of what you worked out |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
@@ -1081,7 +1114,7 @@ covers.
 
 **Your config.** No option that has ever shipped in a released version has been
 removed — every key in every `mirador.toml` written since `0.1.0` is still
-accepted, checked against all thirty-one releases. Options are added, never
+accepted, checked against every released version. Options are added, never
 renamed out from under you. The four keys that predate `0.1.0` are handled by
 `mirador --migrate-config`, which edits the file in place and tells you what it
 changed.
@@ -1113,7 +1146,7 @@ needs to know it exists.
 
 ## Acknowledgements
 
-mirador is a thin layer over other people's hard work. Ten direct
+mirador is a thin layer over other people's hard work. Eleven direct
 dependencies, every one of them maintained by someone who did not have to.
 
 **[ratatui](https://ratatui.rs)** deserves top billing. Every frame here is
@@ -1130,7 +1163,7 @@ is what makes the same binary work on macOS, Linux and Windows terminals.
 | Crate | What it does here |
 | --- | --- |
 | [ratatui](https://ratatui.rs) | Every widget, layout and redraw |
-| [crossterm](https://github.com/crossterm-rs/crossterm) | Terminal control, key and mouse events |
+| [quick-xml](https://github.com/tafia/quick-xml) | Reading RSS and Atom well enough for a headline |
 | [jiff](https://github.com/BurntSushi/jiff) | Dates, IANA timezones, the "2 days late" arithmetic |
 | [sysinfo](https://github.com/GuillaumeGomez/sysinfo) | CPU and network counters, per platform |
 | [ureq](https://github.com/algesten/ureq) | Blocking HTTP for weather and quotes |
