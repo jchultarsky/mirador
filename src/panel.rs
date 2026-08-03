@@ -1,16 +1,28 @@
 //! The [`Panel`] trait: the seam every dashboard widget goes through.
 //!
-//! **This is an in-tree seam, not a plugin API.** mirador is a binary crate
-//! with no library target, so nothing outside it can name this trait; and even
-//! if it could, `widgets::build` dispatches on a fixed `match` over
-//! `WIDGET_NAMES` and each widget's settings are a field on `Config`. Adding a
-//! widget is a pull request, and `CONTRIBUTING.md` lists the five places to
-//! touch. A real plugin story needs three things this does not have: a runtime
-//! registry instead of that `match`, per-widget config carried as an
-//! unparsed `toml::Value` so a widget can own its own schema, and a library
-//! target with a deliberate public surface. Adding only the last of those
-//! would make the trait nameable without making it usable, which is worse than
-//! the honest version.
+//! **This is an in-tree seam.** mirador is a binary crate with no library
+//! target, so nothing outside it can name this trait; `widgets::build`
+//! dispatches on a fixed `match` over `WIDGET_NAMES`; and each widget's
+//! settings are a field on `Config`. Adding a widget is a pull request, and
+//! `CONTRIBUTING.md` lists the six places to touch.
+//!
+//! This paragraph used to go on to say it was *not a plugin API* and was not
+//! going to become one. That is no longer the project's position — external
+//! panels are being designed in
+//! [discussion #191](https://github.com/jchultarsky/mirador/discussions/191).
+//! Nothing above it has changed; what changed is that it is a description of
+//! the code rather than a decision about the code.
+//!
+//! Which obstacles a plugin story faces depends on where the boundary is, and
+//! that part is worth keeping. Someone implementing *this trait* out of tree
+//! would need three things mirador does not have: a runtime registry instead of
+//! that `match`, per-widget config carried as an unparsed `toml::Value` so a
+//! widget can own its own schema, and a library target with a deliberate public
+//! surface. A **process** boundary needs the first two and eliminates the
+//! third — which is the expensive one, because a public Rust API is a semver
+//! commitment on every type it touches. That asymmetry is why the process
+//! design is the one being explored, and adding only the library target would
+//! still make the trait nameable without making it usable.
 //!
 //! What the seam does buy, in-tree, is real: a panel owns its own state and
 //! refresh cadence. The application shell is
