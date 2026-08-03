@@ -87,7 +87,12 @@ pub struct Config {
 // relationship the settings do not have.
 #[allow(clippy::struct_excessive_bools)]
 pub struct General {
-    /// Frame budget in milliseconds. Lower is smoother and burns more CPU.
+    /// How long to wait for an event before looking around again, in
+    /// milliseconds.
+    ///
+    /// Not a frame budget, despite how it reads: the redraw follows visible
+    /// change rather than the tick, so lowering this wakes the process more
+    /// often without making anything smoother.
     pub tick_rate_ms: u64,
     /// Draw a border around each panel.
     pub show_borders: bool,

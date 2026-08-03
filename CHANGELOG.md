@@ -1618,7 +1618,14 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/jchultarsky/mirador/compare/v1.4.1...v1.5.0
+[1.4.1]: https://github.com/jchultarsky/mirador/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/jchultarsky/mirador/compare/v1.3.2...v1.4.0
+[1.3.2]: https://github.com/jchultarsky/mirador/compare/v1.3.1...v1.3.2
+[1.3.1]: https://github.com/jchultarsky/mirador/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/jchultarsky/mirador/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/jchultarsky/mirador/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/jchultarsky/mirador/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/jchultarsky/mirador/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/jchultarsky/mirador/compare/v1.1.0...v1.1.1

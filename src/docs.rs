@@ -196,6 +196,115 @@ mod tests {
         );
     }
 
+    /// Every released version has a changelog link definition.
+    ///
+    /// `CHANGELOG.md` uses reference-style headings — `## [1.5.0]` — which
+    /// render as plain text unless a matching `[1.5.0]: <url>` sits at the foot
+    /// of the file. Seven consecutive releases shipped without one, so seven
+    /// version headings on GitHub read as literal brackets rather than as
+    /// compare links.
+    ///
+    /// Nothing noticed, because the file still parsed, the release still went
+    /// out, and the defect is only visible rendered. That is the shape of every
+    /// entry in this module: true-looking prose that no build step reads.
+    #[test]
+    fn every_released_version_has_a_changelog_link() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("CHANGELOG.md");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+            .replace("\r\n", "\n");
+
+        let versions: Vec<String> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## ["))
+            .filter_map(|rest| rest.split(']').next())
+            .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+            .map(str::to_string)
+            .collect();
+        assert!(
+            versions.len() > 10,
+            "only {} version headings found — the format probably changed and \
+             this check has stopped looking at anything",
+            versions.len()
+        );
+
+        let missing: Vec<&String> = versions
+            .iter()
+            .filter(|v| !text.contains(&format!("\n[{v}]: http")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} released version(s) have no link definition: {missing:?}\n\n\
+             Add `[X.Y.Z]: <compare url>` at the foot of CHANGELOG.md beside \
+             the others. Without it the heading renders as literal brackets.",
+            missing.len()
+        );
+
+        // The moving one, which is wrong rather than merely absent when stale.
+        let newest = versions.first().expect("at least one version");
+        assert!(
+            text.contains(&format!(
+                "[Unreleased]: https://github.com/jchultarsky/mirador/compare/v{newest}...HEAD"
+            )),
+            "[Unreleased] should compare against v{newest}, the newest release. \
+             A stale one presents shipped work as unreleased, which is worse \
+             than a missing link."
+        );
+    }
+
+    /// Every module in `src/` appears in the architecture map.
+    ///
+    /// The map is the first thing a reader consults and the easiest thing to
+    /// forget: it was missing `docs.rs`, `upgrade.rs` and `clipboard.rs` at
+    /// once — one added by a maintainer, one by an outside contributor, one
+    /// mentioned in the prose below but never in the list. None of the other
+    /// checks here could see it, because a module that is absent cites no test
+    /// and no path.
+    ///
+    /// Absence is the failure mode this file exists to catch, and it is the
+    /// one that a citation-based check is structurally blind to. So this
+    /// compares the map against the tree instead.
+    #[test]
+    fn every_module_is_named_in_the_architecture_map() {
+        let notes = notes();
+        let map = notes
+            .split("## Architecture")
+            .nth(1)
+            .and_then(|rest| rest.split("```").nth(1))
+            .expect("CLAUDE.md must carry an ```-fenced map under `## Architecture`");
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = Vec::new();
+        for entry in std::fs::read_dir(&root).expect("src/ must exist").flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                // `main.rs` is the entry point rather than a component, and the
+                // map opens by describing it in prose instead of listing it.
+                if name == "main.rs" {
+                    continue;
+                }
+                if !map.contains(&name) {
+                    missing.push(name);
+                }
+            }
+        }
+        missing.sort();
+
+        assert!(
+            missing.is_empty(),
+            "the architecture map does not mention {}: {missing:?}\n\n\
+             Add a line for each. The map is what a reader consults first, and \
+             a module missing from it is a module they will not know exists — \
+             which is exactly how three of them went unlisted at once.",
+            missing.len()
+        );
+    }
+
     /// The discriminator is empirical, so it is worth knowing when it stops
     /// selecting anything — a filter that matches nothing passes every time
     /// and checks nothing, which is the shape of failure this whole module

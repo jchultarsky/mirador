@@ -23,25 +23,35 @@ cargo run
 
 Requires Rust 1.95 or newer.
 
-Before pushing, run what CI runs. All six, not the first three — the last two
-catch things the others cannot, and both have reddened `main` before: a broken
-intra-doc link only `cargo doc` sees, and an `exclude` in `Cargo.toml` that
-dropped a file the build needed.
+Before pushing, run what CI runs. All six, not the first three — the last three
+catch things the others cannot, and each has reddened `main` before: a broken
+intra-doc link only `cargo doc` sees, an `exclude` in `Cargo.toml` that dropped
+a file the build needed, and a dependency `cargo deny` refused.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+cargo deny check
 cargo publish --dry-run
 ```
 
-CI also builds and tests on macOS, and type-checks against the minimum
-supported Rust version:
+`--locked` matters and is not decoration: without it cargo will quietly rewrite
+`Cargo.lock` to satisfy a build, so a local run can pass against a dependency
+set the repository does not contain. CI passes it everywhere for that reason.
+
+CI also builds and tests on macOS **and Windows**, and type-checks against the
+minimum supported Rust version:
 
 ```sh
-cargo +1.95.0 check --all-targets
+cargo +1.95.0 check --locked --all-targets
 ```
+
+Windows is in that matrix because a Windows-only startup panic once sat in
+`main`, and more recently because a test spawned a command that does not exist
+there — found by a contributor running the suite on their own machine, not by
+CI, whose runner image happened to provide it.
 
 Note that `clippy` gates some lints on the `rust-version` field, so a newer
 toolchain locally can report warnings CI does not, and vice versa. When the two
@@ -58,19 +68,31 @@ cargo run -- --config /tmp/mirador.toml
 
 The `Panel` trait in `src/panel.rs` is the seam. It is in-tree — mirador has no
 library target and `widgets::build` dispatches on a fixed match — so adding a
-widget means a pull request rather than a separate crate. Five places to touch:
+widget means a pull request rather than a separate crate. Six places to touch:
 
 1. Create `src/widgets/<name>.rs` and implement `Panel`.
-2. Add a config struct to `src/config/widgets.rs` and a field on `Config` in
-   `src/config/mod.rs`, with a `Default` implementation for every value. Mark
-   the struct `#[serde(default, deny_unknown_fields)]` — a config key that is
-   silently ignored makes a stale config look like stale code.
+2. Add a config struct to `src/config/widgets.rs`, add the type to the
+   `pub use widgets::{…}` list in `src/config/mod.rs`, and add a field on
+   `Config` in the same file. All three: the field names the type unqualified,
+   so without the re-export it does not compile. Give every value a `Default`,
+   and mark the struct `#[serde(default, deny_unknown_fields)]` — a config key
+   that is silently ignored makes a stale config look like stale code.
 3. Add the name to `WIDGET_NAMES` and an arm to `build` in
    `src/widgets/mod.rs`.
-4. Document the widget in `assets/default_config.toml` and in the README's
+4. **If your widget draws through `crate::grid::Grid`**, add
+   `("<name>", crate::widgets::<name>::COLUMNS)` to `EVERY_GRID` in
+   `src/grid.rs`. A test walks the tree for `const COLUMNS` declarations and
+   fails if the registry disagrees, because a grid that is not listed is a grid
+   the overflow sweep never checks — and an unchecked grid draws rows wider than
+   its panel, which the terminal then cuts without saying so.
+5. Document the widget in `assets/default_config.toml` and in the README's
    widget table.
-5. Add tests for the logic that is not drawing — parsing, formatting,
+6. Add tests for the logic that is not drawing — parsing, formatting,
    thresholds, state transitions.
+
+Steps 2 and 4 are the ones that bite. The calculator is the proof: the pull
+request that added the panel touched no `src/grid.rs` at all, and a later one
+had to add the registry entry when the panel gained a grid.
 
 Widgets must not block. If your widget needs network or disk I/O, do it on a
 background thread and poll the result in `tick`, as `weather.rs` does. A panel
@@ -97,9 +119,12 @@ dashboard.
 ## Adding a theme
 
 Write `assets/themes/<name>.toml` and add it to `BUNDLED` in `src/themes.rs`.
-That is the whole change — the `t` picker lists whatever is in `BUNDLED`.
+The `t` picker then lists it — that part needs nothing else. Two prose counts
+do have to follow, though, and nothing pins them: "Ten ship inside the binary"
+in `assets/default_config.toml`, and the theme table in the README.
 
-Four things will catch you out, and each has a test rather than a convention:
+Four things will catch you out. The first three have tests rather than
+conventions behind them:
 
 1. **Colour keys go *before* `[palette]` and before the gradient tables.** TOML
    assigns every key after a table header to that table, so a colour written
@@ -107,9 +132,12 @@ Four things will catch you out, and each has a test rather than a convention:
 2. **Set every key in `Theme::KEYS`** unless the theme `inherits` another.
 3. **The filename must be `[A-Za-z0-9_-]+`.** A theme is looked up by name, not
    by path, so anything else cannot be loaded.
-4. **`text` stays `reset`.** Body text follows the reader's own terminal
-   foreground; pinning it to your palette breaks on the half of terminals not
-   configured the way yours is.
+4. **`text` stays `reset` in a ported palette.** Body text follows the reader's
+   own terminal foreground; pinning it to your palette breaks on the half of
+   terminals not configured the way yours is. This one is a convention rather
+   than a test, and `high-contrast` is the deliberate exception — it sets
+   `text = "white"`, because guaranteed contrast is the entire point of that
+   theme and deferring to the terminal would defeat it.
 
 Keep `border` and `muted` distinct, or secondary text ends up as dim as the
 chrome and reads as broken rather than de-emphasised.
@@ -144,8 +172,15 @@ on buffers and selections, and round-tripping data through disk. The task panel
 is tested by driving the same key events the terminal sends, which is usually
 the clearest way to test panel behaviour.
 
-Rendering itself is not unit tested. Keep drawing code thin so that the logic
-worth testing lives outside it.
+Drawing *is* tested, and some of the strongest guards here are render tests:
+`no_grid_in_the_program_ever_overflows_its_width`,
+`every_widget_renders_at_any_size_without_panicking`, and the sweeps that check
+no panel draws a value the terminal will cut in half. Render into ratatui's
+`TestBackend` and assert on what reached the cells rather than on internal
+state — a buffer is the only place some of these faults are visible.
+
+Keep drawing code thin anyway, so the logic worth testing can also be tested
+without a terminal.
 
 ## Commit messages
 
@@ -158,10 +193,22 @@ obvious. Reference the issue number when there is one.
 Maintainers only:
 
 1. Update `CHANGELOG.md`, moving items out of `Unreleased` into a new version
-   section with a date.
-2. Bump `version` in `Cargo.toml`.
+   section with a date — **and add the link definition at the foot of the file**
+   alongside the others, then repoint `[Unreleased]` at the new tag. Seven
+   releases in a row skipped this and rendered as plain text instead of compare
+   links; `every_released_version_has_a_changelog_link` now fails if you do.
+2. Bump `version` in `Cargo.toml`, and the released-version line in
+   `CLAUDE.md` — a test compares the two.
 3. `cargo publish --dry-run` to check the packaged crate.
-4. Tag `vX.Y.Z` and push the tag.
+4. **Open a pull request for the bump and merge it.** `main` is protected, so
+   the version commit arrives as a squash.
+5. **Tag the squashed commit on `main`**, not your local one. Tagging before the
+   merge appears to work — the tag pushes, the release workflow runs, the
+   artifacts are right — and then the squash orphans the commit underneath it,
+   so `git describe` on `main` cannot see the release.
+6. `cargo publish`. The release workflow builds and uploads the GitHub release
+   artifacts; it does **not** publish the crate. That step is manual and comes
+   after the tag.
 
 ## Code of conduct
 

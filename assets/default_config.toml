@@ -16,7 +16,10 @@
 # Docs: https://github.com/jchultarsky/mirador#configuration
 
 [general]
-# Frame budget in milliseconds. Lower is smoother and uses more CPU.
+# How long mirador waits for a key or resize before looking around again,
+# in milliseconds. Not a frame budget: the screen is redrawn when something
+# actually changes, not on a clock, so lowering this does not make anything
+# smoother — it only wakes the process more often. Clamped to 16-5000.
 tick_rate_ms = 250
 show_borders = true
 show_status_bar = true
@@ -85,8 +88,9 @@ rows = [
     # The timer draws block numerals when it has the width for them and falls
     # back to plain text when it does not.
     { widget = "pomodoro", width = 24 },
-    # 30 keeps the change column at 120 columns; below a panel width of 33 the
-    # markets grid drops it rather than clipping a number.
+    # 30 keeps the change column at 120 columns; below a panel width of 35 the
+    # markets grid drops it rather than clipping a number. 35 because the grid
+    # needs 29, plus 2 for the selection marker and 4 for the frame.
     { widget = "stocks",   width = 30 },
     { widget = "cpu",      width = 20 },
     { widget = "network",  width = 26 },
