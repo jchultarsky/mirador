@@ -31,6 +31,7 @@ const A_YEAR_IN_MINUTES: u64 = 365 * 24 * 60;
 pub const DEFAULT_CONFIG: &str = include_str!("../../assets/default_config.toml");
 
 mod layout;
+mod plugins;
 mod widgets;
 
 // One flat namespace: the split into files is for readability, not a claim
@@ -43,6 +44,7 @@ mod widgets;
 // about who *names* the type, not about whether it is part of the surface.
 #[allow(unused_imports)]
 pub use layout::{Layout, LayoutPanel, LayoutRow};
+pub use plugins::PluginConfig;
 #[allow(unused_imports)]
 pub use widgets::{
     AgendaConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig,
@@ -55,6 +57,9 @@ pub use widgets::{
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub general: General,
+    /// External panels are opt-in and named explicitly. An empty list performs
+    /// no discovery, imports no runtime and starts no process.
+    pub plugins: Vec<PluginConfig>,
     /// The resolved theme.
     ///
     /// Holds whatever `[theme]` said, or — when the config named one with
@@ -131,6 +136,25 @@ impl Default for General {
 }
 
 impl Config {
+    /// Built-in and explicitly declared widget ids, in picker order.
+    pub fn widget_names(&self) -> Vec<String> {
+        crate::widgets::WIDGET_NAMES
+            .iter()
+            .map(|name| (*name).to_string())
+            .chain(self.plugins.iter().map(|plugin| plugin.id.clone()))
+            .collect()
+    }
+
+    /// The declaration for an external widget, if one was explicitly named.
+    pub fn plugin(&self, id: &str) -> Option<&PluginConfig> {
+        self.plugins.iter().find(|plugin| plugin.id == id)
+    }
+
+    /// Whether a layout name resolves to a built-in or declared plugin.
+    pub fn knows_widget(&self, id: &str) -> bool {
+        crate::widgets::is_known_widget(id) || self.plugin(id).is_some()
+    }
+
     /// Load the config, creating a commented default if none exists.
     pub fn load(explicit: Option<PathBuf>) -> Result<(Self, PathBuf)> {
         let path = match explicit {
@@ -230,6 +254,20 @@ impl Config {
     /// however mangled, can produce a config that would have been rejected had
     /// it come from the file.
     pub(crate) fn validate(&self) -> Result<()> {
+        let mut plugin_ids = std::collections::HashSet::new();
+        for plugin in &self.plugins {
+            plugin.validate()?;
+            if crate::widgets::is_known_widget(&plugin.id) {
+                anyhow::bail!(
+                    "plugin id `{}` conflicts with a built-in widget.",
+                    plugin.id
+                );
+            }
+            if !plugin_ids.insert(plugin.id.as_str()) {
+                anyhow::bail!("plugin id `{}` is declared more than once.", plugin.id);
+            }
+        }
+
         if self.layout.rows.is_empty() {
             anyhow::bail!(
                 "`[layout]` has no rows, so there is nothing to draw. \
@@ -245,11 +283,11 @@ impl Config {
                 );
             }
             for panel in &row.panels {
-                if !crate::widgets::is_known_widget(&panel.widget) {
+                if !self.knows_widget(&panel.widget) {
                     anyhow::bail!(
                         "unknown widget `{}`. Available widgets: {}.",
                         panel.widget,
-                        crate::widgets::WIDGET_NAMES.join(", ")
+                        self.widget_names().join(", ")
                     );
                 }
             }
@@ -824,6 +862,73 @@ mod tests {
         assert!(
             msg.contains("todo"),
             "should list valid widgets, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_plugin_can_supply_a_layout_name_and_opaque_settings() {
+        let source = r#"
+plugins = [{
+    id = "example",
+    command = ["mirador-example", "--compact"],
+    config = { label = "local" }
+}]
+
+[layout]
+rows = [{ height = 1, panels = [{ widget = "example" }] }]
+"#;
+        let config: Config = toml::from_str(source).expect("plugin declaration parses");
+        config
+            .validate()
+            .expect("declared plugin is a known widget");
+        assert_eq!(
+            config.widget_names().last().map(String::as_str),
+            Some("example")
+        );
+        assert_eq!(config.plugins[0].config["label"].as_str(), Some("local"));
+    }
+
+    #[test]
+    fn plugin_ids_cannot_shadow_core_widgets_or_each_other() {
+        let collision: Config =
+            toml::from_str("plugins = [{ id = \"notes\", command = [\"anything\"] }]").unwrap();
+        assert!(
+            collision
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("conflicts with a built-in")
+        );
+
+        let duplicate: Config = toml::from_str(
+            "plugins = [\n  { id = \"sample\", command = [\"one\"] },\n  { id = \"sample\", command = [\"two\"] }\n]",
+        )
+        .unwrap();
+        assert!(
+            duplicate
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("more than once")
+        );
+    }
+
+    #[test]
+    fn plugin_commands_are_argv_not_platform_shell_strings() {
+        let config: Config = toml::from_str(
+            "plugins = [{ id = \"sample\", command = [\"python\", \"-m\", \"sample\"] }]",
+        )
+        .unwrap();
+        assert_eq!(config.plugins[0].command, ["python", "-m", "sample"]);
+
+        let missing: Config =
+            toml::from_str("plugins = [{ id = \"sample\", command = [] }]").unwrap();
+        assert!(
+            missing
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("no executable")
         );
     }
 

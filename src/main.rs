@@ -22,6 +22,7 @@ mod migrate;
 mod note;
 mod panel;
 mod picker;
+mod plugin;
 mod poll;
 mod prompt;
 mod quote;

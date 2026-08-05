@@ -391,6 +391,14 @@ makes it the one panel where a nagging design would do real damage, which is
 why the chime defaults off and a paused timer greys out instead of blinking.
 The filter still holds for anything not asked for by name.
 
+**The filter governs what mirador *ships*, which after discussion #191 is
+narrower than it used to be.** With external panels, "does this answer one of
+the four questions" decides what goes in the binary; it does not decide what a
+reader may put on their own dashboard. The two cases that forced the
+distinction are worth keeping: an audiobook client is welcome as a plugin and
+would never be a widget here, and a terminal is refused in **both** places. The
+filter and the plugin boundary are different rules and they do not always agree.
+
 **Identified gaps, agreed:** (1) calendar / next event is the biggest hole —
 tasks are self-paced, a meeting is externally imposed and time-critical;
 (2) nothing shows what *changed* since you last looked; (3) no single "is
@@ -818,6 +826,41 @@ which is the one key the project guarantees always gets you out; and that what
 the case actually wants is a panel that *watches* a process rather than hosts
 one. The filter in "Product decisions already settled" now has to hold against
 people who do not know it exists.
+
+**And the answer did not stay a no.** krflol took the counter-proposal — a panel
+that *watches* a process — and came back with something larger.
+[Discussion #191](https://github.com/jchultarsky/mirador/discussions/191)
+proposes external panels as separate processes exchanging bounded, versioned
+JSON-lines messages: a working prototype against 1.5.0, an optional Python SDK
+in a repository of their own, and three examples chosen to span the range — the
+conservative process-watch panel, the terminal as a deliberate boundary test,
+and an Audiobookshelf client picked *because* it is obviously not core.
+
+**The owner said yes, and the reason had never been written down anywhere.**
+External widgets were in the original vision — "Grafana for the terminal,
+personal rather than corporate" — and the reason they were never built is that
+every design considered either embedded Python or Lua, or a public Rust API, and
+both were worse than not having the feature. A process boundary costs neither,
+which is why `panel.rs` now distinguishes the private in-tree trait from the
+public process protocol instead of trying to turn one into the other.
+
+The contract is now written in `docs/plugin-protocol.md`, independently of any
+SDK, and these are the parts the host must keep: `Ctrl+C` stays host-owned with
+**no** plugin exception; plugins take input from the start, because a panel you
+can only watch is not much of a widget; **the host does the clipping and
+wrapping**, since a plugin cannot be trusted with invariant 19 and the terminal
+cuts silently either way; an external panel is visibly external, because
+mirador promises it does not phone home and a plugin can; credentials have no
+host configuration, persistence or logging channel; startup, messages, rates,
+retention and queues are bounded; and **no PTY**.
+
+**The boundary is *a view with controls* versus *a host for another program*,**
+and the audiobook client is what settled it. Off-axis-ness is not the test —
+that plugin is as far from the four questions as anything could be and is
+entirely welcome, because it is still a view. A terminal is a different kind of
+thing however on-topic its contents happen to be. The line is not crisp and the
+reply said so rather than writing a rule that would not survive its third
+example.
 
 ## Recently settled, so it is not re-litigated
 
@@ -1530,13 +1573,19 @@ note weighed rather than what the pane showed. The task panel had the identical
 defect one panel over. Both are cached now, and the cost is flat in the size of
 the note.
 
-There is an open **discussion**, which is not the same as an open issue:
-[#188](https://github.com/jchultarsky/mirador/discussions/188) proposes a
-terminal widget. The answer given was that mirador is a pane *inside* tmux or
-zellij rather than a replacement for one, and that what the proposer actually
-wants — to be told when a long task finishes — is a panel that *watches* a
-process rather than one that hosts a shell. Recorded here because it is the
-first identity question the project has been asked from outside.
+[Discussion #191](https://github.com/jchultarsky/mirador/discussions/191) is the
+source of the external-panel direction and its invariants. The agreed contract
+is the language-neutral specification in `docs/plugin-protocol.md`; the Rust
+code is the bounded host for that contract, not the API plugin authors link
+against. Judge changes to either against the written host obligations before
+judging an individual SDK or example plugin.
+
+It grew out of [#188](https://github.com/jchultarsky/mirador/discussions/188),
+which asked for a terminal widget and was answered no — mirador is a pane
+*inside* tmux or zellij rather than a replacement for one. That answer still
+holds and is now part of the plugin contract rather than a one-off refusal: no
+PTY, in-tree or out. See "Contributions from outside" for what was committed to
+and why.
 
 This heading has now described the wrong issue as the last one three times —
 #132, then #153, now #153 again after #178 closed. The entry is written when

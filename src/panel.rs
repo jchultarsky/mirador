@@ -1,16 +1,16 @@
 //! The [`Panel`] trait: the seam every dashboard widget goes through.
 //!
-//! **This is an in-tree seam, not a plugin API.** mirador is a binary crate
-//! with no library target, so nothing outside it can name this trait; and even
-//! if it could, `widgets::build` dispatches on a fixed `match` over
-//! `WIDGET_NAMES` and each widget's settings are a field on `Config`. Adding a
-//! widget is a pull request, and `CONTRIBUTING.md` lists the five places to
-//! touch. A real plugin story needs three things this does not have: a runtime
-//! registry instead of that `match`, per-widget config carried as an
-//! unparsed `toml::Value` so a widget can own its own schema, and a library
-//! target with a deliberate public surface. Adding only the last of those
-//! would make the trait nameable without making it usable, which is worse than
-//! the honest version.
+//! **This remains an in-tree seam, not the public plugin API.** Built-in
+//! widgets implement this trait and are compiled into the binary. External
+//! panels instead run out of process and speak the versioned protocol in
+//! [`crate::plugin`], whose host adapter implements this private trait for
+//! them.
+//!
+//! The process boundary supplies the two things external panels need — a
+//! runtime registry and plugin-owned opaque configuration — without exposing
+//! this trait through a library target. That avoids coupling plugins to
+//! ratatui, Mirador's private Rust types or its release cadence, and avoids a
+//! permanent Rust semver promise on every type the trait touches.
 //!
 //! What the seam does buy, in-tree, is real: a panel owns its own state and
 //! refresh cadence. The application shell is
@@ -145,7 +145,7 @@ pub trait Panel {
     /// Key bindings, declared once and reused for the border hint, the status
     /// bar and the help overlay. Order matters: the border shows as many
     /// `primary` bindings as fit, in order.
-    fn bindings(&self) -> &'static [Binding] {
+    fn bindings(&self) -> &[Binding] {
         &[]
     }
 
@@ -178,6 +178,8 @@ pub trait Panel {
     /// how often it expects to have something new to show — a clock with
     /// seconds ticks four times a second and changes once. Say how often you
     /// need to check, and answer the second question from [`Panel::tick`].
+    /// A focused panel that captures input may also shorten the application's
+    /// event wait to this interval for asynchronous interactive feedback.
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
@@ -306,8 +308,10 @@ pub trait Panel {
     }
 
     /// When true, the panel is in a text-entry or modal state and the app
-    /// suppresses *all* global bindings, including quit, so that typing a `q`
-    /// into a form does not exit the dashboard.
+    /// suppresses ordinary global bindings, including `q`, so that typing a
+    /// title does not exit the dashboard. `Ctrl+C` remains shell-owned in every
+    /// state; an active selection may consume one press to copy and collapse,
+    /// after which the next press exits.
     ///
     /// This looks like it should be a variant of [`KeyOutcome`] — a panel that
     /// swallowed the key could say so on the way out, and the trait would lose
