@@ -930,6 +930,36 @@ rather than failing quietly.
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `network` | Receive and transmit rates as moving charts |
 
+### External panels (optional)
+
+Mirador can host an explicitly configured panel process through its
+[versioned JSON-lines protocol](docs/plugin-protocol.md). This is a constrained
+customization boundary, not a second built-in widget system: the release binary
+embeds no interpreter, discovers nothing, and starts no process unless both its
+command is declared and its id is placed in the layout.
+
+```toml
+[[plugins]]
+id = "example"
+command = ["example-mirador-plugin"]
+
+[plugins.config]
+plugin_owned_setting = true
+```
+
+The host keeps `Ctrl+C`, rendering, clipping, wrapping, input arbitration and
+resource bounds on Mirador's side of the pipe. Every such tile is visibly
+marked `EXTERNAL`; it may accept focused input, but it cannot draw into the
+terminal or block the UI thread. The protocol deliberately offers no PTY or raw
+terminal capability.
+
+Plugin commands are trusted code with your permissions, not sandboxed
+extensions. Do not put credentials in Mirador's config or command arguments;
+a plugin that needs a login collects and owns it inside its panel. Optional
+language SDKs remain separate—the experimental Python SDK and example widgets
+at [krflol/mirador-plugins](https://github.com/krflol/mirador-plugins) are not a
+Python dependency or a Mirador support commitment.
+
 ### Market data
 
 The watchlist reads `query1.finance.yahoo.com`, the endpoint Yahoo's own charts
@@ -1140,9 +1170,10 @@ Bug reports, feature requests and pull requests are welcome. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, and
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for the ground rules.
 
-Adding a widget means implementing the `Panel` trait, registering the name in
-`src/widgets/mod.rs`, and documenting it here. Nothing else in the codebase
-needs to know it exists.
+Adding a built-in widget means implementing the `Panel` trait, registering the
+name in `src/widgets/mod.rs`, and documenting it here. A personal or
+language-independent extension can instead implement the
+[external panel protocol](docs/plugin-protocol.md) without linking to Mirador.
 
 ## Acknowledgements
 

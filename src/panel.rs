@@ -1,28 +1,16 @@
 //! The [`Panel`] trait: the seam every dashboard widget goes through.
 //!
-//! **This is an in-tree seam.** mirador is a binary crate with no library
-//! target, so nothing outside it can name this trait; `widgets::build`
-//! dispatches on a fixed `match` over `WIDGET_NAMES`; and each widget's
-//! settings are a field on `Config`. Adding a widget is a pull request, and
-//! `CONTRIBUTING.md` lists the six places to touch.
+//! **This remains an in-tree seam, not the public plugin API.** Built-in
+//! widgets implement this trait and are compiled into the binary. External
+//! panels instead run out of process and speak the versioned protocol in
+//! [`crate::plugin`], whose host adapter implements this private trait for
+//! them.
 //!
-//! This paragraph used to go on to say it was *not a plugin API* and was not
-//! going to become one. That is no longer the project's position — external
-//! panels are being designed in
-//! [discussion #191](https://github.com/jchultarsky/mirador/discussions/191).
-//! Nothing above it has changed; what changed is that it is a description of
-//! the code rather than a decision about the code.
-//!
-//! Which obstacles a plugin story faces depends on where the boundary is, and
-//! that part is worth keeping. Someone implementing *this trait* out of tree
-//! would need three things mirador does not have: a runtime registry instead of
-//! that `match`, per-widget config carried as an unparsed `toml::Value` so a
-//! widget can own its own schema, and a library target with a deliberate public
-//! surface. A **process** boundary needs the first two and eliminates the
-//! third — which is the expensive one, because a public Rust API is a semver
-//! commitment on every type it touches. That asymmetry is why the process
-//! design is the one being explored, and adding only the library target would
-//! still make the trait nameable without making it usable.
+//! The process boundary supplies the two things external panels need — a
+//! runtime registry and plugin-owned opaque configuration — without exposing
+//! this trait through a library target. That avoids coupling plugins to
+//! ratatui, Mirador's private Rust types or its release cadence, and avoids a
+//! permanent Rust semver promise on every type the trait touches.
 //!
 //! What the seam does buy, in-tree, is real: a panel owns its own state and
 //! refresh cadence. The application shell is
@@ -157,7 +145,7 @@ pub trait Panel {
     /// Key bindings, declared once and reused for the border hint, the status
     /// bar and the help overlay. Order matters: the border shows as many
     /// `primary` bindings as fit, in order.
-    fn bindings(&self) -> &'static [Binding] {
+    fn bindings(&self) -> &[Binding] {
         &[]
     }
 
@@ -190,6 +178,8 @@ pub trait Panel {
     /// how often it expects to have something new to show — a clock with
     /// seconds ticks four times a second and changes once. Say how often you
     /// need to check, and answer the second question from [`Panel::tick`].
+    /// A focused panel that captures input may also shorten the application's
+    /// event wait to this interval for asynchronous interactive feedback.
     fn refresh_interval(&self) -> Duration {
         Duration::from_secs(1)
     }
@@ -318,8 +308,10 @@ pub trait Panel {
     }
 
     /// When true, the panel is in a text-entry or modal state and the app
-    /// suppresses *all* global bindings, including quit, so that typing a `q`
-    /// into a form does not exit the dashboard.
+    /// suppresses ordinary global bindings, including `q`, so that typing a
+    /// title does not exit the dashboard. `Ctrl+C` remains shell-owned in every
+    /// state; an active selection may consume one press to copy and collapse,
+    /// after which the next press exits.
     ///
     /// This looks like it should be a variant of [`KeyOutcome`] — a panel that
     /// swallowed the key could say so on the way out, and the trait would lose
