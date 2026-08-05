@@ -950,15 +950,21 @@ mod tests {
         let tail: Vec<(&str, &str)> = TAPE_BINDINGS
             .iter()
             .skip(2)
-            .map(|b| (b.key, b.action))
+            .map(|b| (b.key.as_ref(), b.action.as_ref()))
             .collect();
-        let entry: Vec<(&str, &str)> = ENTRY_BINDINGS.iter().map(|b| (b.key, b.action)).collect();
+        let entry: Vec<(&str, &str)> = ENTRY_BINDINGS
+            .iter()
+            .map(|b| (b.key.as_ref(), b.action.as_ref()))
+            .collect();
         assert_eq!(
             entry, tail,
             "the shared part of the two lists has drifted apart"
         );
         assert_eq!(
-            TAPE_BINDINGS[..2].iter().map(|b| b.key).collect::<Vec<_>>(),
+            TAPE_BINDINGS[..2]
+                .iter()
+                .map(|b| b.key.as_ref())
+                .collect::<Vec<_>>(),
             vec!["y", "p"],
             "the tape actions lead, because the border fills with primaries in order"
         );

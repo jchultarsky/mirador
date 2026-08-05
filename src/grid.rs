@@ -170,6 +170,70 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Wrap one already-styled logical line without handing untrusted text to
+/// ratatui's wrapper.
+///
+/// Span styles follow their source bytes across row boundaries. The final
+/// width check deliberately sums the spans the way ratatui does: a joined
+/// emoji sequence can occupy fewer cells as one string than it does when a
+/// style boundary splits it. In that exceptional case the row is collapsed
+/// and truncated as one span so it still cannot cross the requested edge.
+pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let mut span_index = 0usize;
+    let mut span_offset = 0usize;
+    wrap(&text, width)
+        .into_iter()
+        .map(|row| {
+            let spans =
+                take_styled_bytes(&line.spans, &mut span_index, &mut span_offset, row.len());
+            let rendered_width: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+            if rendered_width > width {
+                let style = spans.first().map_or(line.style, |span| span.style);
+                Line::from(Span::styled(truncate(&row, width), style))
+            } else {
+                Line::from(spans).style(line.style)
+            }
+        })
+        .collect()
+}
+
+fn take_styled_bytes(
+    source: &[Span<'_>],
+    span_index: &mut usize,
+    span_offset: &mut usize,
+    mut remaining: usize,
+) -> Vec<Span<'static>> {
+    let mut output = Vec::new();
+    while remaining > 0 && *span_index < source.len() {
+        let span = &source[*span_index];
+        let available = &span.content[*span_offset..];
+        if available.is_empty() {
+            *span_index += 1;
+            *span_offset = 0;
+            continue;
+        }
+        let take = remaining.min(available.len());
+        debug_assert!(available.is_char_boundary(take));
+        output.push(Span::styled(available[..take].to_string(), span.style));
+        remaining -= take;
+        *span_offset += take;
+        if *span_offset == span.content.len() {
+            *span_index += 1;
+            *span_offset = 0;
+        }
+    }
+    debug_assert_eq!(remaining, 0);
+    output
+}
+
 /// `text` wrapped to `width` and rejoined, ready for a `Paragraph` that must
 /// **not** be given `Wrap`.
 ///
@@ -714,11 +778,12 @@ mod tests {
     /// the sweep passed cheerfully with the defect reintroduced. Counting the
     /// call sites cannot miss.
     ///
-    /// Two are allowed, and both are text this program wrote itself: the help
-    /// overlay and the delete confirmation, whose one variable line is
-    /// truncated to the width before it gets there.
+    /// One is allowed: the delete confirmation, whose one variable line is
+    /// truncated to the width before it gets there. The help overlay used to
+    /// be the second, but external panel bindings made its text plugin-owned;
+    /// it now comes through [`wrap_line`] instead.
     #[test]
-    fn only_the_two_known_places_use_ratatuis_own_wrapper() {
+    fn only_the_known_delete_confirmation_uses_ratatuis_own_wrapper() {
         fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -762,9 +827,9 @@ mod tests {
 
         assert_eq!(
             found.len(),
-            2,
-            "expected exactly two uses of ratatui's wrapper — the help overlay \
-             and the delete confirmation — and found {}:\n  {}\n\n\
+            1,
+            "expected exactly one use of ratatui's wrapper — the delete \
+             confirmation — and found {}:\n  {}\n\n\
              If this is a new site rendering text mirador did not write, wrap it \
              with `grid::wrapped` instead: ratatui's wrapper panics on a leading \
              combining mark, and on a double-width glyph in a word too long for \
@@ -772,10 +837,6 @@ mod tests {
              program wrote itself, widen this count and say why.",
             found.len(),
             found.join("\n  ")
-        );
-        assert!(
-            found.iter().any(|f| f.starts_with("app.rs:")),
-            "the help overlay's wrap went missing: {found:?}"
         );
         assert!(
             found.iter().any(|f| f.starts_with("todo.rs:")),
@@ -944,6 +1005,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn styled_wrapping_uses_the_width_ratatui_will_render() {
+        let line = Line::from(vec![
+            Span::styled("👩", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "\u{200d}💻",
+                Style::default().add_modifier(Modifier::ITALIC),
+            ),
+        ]);
+        let wrapped = wrap_line(&line, 2);
+        assert_eq!(wrapped.len(), 1);
+        let rendered_width: usize = wrapped[0]
+            .spans
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum();
+        assert!(rendered_width <= 2, "rendered width was {rendered_width}");
     }
 
     /// The one exception, and it is deliberate: a single glyph that cannot fit

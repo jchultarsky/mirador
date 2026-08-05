@@ -1215,7 +1215,7 @@ mod tests {
         let primaries: Vec<&str> = BINDINGS
             .iter()
             .filter(|b| b.primary)
-            .map(|b| b.action)
+            .map(|b| b.action.as_ref())
             .collect();
         // `expect`, not a bare comparison. `position` returns `Option`, and
         // `None < Some(_)` is true — so comparing them directly passed when the

@@ -1,8 +1,8 @@
 //! Built-in widgets and the registry that turns a config name into a panel.
 //!
-//! Adding a widget means implementing [`crate::panel::Panel`], adding its name
-//! to [`WIDGET_NAMES`] and adding one arm to [`build`]. Nothing else in the
-//! codebase needs to know it exists.
+//! Built-ins are compiled here. Explicit external declarations fall through
+//! to the process-protocol adapter; they do not add a runtime dependency to
+//! Mirador and are started only when the layout actually places them.
 
 pub mod agenda;
 pub mod calculator;
@@ -79,7 +79,12 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         "calculator" => Box::new(calculator::CalculatorPanel::new(config.calculator)),
-        _ => return Ok(None),
+        _ => {
+            let Some(plugin) = config.plugin(name) else {
+                return Ok(None);
+            };
+            Box::new(crate::plugin::PluginPanel::new(plugin.clone()))
+        }
     };
     Ok(Some(panel))
 }

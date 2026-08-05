@@ -22,12 +22,12 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use crate::theme::Theme;
 
 /// What a keypress asked the shell to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Nothing the shell needs to act on; the cursor may have moved.
     None,
     /// Turn this widget on if it is off, and off if it is on.
-    Toggle(&'static str),
+    Toggle(String),
     /// Close the dialog and commit whatever changed.
     Close,
 }
@@ -36,12 +36,13 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Picker {
     selected: usize,
+    names: Vec<String>,
 }
 
 impl Picker {
     /// Open on the first widget.
-    pub fn new() -> Self {
-        Self { selected: 0 }
+    pub fn new(names: Vec<String>) -> Self {
+        Self { selected: 0, names }
     }
 
     /// Which row the cursor is on. Exposed for tests.
@@ -56,8 +57,7 @@ impl Picker {
     /// than dismissing on any of them — a stray keystroke must not close it and
     /// leave the user wondering whether the toggle took.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        let names = crate::widgets::WIDGET_NAMES;
-        let last = names.len().saturating_sub(1);
+        let last = self.names.len().saturating_sub(1);
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('q' | 'w') | KeyCode::Enter => Action::Close,
@@ -77,9 +77,10 @@ impl Picker {
                 self.selected = last;
                 Action::None
             }
-            KeyCode::Char(' ') => names
+            KeyCode::Char(' ') => self
+                .names
                 .get(self.selected)
-                .copied()
+                .cloned()
                 .map_or(Action::None, Action::Toggle),
             _ => Action::None,
         }
@@ -98,10 +99,8 @@ impl Picker {
         placed: impl Fn(&str) -> bool,
         error: Option<&str>,
     ) {
-        let names = crate::widgets::WIDGET_NAMES;
-
         let mut lines: Vec<Line> = Vec::new();
-        for (index, name) in names.iter().enumerate() {
+        for (index, name) in self.names.iter().enumerate() {
             let on = placed(name);
             let here = index == self.selected;
             // A filled mark and an empty one in the track colour, the same
@@ -185,10 +184,19 @@ mod tests {
         picker.handle_key(KeyEvent::from(code))
     }
 
+    fn picker() -> Picker {
+        Picker::new(
+            crate::widgets::WIDGET_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        )
+    }
+
     #[test]
     fn the_cursor_clamps_at_both_ends() {
         let last = crate::widgets::WIDGET_NAMES.len() - 1;
-        let mut picker = Picker::new();
+        let mut picker = picker();
 
         assert_eq!(picker.selected(), 0, "opens on the first widget");
         press(&mut picker, KeyCode::Up);
@@ -202,16 +210,16 @@ mod tests {
 
     #[test]
     fn space_names_the_widget_under_the_cursor() {
-        let mut picker = Picker::new();
+        let mut picker = picker();
         assert_eq!(
             press(&mut picker, KeyCode::Char(' ')),
-            Action::Toggle(crate::widgets::WIDGET_NAMES[0])
+            Action::Toggle(crate::widgets::WIDGET_NAMES[0].to_string())
         );
 
         press(&mut picker, KeyCode::Down);
         assert_eq!(
             press(&mut picker, KeyCode::Char(' ')),
-            Action::Toggle(crate::widgets::WIDGET_NAMES[1])
+            Action::Toggle(crate::widgets::WIDGET_NAMES[1].to_string())
         );
     }
 
@@ -223,12 +231,22 @@ mod tests {
             KeyCode::Char('w'),
             KeyCode::Enter,
         ] {
-            assert_eq!(press(&mut Picker::new(), code), Action::Close, "{code:?}");
+            assert_eq!(press(&mut picker(), code), Action::Close, "{code:?}");
         }
         // A dialog that closed on any key would leave the user unsure whether
         // their last toggle was taken.
         for code in [KeyCode::Char('x'), KeyCode::Tab, KeyCode::Backspace] {
-            assert_eq!(press(&mut Picker::new(), code), Action::None, "{code:?}");
+            assert_eq!(press(&mut picker(), code), Action::None, "{code:?}");
         }
+    }
+
+    #[test]
+    fn runtime_plugin_names_are_selectable() {
+        let mut picker = Picker::new(vec!["clocks".into(), "terminal".into()]);
+        press(&mut picker, KeyCode::End);
+        assert_eq!(
+            press(&mut picker, KeyCode::Char(' ')),
+            Action::Toggle("terminal".into())
+        );
     }
 }
