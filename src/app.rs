@@ -15,7 +15,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
 use crate::config::Config;
 use crate::frame::{Binding, FrameSpec};
@@ -53,24 +53,6 @@ const GLOBAL: &[Binding] = &[
     Binding::extra("1-9", "jump to panel"),
     Binding::extra("Ctrl+C", "quit"),
 ];
-
-/// The text of `lines` with the styling dropped, for measuring.
-///
-/// Only the characters decide how text wraps, so a measurement does not need
-/// the spans — but it does need them concatenated in order, which is why this
-/// is not simply the first span of each line.
-fn plain_text(lines: &[Line<'_>]) -> String {
-    lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
 
 /// How long a run of resize keystrokes must be quiet before the layout is
 /// written back.
@@ -552,7 +534,7 @@ impl App {
                 dirty = false;
             }
 
-            if event::poll(tick_rate)? {
+            if event::poll(self.poll_wait(tick_rate))? {
                 match event::read()? {
                     // Only react to presses; on Windows every key also emits a
                     // release event, which would otherwise double every action.
@@ -757,6 +739,18 @@ impl App {
             .is_some_and(|slot| slot.panel.captures_input())
     }
 
+    /// Let a focused interactive panel request responsive asynchronous echo
+    /// without changing the dashboard-wide polling budget. The floor prevents
+    /// an external process from turning the shell into a busy loop.
+    fn poll_wait(&self, configured: Duration) -> Duration {
+        self.slots
+            .get(self.focus)
+            .filter(|slot| slot.panel.captures_input())
+            .map_or(configured, |slot| {
+                configured.min(slot.panel.refresh_interval().max(Duration::from_millis(16)))
+            })
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
         // Any key at all retires the startup hint. It has been read or it has
         // been ignored; either way it has had its turn.
@@ -768,15 +762,14 @@ impl App {
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+C remains the terminal's quit key unless the focused editor has
-        // an actual text selection to copy. Merely being inside a form is not
-        // enough to steal the interrupt: with no selection, it still quits as
-        // it always has.
+        // Editors get first refusal only for a real selection. No modal panel,
+        // child process or external protocol can veto the escape hatch: after
+        // the selection collapses, Ctrl+C exits from every state.
         if ctrl && matches!(key.code, KeyCode::Char('c')) {
-            let copied = self.slots.get_mut(self.focus).is_some_and(|slot| {
+            let consumed = self.slots.get_mut(self.focus).is_some_and(|slot| {
                 slot.panel.copy_selection() == crate::panel::KeyOutcome::Consumed
             });
-            if copied {
+            if consumed {
                 return;
             }
             self.should_quit = true;
@@ -1047,7 +1040,7 @@ impl App {
         };
         match picker.handle_key(key) {
             crate::picker::Action::None => {}
-            crate::picker::Action::Toggle(name) => self.toggle_widget(name),
+            crate::picker::Action::Toggle(name) => self.toggle_widget(&name),
             crate::picker::Action::Close => {
                 self.picker = None;
                 // Written on close rather than on every toggle: someone trying
@@ -1224,7 +1217,9 @@ impl App {
                 // panel you just focused are the reason you pressed `?`.
                 self.help_scroll = 0;
             }
-            KeyCode::Char('w') => self.picker = Some(crate::picker::Picker::new()),
+            KeyCode::Char('w') => {
+                self.picker = Some(crate::picker::Picker::new(self.config.widget_names()));
+            }
             KeyCode::Char('t') => self.open_theme_picker(),
             KeyCode::Char('m') => self.enter_arrange(),
             KeyCode::Char(c @ '1'..='9') => {
@@ -1651,7 +1646,7 @@ impl App {
         for binding in GLOBAL.iter().filter(|b| b.primary) {
             parts.push(vec![
                 Span::styled("   ", muted),
-                Span::styled(binding.key, key_style),
+                Span::styled(binding.key.clone(), key_style),
                 Span::styled(format!(" {}", binding.action), muted),
             ]);
         }
@@ -1777,8 +1772,10 @@ impl App {
             ))
         };
         let entry = |binding: &Binding| {
+            let key = crate::grid::truncate(&binding.key, 12);
+            let padding = " ".repeat(12usize.saturating_sub(crate::grid::display_width(&key)));
             Line::from(vec![
-                Span::styled(format!("  {:<12}", binding.key), key_style),
+                Span::styled(format!("  {key}{padding}"), key_style),
                 Span::styled(binding.action.to_string(), muted),
             ])
         };
@@ -1802,12 +1799,16 @@ impl App {
         // close the overlay is no use once it has scrolled out of the overlay.
         let width = 46.min(area.width);
         let text_width = width.saturating_sub(crate::frame::FRAME_WIDTH).max(1);
-        // Measured after wrapping, not from `lines.len()`. The two differ
-        // whenever a line is longer than the popup, which the list of unused
-        // widgets routinely is — sizing from the unwrapped count is how the
-        // overlay came to be shorter than its own contents.
-        let text_height = crate::grid::wrapped_height(&plain_text(&lines), text_width);
-        let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+        // Pre-wrap with Mirador's cell-aware rules. The focused panel may be an
+        // external process, so handing its binding text to ratatui's wrapper
+        // would give plugin-controlled emoji and combining marks a known panic
+        // path in the host renderer.
+        let lines: Vec<Line<'static>> = lines
+            .iter()
+            .flat_map(|line| crate::grid::wrap_line(line, usize::from(text_width)))
+            .collect();
+        let text_height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        let body = Paragraph::new(lines);
 
         // Borders, the blank line, and the footer.
         let chrome = 4;
@@ -2153,9 +2154,9 @@ mod tests {
         whole.push(acc.clone());
         for binding in GLOBAL.iter().filter(|b| b.primary) {
             acc.push_str("   ");
-            acc.push_str(binding.key);
+            acc.push_str(&binding.key);
             acc.push(' ');
-            acc.push_str(binding.action);
+            acc.push_str(&binding.action);
             whole.push(acc.clone());
         }
 
@@ -3225,6 +3226,54 @@ mod tests {
         assert!(
             !app.should_quit,
             "Esc means back out of something, not quit"
+        );
+    }
+
+    #[test]
+    fn only_a_focused_capturing_panel_can_shorten_the_event_wait() {
+        struct ResponsivePanel {
+            capturing: bool,
+        }
+
+        impl crate::panel::Panel for ResponsivePanel {
+            fn title(&self) -> String {
+                "responsive test".into()
+            }
+
+            fn refresh_interval(&self) -> Duration {
+                Duration::from_millis(8)
+            }
+
+            fn captures_input(&self) -> bool {
+                self.capturing
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+        }
+
+        let configured = Duration::from_millis(250);
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: false });
+        assert_eq!(app.poll_wait(configured), configured);
+
+        app.slots[0].panel = Box::new(ResponsivePanel { capturing: true });
+        assert_eq!(app.poll_wait(configured), Duration::from_millis(16));
+        assert_eq!(
+            app.poll_wait(Duration::from_millis(10)),
+            Duration::from_millis(10),
+            "a panel may ask for responsiveness but never slow the configured loop"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(
+            app.should_quit,
+            "even a capturing panel cannot intercept Ctrl+C"
         );
     }
 

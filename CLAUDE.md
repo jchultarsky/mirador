@@ -117,7 +117,10 @@ glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
 themes.rs    `theme = "name"`: bundled themes, inherits, palettes
 config/      mod.rs: paths, loading, validation; widgets.rs: one settings
-             struct per panel; layout.rs: the grid
+             struct per panel; layout.rs: the grid; plugins.rs: explicit
+             process declarations and plugin-owned opaque config
+plugin/      mod.rs: external Panel adapter, bounded input and rendering;
+             process.rs: JSON-lines workers, limits and child lifecycle
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it

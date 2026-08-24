@@ -154,7 +154,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
 
     // An empty string has no lines at all, and still occupies one row.
     if !any {
-        emit("");
+        emit(&text[..0]);
     }
 }
 
@@ -168,6 +168,75 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut out = Vec::new();
     break_lines(text, width, |line| out.push(line.to_string()));
     out
+}
+
+/// Wrap one already-styled logical line without handing untrusted text to
+/// ratatui's wrapper.
+///
+/// Span styles follow their source bytes across row boundaries. The final
+/// width check deliberately sums the spans the way ratatui does: a joined
+/// emoji sequence can occupy fewer cells as one string than it does when a
+/// style boundary splits it. In that exceptional case the row is collapsed
+/// and truncated as one span so it still cannot cross the requested edge.
+/// Embedded `\n` and `\r\n` are accepted as hard line boundaries. Their bytes
+/// are skipped by mapping each wrapped row back to its absolute source range,
+/// so a delimiter can never drift the styled-byte cursor or become a slice
+/// panic. If an internal range ever stops landing on UTF-8 boundaries, the row
+/// falls back to the line style instead of trusting an assertion in release
+/// code.
+pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    let base = text.as_ptr() as usize;
+    let mut output = Vec::new();
+    break_lines(&text, width, |row| {
+        let spans = (row.as_ptr() as usize)
+            .checked_sub(base)
+            .filter(|start| start.saturating_add(row.len()) <= text.len())
+            .and_then(|start| styled_byte_range(&line.spans, start, start + row.len()));
+        let style = spans
+            .as_ref()
+            .and_then(|spans| spans.first())
+            .map_or(line.style, |span| span.style);
+        let spans = spans.unwrap_or_else(|| vec![Span::styled(row.to_string(), style)]);
+        let rendered_width: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+        if rendered_width > width {
+            output.push(Line::from(Span::styled(truncate(row, width), style)));
+        } else {
+            output.push(Line::from(spans).style(line.style));
+        }
+    });
+    output
+}
+
+fn styled_byte_range(source: &[Span<'_>], start: usize, end: usize) -> Option<Vec<Span<'static>>> {
+    let expected = end.checked_sub(start)?;
+    let mut output = Vec::new();
+    let mut offset = 0usize;
+    let mut copied = 0usize;
+    for span in source {
+        let span_end = offset.checked_add(span.content.len())?;
+        if start < span_end && end > offset {
+            let local_start = start.saturating_sub(offset);
+            let local_end = end.min(span_end).checked_sub(offset)?;
+            let content = span.content.get(local_start..local_end)?;
+            if !content.is_empty() {
+                copied = copied.checked_add(content.len())?;
+                output.push(Span::styled(content.to_string(), span.style));
+            }
+        }
+        offset = span_end;
+        if offset >= end {
+            break;
+        }
+    }
+    (copied == expected).then_some(output)
 }
 
 /// `text` wrapped to `width` and rejoined, ready for a `Paragraph` that must
@@ -714,11 +783,12 @@ mod tests {
     /// the sweep passed cheerfully with the defect reintroduced. Counting the
     /// call sites cannot miss.
     ///
-    /// Two are allowed, and both are text this program wrote itself: the help
-    /// overlay and the delete confirmation, whose one variable line is
-    /// truncated to the width before it gets there.
+    /// One is allowed: the delete confirmation, whose one variable line is
+    /// truncated to the width before it gets there. The help overlay used to
+    /// be the second, but external panel bindings made its text plugin-owned;
+    /// it now comes through [`wrap_line`] instead.
     #[test]
-    fn only_the_two_known_places_use_ratatuis_own_wrapper() {
+    fn only_the_known_delete_confirmation_uses_ratatuis_own_wrapper() {
         fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
@@ -762,9 +832,9 @@ mod tests {
 
         assert_eq!(
             found.len(),
-            2,
-            "expected exactly two uses of ratatui's wrapper — the help overlay \
-             and the delete confirmation — and found {}:\n  {}\n\n\
+            1,
+            "expected exactly one use of ratatui's wrapper — the delete \
+             confirmation — and found {}:\n  {}\n\n\
              If this is a new site rendering text mirador did not write, wrap it \
              with `grid::wrapped` instead: ratatui's wrapper panics on a leading \
              combining mark, and on a double-width glyph in a word too long for \
@@ -772,10 +842,6 @@ mod tests {
              program wrote itself, widen this count and say why.",
             found.len(),
             found.join("\n  ")
-        );
-        assert!(
-            found.iter().any(|f| f.starts_with("app.rs:")),
-            "the help overlay's wrap went missing: {found:?}"
         );
         assert!(
             found.iter().any(|f| f.starts_with("todo.rs:")),
@@ -862,10 +928,14 @@ mod tests {
 
         // Split so this test's own source is not a match.
         let needle = concat!("Line::fr", "om(vec![");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/widgets");
-
         let mut found = Vec::new();
-        walk(&root, needle, &mut found);
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // External panel output is bounded by the same invariant as an in-tree
+        // widget. Sweep both implementation trees so moving composition behind
+        // the process boundary cannot make this guard pass vacuously.
+        for directory in ["widgets", "plugin"] {
+            walk(&source.join(directory), needle, &mut found);
+        }
 
         for name in &found {
             let allowed = ALLOWED
@@ -944,6 +1014,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn styled_wrapping_uses_the_width_ratatui_will_render() {
+        let line = Line::from(vec![
+            Span::styled("👩", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "\u{200d}💻",
+                Style::default().add_modifier(Modifier::ITALIC),
+            ),
+        ]);
+        let wrapped = wrap_line(&line, 2);
+        assert_eq!(wrapped.len(), 1);
+        let rendered_width: usize = wrapped[0]
+            .spans
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum();
+        assert!(rendered_width <= 2, "rendered width was {rendered_width}");
+    }
+
+    #[test]
+    fn styled_wrapping_treats_embedded_line_endings_as_guarded_hard_breaks() {
+        let first = Style::default().add_modifier(Modifier::BOLD);
+        let second = Style::default().add_modifier(Modifier::ITALIC);
+        let third = Style::default().add_modifier(Modifier::UNDERLINED);
+        let line = Line::from(vec![
+            Span::styled("ab\r", first),
+            Span::styled("\né\n", second),
+            Span::styled("界", third),
+        ]);
+
+        let wrapped = wrap_line(&line, 10);
+        let text: Vec<String> = wrapped
+            .iter()
+            .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["ab", "é", "界"]);
+        assert_eq!(wrapped[0].spans[0].style, first);
+        assert_eq!(wrapped[1].spans[0].style, second);
+        assert_eq!(wrapped[2].spans[0].style, third);
     }
 
     /// The one exception, and it is deliberate: a single glyph that cannot fit

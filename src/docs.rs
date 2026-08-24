@@ -266,6 +266,76 @@ mod tests {
     /// compares the map against the tree instead.
     #[test]
     fn every_module_is_named_in_the_architecture_map() {
+        fn directory_entry(map: &str, directory: &str) -> String {
+            let heading = format!("{directory}/");
+            let mut entry = String::new();
+            let mut found = false;
+            for line in map.lines() {
+                if line.starts_with(&heading) {
+                    found = true;
+                    entry.push_str(line);
+                } else if found && line.starts_with(' ') {
+                    entry.push(' ');
+                    entry.push_str(line.trim());
+                } else if found {
+                    break;
+                }
+            }
+            entry
+        }
+
+        fn names_module(entry: &str, file: &str) -> bool {
+            let stem = file.strip_suffix(".rs").unwrap_or(file);
+            entry
+                .split(|character: char| {
+                    !(character.is_ascii_alphanumeric() || matches!(character, '_' | '.'))
+                })
+                .any(|word| word == file || word == stem)
+        }
+
+        fn walk(
+            root: &Path,
+            dir: &Path,
+            map: &str,
+            inspected: &mut usize,
+            missing: &mut Vec<String>,
+        ) {
+            for entry in std::fs::read_dir(dir)
+                .expect("source directory must be readable")
+                .flatten()
+            {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(root, &path, map, inspected, missing);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs") {
+                    continue;
+                }
+
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("walked source stays below src")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if relative == "main.rs" {
+                    continue;
+                }
+                *inspected += 1;
+
+                let Some((directory, file)) = relative.split_once('/') else {
+                    if !map.contains(&relative) {
+                        missing.push(relative);
+                    }
+                    continue;
+                };
+                let entry = directory_entry(map, directory);
+                if entry.is_empty() || (file != "mod.rs" && !names_module(&entry, file)) {
+                    missing.push(relative);
+                }
+            }
+        }
+
         let notes = notes();
         let map = notes
             .split("## Architecture")
@@ -275,25 +345,15 @@ mod tests {
 
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut missing = Vec::new();
-        for entry in std::fs::read_dir(&root).expect("src/ must exist").flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "rs") {
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                // `main.rs` is the entry point rather than a component, and the
-                // map opens by describing it in prose instead of listing it.
-                if name == "main.rs" {
-                    continue;
-                }
-                if !map.contains(&name) {
-                    missing.push(name);
-                }
-            }
-        }
+        let mut inspected = 0usize;
+        walk(&root, &root, map, &mut inspected, &mut missing);
         missing.sort();
+
+        assert!(
+            inspected > 40,
+            "the architecture sweep saw only {inspected} modules; it must recurse into \
+             config/, plugin/ and widgets/ rather than pass on top-level files alone"
+        );
 
         assert!(
             missing.is_empty(),

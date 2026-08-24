@@ -49,16 +49,16 @@ pub struct Event {
     /// When it happened.
     pub at: Zoned,
     /// The panel that noticed, for grouping and for the reader's orientation.
-    pub source: &'static str,
+    pub source: String,
     /// One line, in the past tense, naming the thing rather than the panel.
     pub text: String,
 }
 
 impl Event {
-    pub fn new(source: &'static str, text: impl Into<String>) -> Self {
+    pub fn new(source: impl Into<String>, text: impl Into<String>) -> Self {
         Self {
             at: Zoned::now(),
-            source,
+            source: source.into(),
             text: text.into(),
         }
     }
@@ -145,7 +145,7 @@ mod tests {
                 .since
                 .checked_add(Span::new().minutes(minutes))
                 .expect("in range"),
-            source: "test",
+            source: "test".into(),
             text: format!("thing {minutes}"),
         }
     }
