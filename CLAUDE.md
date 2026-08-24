@@ -1043,11 +1043,17 @@ pomodoro 404  stocks 348    watchlog 271  news 252
 agenda 175    cpu 174       network 159      (whole dashboard: 1345)
 ```
 
-The calculator is the thirteenth and is **not** in that table: it shipped after
-the sweep and has never been measured. It looks compliant — the tape is capped
-and `render` builds only the rows it draws — but nobody has put a counting
-allocator behind it, and a panel that accumulates is the one most worth
-checking.
+The calculator is the thirteenth and is **not** in that table: it shipped
+after the sweep. It was measured on its own on 2026-08-24, by the recipe
+below, and holds the rule: 122 allocations a frame with an empty tape, 256
+with five rows on screen, 981 with the panel full — and **still 981 after a
+hundred further entries past the full screen**, with the tape at its 200-entry
+cap and the overflow path exercised. About 27 allocations a visible row, and
+the arithmetic closes: (981 − 122) / 27 is the ~32 rows a 40-line panel
+draws. Do not compare those figures against the table above — the code and
+the rig have both moved since that sweep, and the empty-tape figure lands
+below the table's own shell floor. Within one rig the property is what
+matters: flat in the data, linear in the screen.
 
 Nothing here is worth optimising. A thousand small allocations a frame at about
 one frame a second is ordinary work for building styled spans, and the
