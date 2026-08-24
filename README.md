@@ -1161,6 +1161,13 @@ opens in an older one with the settings it understands intact. The one exception
 is `update-check.toml`, which is a cache: the worst a stale one costs is a single
 extra version check.
 
+**The external panel protocol.** From 1.6.0 the promise has a third part:
+protocol v1, as written in [docs/plugin-protocol.md](docs/plugin-protocol.md),
+is a compatibility commitment. A release that advertises v1 will not remove or
+redefine its fields, weaken the host-owned keys, or lower its documented
+bounds; an incompatible shape gets a new protocol number rather than a silent
+change to this one. A plugin written against v1 today keeps working.
+
 **What this does not promise.** Running an older mirador after a newer one may
 drop a preference the older version has no idea about — it cannot write back
 what it never understood. Nothing else is lost, and nothing is corrupted.

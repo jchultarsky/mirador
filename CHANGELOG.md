@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-24
+
 ### Added
 
 - **External panels are an explicit, language-neutral process boundary.** A
@@ -19,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unconditional host-owned exit even when a child is stuck. The protocol is
   documented independently so SDKs do not link against Mirador's private Rust
   `Panel` trait. External panels can also hand bounded, completed events to
-  Mirador's native Watch Log.
+  Mirador's native Watch Log. Protocol v1 is a compatibility commitment from
+  this release — see the README's Compatibility section.
 
 ## [1.5.1] - 2026-08-24
 
@@ -1645,7 +1648,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/jchultarsky/mirador/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/jchultarsky/mirador/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/jchultarsky/mirador/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/jchultarsky/mirador/compare/v1.4.0...v1.4.1
