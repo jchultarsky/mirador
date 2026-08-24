@@ -134,7 +134,9 @@ mod tests {
                 bits.push((index >> shift) & 1);
             }
         }
-        bits.chunks_exact(8)
+        bits.as_chunks::<8>()
+            .0
+            .iter()
             .map(|byte| byte.iter().fold(0u8, |acc, bit| (acc << 1) | *bit as u8))
             .collect()
     }
