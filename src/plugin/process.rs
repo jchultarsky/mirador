@@ -3,9 +3,9 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::config::PluginConfig;
@@ -24,6 +24,12 @@ const WATCH_QUEUE: usize = 64;
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(300);
 const OUTPUT_CLOSE_GRACE: Duration = Duration::from_millis(100);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+// Pipe closure and lifecycle commands wake the supervisor immediately. This is
+// only the fallback for a descendant that inherited stdout, so an idle plugin
+// does not need the old permanent 50 Hz process poll.
+const PROCESS_STATUS_POLL: Duration = Duration::from_secs(1);
+const SUPERVISOR_JOIN_GRACE: Duration = Duration::from_millis(750);
+const SUPERVISOR_ABORT_GRACE: Duration = Duration::from_millis(250);
 const MESSAGE_RATE_WINDOW: Duration = Duration::from_secs(1);
 const MAX_MESSAGES_PER_WINDOW: usize = 120;
 const MAX_STDOUT_BYTES_PER_WINDOW: usize = 16 * 1024 * 1024;
@@ -40,6 +46,9 @@ pub(super) enum Phase {
 
 pub(super) struct Shared {
     pub(super) generation: u64,
+    /// Number of valid frame messages accepted, including stale revisions.
+    /// Input acknowledgement is about receipt, not revision arithmetic.
+    pub(super) frame_sequence: u64,
     pub(super) ready: bool,
     pub(super) phase: Phase,
     pub(super) title: Option<String>,
@@ -54,6 +63,7 @@ impl Shared {
     pub(super) fn starting() -> Self {
         Self {
             generation: 0,
+            frame_sequence: 0,
             ready: false,
             phase: Phase::Starting,
             title: None,
@@ -92,15 +102,87 @@ enum SupervisorCommand {
 }
 
 pub(super) struct Runtime {
-    pub(super) events: SyncSender<HostMessage>,
+    events: Option<SyncSender<HostMessage>>,
     supervisor: mpsc::Sender<SupervisorCommand>,
+    supervisor_thread: Option<JoinHandle<()>>,
 }
 
 impl Runtime {
-    pub(super) fn shutdown(&self) {
-        let _ = self.events.try_send(HostMessage::Shutdown);
-        let _ = self.supervisor.send(SupervisorCommand::Shutdown);
+    pub(super) fn send(&self, message: HostMessage) -> Result<(), TrySendError<HostMessage>> {
+        let Some(events) = self.events.as_ref() else {
+            return Err(TrySendError::Disconnected(message));
+        };
+        events.try_send(message)
     }
+
+    pub(super) fn abort(&self) {
+        let _ = self.supervisor.send(SupervisorCommand::Abort);
+    }
+
+    /// Ask the child to stop, then remain alive long enough for the supervisor
+    /// to enforce the grace-then-kill contract. The wait itself is bounded so
+    /// a broken OS process primitive cannot trap Mirador on exit.
+    pub(super) fn shutdown(&mut self) -> bool {
+        if let Some(events) = self.events.take() {
+            let _ = events.try_send(HostMessage::Shutdown);
+            drop(events);
+            let _ = self.supervisor.send(SupervisorCommand::Shutdown);
+        }
+
+        let Some(thread) = self.supervisor_thread.take() else {
+            return true;
+        };
+        if wait_until_finished(&thread, SUPERVISOR_JOIN_GRACE) {
+            return thread.join().is_ok();
+        }
+
+        // The supervisor normally killed the process after 300 ms. Abort is a
+        // second, independent nudge before the bounded host wait runs out.
+        let _ = self.supervisor.send(SupervisorCommand::Abort);
+        if wait_until_finished(&thread, SUPERVISOR_ABORT_GRACE) {
+            thread.join().is_ok()
+        } else {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn stub() -> (Self, Receiver<HostMessage>) {
+        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
+        let (supervisor, commands) = mpsc::channel();
+        let supervisor_thread = thread::spawn(move || {
+            while let Ok(command) = commands.recv() {
+                if matches!(
+                    command,
+                    SupervisorCommand::Shutdown | SupervisorCommand::Abort
+                ) {
+                    return;
+                }
+            }
+        });
+        (
+            Self {
+                events: Some(events),
+                supervisor,
+                supervisor_thread: Some(supervisor_thread),
+            },
+            received,
+        )
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+fn wait_until_finished(thread: &JoinHandle<()>, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while !thread.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread.is_finished()
 }
 
 pub(super) fn spawn_process(
@@ -145,7 +227,7 @@ pub(super) fn spawn_process(
     thread::spawn(move || stderr_loop(stderr, &stderr_shared, &stderr_supervisor));
 
     let supervisor_shared = Arc::clone(shared);
-    thread::spawn(move || {
+    let supervisor_thread = thread::spawn(move || {
         supervisor_loop(
             &mut child,
             &supervisor_rx,
@@ -165,14 +247,15 @@ pub(super) fn spawn_process(
         config,
         cwd,
     };
-    event_tx
-        .try_send(hello)
-        .map_err(|error| io::Error::other(format!("sending hello: {error}")))?;
-
-    Ok(Runtime {
-        events: event_tx,
+    let runtime = Runtime {
+        events: Some(event_tx),
         supervisor: supervisor_tx,
-    })
+        supervisor_thread: Some(supervisor_thread),
+    };
+    runtime
+        .send(hello)
+        .map_err(|error| io::Error::other(format!("sending hello: {error}")))?;
+    Ok(runtime)
 }
 
 fn writer_loop(
@@ -318,15 +401,12 @@ pub(super) fn read_limited_line(
 }
 
 pub(super) fn apply_message(message: PluginMessage, shared: &Arc<Mutex<Shared>>) -> bool {
-    let mut shared = shared
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match message {
         PluginMessage::Ready {
             protocol,
             title,
             refresh_ms,
-        } => return apply_ready(protocol, title, refresh_ms, &mut shared),
+        } => apply_ready_message(protocol, title, refresh_ms, shared),
         PluginMessage::Frame {
             revision,
             title,
@@ -335,81 +415,139 @@ pub(super) fn apply_message(message: PluginMessage, shared: &Arc<Mutex<Shared>>)
             bindings,
             input,
             cursor,
-        } => {
-            return apply_frame(
-                WireFrame {
-                    revision,
-                    title,
-                    counter,
-                    lines,
-                    bindings,
-                    input,
-                    cursor,
-                },
-                &mut shared,
-            );
-        }
-        PluginMessage::Error { message, fatal } => {
-            if !shared.ready {
-                shared.fail("plugin sent an error before `ready`");
-                return false;
-            }
-            if let Err(error) = validate_text(&message, "error message", MAX_ERROR_BYTES) {
-                shared.fail(error);
-                return false;
-            }
-            if fatal {
-                shared.fail(message);
-                return false;
-            }
-            shared.notice = Some(message);
-            shared.changed();
-        }
-        PluginMessage::Watch { text } => {
-            if !shared.ready {
-                shared.fail("plugin sent a watch event before `ready`");
-                return false;
-            }
-            if text.trim().is_empty()
-                || text.len() > MAX_WATCH_TEXT_BYTES
-                || text.chars().any(char::is_control)
-            {
-                shared.fail(format!(
-                    "plugin watch text must be one non-empty line of at most {MAX_WATCH_TEXT_BYTES} UTF-8 bytes"
-                ));
-                return false;
-            }
-            if shared.watch.len() == WATCH_QUEUE {
-                shared.watch.pop_front();
-                shared.notice = Some("plugin watch queue overflowed; oldest event dropped".into());
-            }
-            shared.watch.push_back(text);
-            shared.changed();
-        }
+        } => apply_frame_message(
+            WireFrame {
+                revision,
+                title,
+                counter,
+                lines,
+                bindings,
+                input,
+                cursor,
+            },
+            shared,
+        ),
+        PluginMessage::Error { message, fatal } => apply_error_message(message, fatal, shared),
+        PluginMessage::Watch { text } => apply_watch_message(text, shared),
     }
-    true
 }
 
-fn apply_ready(
+fn apply_ready_message(
     protocol: u16,
     title: Option<String>,
     refresh_ms: Option<u64>,
-    shared: &mut Shared,
+    shared: &Arc<Mutex<Shared>>,
 ) -> bool {
     if protocol != PROTOCOL_VERSION {
-        shared.fail(format!(
-            "protocol {protocol} is incompatible with host protocol {PROTOCOL_VERSION}"
-        ));
-        return false;
-    }
-    if shared.ready {
-        shared.fail("plugin sent `ready` more than once");
-        return false;
+        return fail_shared(
+            shared,
+            format!("protocol {protocol} is incompatible with host protocol {PROTOCOL_VERSION}"),
+        );
     }
     if let Some(title) = title.as_deref()
         && let Err(error) = validate_text(title, "ready title", MAX_TITLE_BYTES)
     {
-        shared.fail(error);
+        return fail_shared(shared, error);
+    }
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    apply_ready(title, refresh_ms, &mut shared)
+}
+
+fn apply_frame_message(frame: WireFrame, shared: &Arc<Mutex<Shared>>) -> bool {
+    if let Err(error) = validate_frame(
+        frame.title.as_deref(),
+        frame.counter.as_deref(),
+        &frame.lines,
+        &frame.bindings,
+        &frame.input,
+    ) {
+        return fail_shared(shared, error);
+    }
+
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !shared.ready {
+        shared.fail("plugin sent a frame before `ready`");
+        return false;
+    }
+    if !matches!(shared.phase, Phase::Running) {
+        return false;
+    }
+    apply_frame(frame, &mut shared)
+}
+
+fn apply_error_message(message: String, fatal: bool, shared: &Arc<Mutex<Shared>>) -> bool {
+    if let Err(error) = validate_text(&message, "error message", MAX_ERROR_BYTES) {
+        return fail_shared(shared, error);
+    }
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !shared.ready {
+        shared.fail("plugin sent an error before `ready`");
+        return false;
+    }
+    if !matches!(shared.phase, Phase::Running) {
+        return false;
+    }
+    if fatal {
+        shared.fail(message);
+        return false;
+    }
+    shared.notice = Some(message);
+    shared.changed();
+    true
+}
+
+fn apply_watch_message(text: String, shared: &Arc<Mutex<Shared>>) -> bool {
+    if text.trim().is_empty()
+        || text.len() > MAX_WATCH_TEXT_BYTES
+        || text.chars().any(char::is_control)
+    {
+        return fail_shared(
+            shared,
+            format!(
+                "plugin watch text must be one non-empty line of at most \
+                 {MAX_WATCH_TEXT_BYTES} UTF-8 bytes"
+            ),
+        );
+    }
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !shared.ready {
+        shared.fail("plugin sent a watch event before `ready`");
+        return false;
+    }
+    if !matches!(shared.phase, Phase::Running) {
+        return false;
+    }
+    if shared.watch.len() == WATCH_QUEUE {
+        shared.watch.pop_front();
+        shared.notice = Some("plugin watch queue overflowed; oldest event dropped".into());
+    }
+    shared.watch.push_back(text);
+    shared.changed();
+    true
+}
+
+fn fail_shared(shared: &Arc<Mutex<Shared>>, error: impl Into<String>) -> bool {
+    shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .fail(error);
+    false
+}
+
+fn apply_ready(title: Option<String>, refresh_ms: Option<u64>, shared: &mut Shared) -> bool {
+    if shared.ready {
+        shared.fail("plugin sent `ready` more than once");
+        return false;
+    }
+    if !matches!(shared.phase, Phase::Starting) {
         return false;
     }
     shared.ready = true;
@@ -423,20 +561,7 @@ fn apply_ready(
 }
 
 fn apply_frame(frame: WireFrame, shared: &mut Shared) -> bool {
-    if !shared.ready {
-        shared.fail("plugin sent a frame before `ready`");
-        return false;
-    }
-    if let Err(error) = validate_frame(
-        frame.title.as_deref(),
-        frame.counter.as_deref(),
-        &frame.lines,
-        &frame.bindings,
-        &frame.input,
-    ) {
-        shared.fail(error);
-        return false;
-    }
+    shared.frame_sequence = shared.frame_sequence.wrapping_add(1);
     if shared
         .frame
         .as_ref()
@@ -562,11 +687,15 @@ fn stderr_loop(
     supervisor: &mpsc::Sender<SupervisorCommand>,
 ) {
     let mut buffer = [0u8; 1024];
+    let mut decoder = StderrDecoder::default();
     let mut window_started = Instant::now();
     let mut window_bytes = 0usize;
     loop {
         let read = match stderr.read(&mut buffer) {
-            Ok(0) => return,
+            Ok(0) => {
+                append_stderr(shared, &decoder.decode(&[], true));
+                return;
+            }
             Ok(read) => read,
             Err(error) => {
                 shared
@@ -594,27 +723,91 @@ fn stderr_loop(
             return;
         }
 
-        let text: String = String::from_utf8_lossy(&buffer[..read])
-            .chars()
-            .map(|character| match character {
-                '\n' | '\r' => '\n',
-                '\t' => ' ',
-                control if control.is_control() => '\u{fffd}',
-                printable => printable,
-            })
-            .collect();
-        let mut shared = shared
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        shared.stderr.push_str(&text);
-        if shared.stderr.len() > MAX_STDERR_BYTES {
-            let excess = shared.stderr.len() - MAX_STDERR_BYTES;
-            let mut boundary = excess;
-            while boundary < shared.stderr.len() && !shared.stderr.is_char_boundary(boundary) {
-                boundary += 1;
+        append_stderr(shared, &decoder.decode(&buffer[..read], false));
+    }
+}
+
+#[derive(Default)]
+struct StderrDecoder {
+    pending: Vec<u8>,
+}
+
+impl StderrDecoder {
+    /// Decode complete UTF-8 while retaining at most one incomplete code point
+    /// for the next fixed-size read. Invalid bytes still become replacement
+    /// characters; valid text split exactly at 1 KiB no longer does.
+    fn decode(&mut self, bytes: &[u8], eof: bool) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut output = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    sanitise_stderr(valid, &mut output);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    if valid > 0 {
+                        // `valid_up_to` is guaranteed to be a UTF-8 boundary.
+                        let prefix =
+                            std::str::from_utf8(&self.pending[..valid]).unwrap_or_default();
+                        sanitise_stderr(prefix, &mut output);
+                        self.pending.drain(..valid);
+                    }
+                    match error.error_len() {
+                        Some(length) => {
+                            output.push('\u{fffd}');
+                            self.pending.drain(..length);
+                        }
+                        None if eof => {
+                            output.push('\u{fffd}');
+                            self.pending.clear();
+                            break;
+                        }
+                        None => break,
+                    }
+                }
             }
-            shared.stderr.drain(..boundary);
         }
+        output
+    }
+}
+
+fn sanitise_stderr(text: &str, output: &mut String) {
+    output.extend(text.chars().map(|character| match character {
+        '\n' | '\r' => '\n',
+        '\t' => ' ',
+        control if control.is_control() => '\u{fffd}',
+        printable => printable,
+    }));
+}
+
+fn append_stderr(shared: &Arc<Mutex<Shared>>, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut shared = shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    shared.stderr.push_str(text);
+    if shared.stderr.len() > MAX_STDERR_BYTES {
+        let excess = shared.stderr.len() - MAX_STDERR_BYTES;
+        let mut boundary = excess;
+        while boundary < shared.stderr.len() && !shared.stderr.is_char_boundary(boundary) {
+            boundary += 1;
+        }
+        shared.stderr.drain(..boundary);
+    }
+    // Stderr is visible before the first frame and after a terminal failure.
+    // While a healthy frame is on screen, retaining diagnostics is enough; a
+    // generation bump per chunk would force redraws for text not being drawn.
+    if shared.frame.is_none()
+        || matches!(
+            shared.phase,
+            Phase::Exited(_) | Phase::Failed(_) | Phase::Stopping
+        )
+    {
         shared.changed();
     }
 }
@@ -627,32 +820,8 @@ fn supervisor_loop(
 ) {
     let mut deadline = None;
     let mut output_closed = None;
+    let mut disconnected = false;
     loop {
-        match commands.try_recv() {
-            Ok(SupervisorCommand::Abort) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            }
-            Ok(SupervisorCommand::Shutdown) => {
-                deadline = Some(Instant::now() + SHUTDOWN_GRACE);
-                let mut shared = shared
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if !matches!(shared.phase, Phase::Exited(_) | Phase::Failed(_)) {
-                    shared.phase = Phase::Stopping;
-                    shared.changed();
-                }
-            }
-            Ok(SupervisorCommand::OutputClosed) => {
-                output_closed = Some(Instant::now() + OUTPUT_CLOSE_GRACE);
-            }
-            Err(TryRecvError::Disconnected) if deadline.is_none() => {
-                deadline = Some(Instant::now() + SHUTDOWN_GRACE);
-            }
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {}
-        }
-
         match child.try_wait() {
             Ok(Some(status)) => {
                 let mut shared = shared
@@ -675,14 +844,14 @@ fn supervisor_loop(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .fail(format!("checking plugin process: {error}"));
+                terminate_child(child);
                 return;
             }
         }
 
         let startup_timed_out = expire_startup(shared, Instant::now(), startup_deadline);
         if startup_timed_out {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child(child);
             return;
         }
 
@@ -699,20 +868,64 @@ fn supervisor_loop(
                 }
             };
             if should_fail {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_child(child);
                 return;
             }
             output_closed = None;
         }
 
         if deadline.is_some_and(|when| Instant::now() >= when) {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_child(child);
             return;
         }
-        thread::sleep(Duration::from_millis(20));
+
+        let now = Instant::now();
+        let startup = (!shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ready)
+            .then_some(startup_deadline);
+        let until = [startup, deadline, output_closed]
+            .into_iter()
+            .flatten()
+            .map(|when| when.saturating_duration_since(now))
+            .min()
+            .unwrap_or(PROCESS_STATUS_POLL)
+            .min(PROCESS_STATUS_POLL);
+        if disconnected {
+            thread::sleep(until);
+            continue;
+        }
+        match commands.recv_timeout(until) {
+            Ok(SupervisorCommand::Abort) => {
+                terminate_child(child);
+                return;
+            }
+            Ok(SupervisorCommand::Shutdown) => {
+                deadline = Some(Instant::now() + SHUTDOWN_GRACE);
+                let mut shared = shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !matches!(shared.phase, Phase::Exited(_) | Phase::Failed(_)) {
+                    shared.phase = Phase::Stopping;
+                    shared.changed();
+                }
+            }
+            Ok(SupervisorCommand::OutputClosed) => {
+                output_closed = Some(Instant::now() + OUTPUT_CLOSE_GRACE);
+            }
+            Err(RecvTimeoutError::Disconnected) if !disconnected => {
+                disconnected = true;
+                deadline = Some(Instant::now() + SHUTDOWN_GRACE);
+            }
+            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
+        }
     }
+}
+
+fn terminate_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn expire_startup(shared: &Arc<Mutex<Shared>>, now: Instant, deadline: Instant) -> bool {
@@ -732,8 +945,55 @@ fn expire_startup(shared: &Arc<Mutex<Shared>>, now: Instant, deadline: Instant) 
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
-    use crate::plugin::{WireBinding, WireSpan};
+    use crate::panel::Panel;
+    use crate::plugin::{PluginPanel, WireBinding, WireSpan};
+
+    const WAITING_CHILD_TEST: &str =
+        "plugin::process::tests::child_waits_for_the_parent_to_terminate_it";
+
+    fn waiting_child() -> Child {
+        let executable = std::env::current_exe().expect("test executable has a path");
+        Command::new(executable)
+            .args(["--ignored", "--exact", WAITING_CHILD_TEST, "--quiet"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("waiting test child starts")
+    }
+
+    fn supervised_waiting_runtime(
+        shared: &Arc<Mutex<Shared>>,
+    ) -> (Runtime, Receiver<HostMessage>, Arc<AtomicBool>) {
+        let mut child = waiting_child();
+        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
+        let (supervisor, commands) = mpsc::channel();
+        let finished = Arc::new(AtomicBool::new(false));
+        let thread_finished = Arc::clone(&finished);
+        let supervisor_shared = Arc::clone(shared);
+        let supervisor_thread = thread::spawn(move || {
+            supervisor_loop(
+                &mut child,
+                &commands,
+                &supervisor_shared,
+                Instant::now() + STARTUP_TIMEOUT,
+            );
+            thread_finished.store(true, Ordering::Release);
+        });
+        (
+            Runtime {
+                events: Some(events),
+                supervisor,
+                supervisor_thread: Some(supervisor_thread),
+            },
+            received,
+            finished,
+        )
+    }
 
     fn span(text: impl Into<String>) -> WireSpan {
         WireSpan {
@@ -746,6 +1006,139 @@ mod tests {
             underlined: false,
             reversed: false,
         }
+    }
+
+    #[test]
+    #[ignore = "helper process for portable plugin lifecycle tests"]
+    fn child_waits_for_the_parent_to_terminate_it() {
+        thread::sleep(Duration::from_secs(30));
+    }
+
+    #[test]
+    fn normal_host_shutdown_waits_for_the_supervisor_to_reap_its_child() {
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        let (runtime, _received, finished) = supervised_waiting_runtime(&shared);
+        let mut panel = PluginPanel::new(PluginConfig {
+            id: "shutdown-test".into(),
+            command: vec!["mirador-plugin-shutdown-test-command-does-not-exist".into()],
+            config: toml::Table::new(),
+        });
+        panel.shared = shared;
+        panel.runtime = Some(runtime);
+        let started = Instant::now();
+
+        panel.shutdown();
+        assert!(
+            panel.runtime.is_none(),
+            "the panel retained a supervisor after shutdown"
+        );
+        assert!(
+            started.elapsed() >= SHUTDOWN_GRACE,
+            "the configured child was not given its cleanup grace"
+        );
+        assert!(
+            started.elapsed() < SUPERVISOR_JOIN_GRACE + SUPERVISOR_ABORT_GRACE,
+            "normal shutdown exceeded the host's bounded wait"
+        );
+        assert!(
+            finished.load(Ordering::Acquire),
+            "shutdown returned before kill/wait completed"
+        );
+    }
+
+    #[test]
+    fn runtime_drop_enforces_the_same_bounded_child_cleanup() {
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        let (runtime, _received, finished) = supervised_waiting_runtime(&shared);
+        let started = Instant::now();
+
+        drop(runtime);
+
+        assert!(started.elapsed() >= SHUTDOWN_GRACE);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            finished.load(Ordering::Acquire),
+            "dropping the runtime orphaned its child supervisor"
+        );
+    }
+
+    #[test]
+    fn the_startup_timeout_terminates_and_reaps_an_unready_child() {
+        let mut child = waiting_child();
+        let (_commands, received) = mpsc::channel();
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        let started = Instant::now();
+
+        supervisor_loop(
+            &mut child,
+            &received,
+            &shared,
+            Instant::now() + Duration::from_millis(25),
+        );
+
+        assert!(matches!(
+            shared.lock().unwrap().phase,
+            Phase::Failed(ref error) if error.contains("did not send `ready`")
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the unready helper was waited out instead of terminated"
+        );
+    }
+
+    #[test]
+    fn closed_output_gets_a_short_grace_then_terminates_the_child() {
+        let mut child = waiting_child();
+        let (commands, received) = mpsc::channel();
+        let mut state = Shared::starting();
+        state.ready = true;
+        state.phase = Phase::Running;
+        let shared = Arc::new(Mutex::new(state));
+        commands.send(SupervisorCommand::OutputClosed).unwrap();
+        let started = Instant::now();
+
+        supervisor_loop(
+            &mut child,
+            &received,
+            &shared,
+            Instant::now() + STARTUP_TIMEOUT,
+        );
+
+        assert!(started.elapsed() >= OUTPUT_CLOSE_GRACE);
+        assert!(matches!(
+            shared.lock().unwrap().phase,
+            Phase::Failed(ref error) if error.contains("closed stdout")
+        ));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the output-closed helper was waited out instead of terminated"
+        );
+    }
+
+    #[test]
+    fn a_child_that_exits_is_recorded_without_waiting_for_a_command() {
+        let executable = std::env::current_exe().expect("test executable has a path");
+        let mut child = Command::new(executable)
+            .arg("--help")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("short-lived test child starts");
+        let (_commands, received) = mpsc::channel();
+        let mut state = Shared::starting();
+        state.ready = true;
+        state.phase = Phase::Running;
+        let shared = Arc::new(Mutex::new(state));
+
+        supervisor_loop(
+            &mut child,
+            &received,
+            &shared,
+            Instant::now() + STARTUP_TIMEOUT,
+        );
+
+        assert!(matches!(shared.lock().unwrap().phase, Phase::Exited(_)));
     }
 
     #[test]
@@ -805,6 +1198,17 @@ mod tests {
             shared.lock().unwrap().phase,
             Phase::Failed(ref error) if error.contains("stderr bytes")
         ));
+    }
+
+    #[test]
+    fn stderr_decoder_preserves_utf8_split_at_a_read_boundary() {
+        let encoded = "é".as_bytes();
+        let mut decoder = StderrDecoder::default();
+        assert_eq!(decoder.decode(&encoded[..1], false), "");
+        assert_eq!(decoder.decode(&encoded[1..], false), "é");
+
+        let mut incomplete = StderrDecoder::default();
+        assert_eq!(incomplete.decode(&encoded[..1], true), "\u{fffd}");
     }
 
     #[test]

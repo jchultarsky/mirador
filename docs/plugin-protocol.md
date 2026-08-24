@@ -83,7 +83,9 @@ Watch Log event or stderr diagnostic.
 Each placement owns one child process. Stdin and stdout carry UTF-8 JSON Lines;
 stderr is a diagnostic stream. On removal or normal application exit, Mirador
 sends `shutdown`, allows 300 ms for cleanup, then terminates a child that
-remains. A failed panel can be restarted with `r`.
+remains. The exit path waits, for at most one second, for the process supervisor
+to finish that grace-then-terminate sequence before terminal restoration. A
+failed panel can be restarted with `r`.
 
 ## Bounds
 
@@ -103,14 +105,16 @@ The host applies these v1 limits independently to every panel:
 | Undrained Watch Log events | 64, each at most 1,024 UTF-8 bytes |
 | Host-to-child input queue | 256 messages |
 | Child stderr accepted / retained | 64 KiB per second / latest 8 KiB |
+| Passive-key frame acknowledgement | 3 x `refresh_ms`, clamped to 100 ms through 1 second |
 
 Only the newest complete frame is retained. A newer frame replaces the prior
 one rather than entering a render queue. `refresh_ms` is clamped to 16 through
 60,000 ms, so a focused interactive panel cannot turn the shell into a busy
 loop.
 
-Crossing a protocol, startup, output-rate or retained-data limit fails that
-panel and terminates its child. A full host-to-child queue drops new input and
+Crossing a child protocol, startup, output-rate, retained-data or input-
+acknowledgement limit fails that panel and terminates its child. A full host-to-
+child queue or a host input message too large to encode drops the new input and
 shows a panel warning; input already claimed by a capturing panel never falls
 through as a Mirador global action.
 
@@ -280,8 +284,9 @@ drag, release and horizontal-wheel traffic is deliberately not part of v1.
 
 ## Input ownership
 
-Input policy is evaluated synchronously from the newest frame. Mirador never
-waits for a child to decide whether a global key is safe.
+Input policy is evaluated synchronously from the newest frame, plus the bounded
+host-owned race barrier described below. Mirador never waits for a child to
+decide whether a global key is safe.
 
 - `capture: true` is the same explicit text-entry or modal state used by an
   in-tree panel. While focused, it receives ordinary keys and suspends ordinary
@@ -299,7 +304,17 @@ explicit capture state the ordinary keys are suspended just as they are for a
 built-in editor; `Ctrl+C` remains reserved without exception.
 
 After Mirador accepts a named key from a passive panel, it conservatively
-captures subsequent input until a newer frame acknowledges the action. This
-closes the asynchronous transition where, for example, `Enter` opens a login
-form but a rapidly typed `q` arrives before the form's capture frame. Plugins
-publish a new frame after handling a named passive key.
+captures subsequent keyboard input for three of that panel's refresh intervals,
+clamped to at least 100 ms and at most one second. This closes the asynchronous
+transition where, for example, `Enter` opens a login form but a rapidly typed
+`q` arrives before the form's capture frame. Paste and mouse remain independent
+capabilities during this barrier: an event not opted into by the latest frame
+is not sent to the plugin or converted into fallback key events.
+
+Any valid frame accepted during the barrier acknowledges the action and
+releases it, even when its revision is equal to or older than the retained
+frame. This makes acknowledgement possible after `revision: u64::MAX` and keeps
+revision ordering separate from input ownership. If no frame arrives before
+the bound, Mirador fails the panel, terminates its child and returns input to
+the shell. Plugins therefore publish a frame after handling a named passive
+key; they cannot create an unbounded modal state by stalling.

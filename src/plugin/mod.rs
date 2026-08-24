@@ -8,7 +8,7 @@
 
 use std::sync::mpsc::TrySendError;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{
@@ -46,6 +46,10 @@ const MAX_COLOR_BYTES: usize = 64;
 /// not make drawing one row proportional to an entire retained frame.
 const RENDER_BYTES_PER_CELL: usize = 16;
 const DEFAULT_REFRESH: Duration = Duration::from_millis(33);
+const INPUT_BARRIER_REFRESHES: u32 = 3;
+const MIN_INPUT_BARRIER: Duration = Duration::from_millis(100);
+const MAX_INPUT_BARRIER: Duration = Duration::from_secs(1);
+const INPUT_BARRIER_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -196,6 +200,12 @@ struct WireFrame {
     cursor: Option<WireCursor>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct InputBarrier {
+    frame_sequence: u64,
+    expires_at: Instant,
+}
+
 /// Adapter from one explicitly configured process to Mirador's private panel
 /// trait. Process failures are panel state, never application failures.
 pub struct PluginPanel {
@@ -203,6 +213,7 @@ pub struct PluginPanel {
     runtime: Option<Runtime>,
     shared: Arc<Mutex<Shared>>,
     seen_generation: u64,
+    seen_frame_sequence: u64,
     phase: Phase,
     title: String,
     refresh: Duration,
@@ -210,10 +221,9 @@ pub struct PluginPanel {
     bindings: Vec<Binding>,
     policy: InputPolicy,
     notice: Option<String>,
-    /// Revision whose passive key action is awaiting a new frame. Until that
-    /// acknowledgement arrives, subsequent input is conservatively captured
-    /// so a rapid `Enter`, `q` cannot cross an asynchronous mode transition.
-    input_barrier: Option<u64>,
+    /// A passive key action awaiting any accepted frame. The short deadline is
+    /// what makes this a race barrier rather than an unbounded modal state.
+    input_barrier: Option<InputBarrier>,
     last_size: Option<(u16, u16)>,
     last_focus: Option<bool>,
 }
@@ -226,6 +236,7 @@ impl PluginPanel {
             runtime: None,
             shared: Arc::new(Mutex::new(Shared::starting())),
             seen_generation: u64::MAX,
+            seen_frame_sequence: 0,
             phase: Phase::Starting,
             title: id,
             refresh: DEFAULT_REFRESH,
@@ -246,6 +257,7 @@ impl PluginPanel {
         self.stop();
         self.shared = Arc::new(Mutex::new(Shared::starting()));
         self.seen_generation = u64::MAX;
+        self.seen_frame_sequence = 0;
         self.phase = Phase::Starting;
         self.frame = None;
         self.bindings.clear();
@@ -266,8 +278,8 @@ impl PluginPanel {
     }
 
     fn stop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.shutdown();
+        if let Some(mut runtime) = self.runtime.take() {
+            let _ = runtime.shutdown();
         }
     }
 
@@ -276,7 +288,20 @@ impl PluginPanel {
             .shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let frame_sequence = shared.frame_sequence;
+        if shared.generation == self.seen_generation && frame_sequence == self.seen_frame_sequence {
+            return false;
+        }
+
         if shared.generation == self.seen_generation {
+            drop(shared);
+            if self
+                .input_barrier
+                .is_some_and(|barrier| barrier.frame_sequence != frame_sequence)
+            {
+                self.input_barrier = None;
+            }
+            self.seen_frame_sequence = frame_sequence;
             return false;
         }
 
@@ -292,6 +317,14 @@ impl PluginPanel {
         };
         drop(shared);
 
+        if self
+            .input_barrier
+            .is_some_and(|barrier| barrier.frame_sequence != frame_sequence)
+        {
+            self.input_barrier = None;
+        }
+        self.seen_frame_sequence = frame_sequence;
+
         self.title = next
             .as_ref()
             .and_then(|frame| frame.title.clone())
@@ -299,12 +332,6 @@ impl PluginPanel {
 
         if let Some(frame) = &next {
             self.policy = frame.input.clone();
-            if self
-                .input_barrier
-                .is_some_and(|revision| frame.revision > revision)
-            {
-                self.input_barrier = None;
-            }
             if matches!(self.phase, Phase::Exited(_) | Phase::Failed(_)) {
                 self.input_barrier = None;
             }
@@ -338,7 +365,7 @@ impl PluginPanel {
         let Some(runtime) = &self.runtime else {
             return false;
         };
-        match runtime.events.try_send(message) {
+        match runtime.send(message) {
             Ok(()) => true,
             Err(TrySendError::Full(_)) => {
                 let mut shared = self
@@ -359,9 +386,40 @@ impl PluginPanel {
         if self.policy.capture || self.input_barrier.is_some() {
             return;
         }
-        if let Some(revision) = self.frame.as_ref().map(|frame| frame.revision) {
-            self.input_barrier = Some(revision);
+        let timeout = input_barrier_timeout(self.refresh);
+        self.input_barrier = Some(InputBarrier {
+            frame_sequence: self.seen_frame_sequence,
+            expires_at: Instant::now() + timeout,
+        });
+    }
+
+    fn input_barrier_active(&self) -> bool {
+        self.input_barrier
+            .is_some_and(|barrier| Instant::now() < barrier.expires_at)
+    }
+
+    fn expire_input_barrier(&mut self) -> bool {
+        let Some(barrier) = self.input_barrier else {
+            return false;
+        };
+        if Instant::now() < barrier.expires_at {
+            return false;
         }
+
+        self.input_barrier = None;
+        let timeout = input_barrier_timeout(self.refresh);
+        let message = format!(
+            "plugin did not acknowledge input with a frame within {} ms",
+            timeout.as_millis()
+        );
+        self.shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .fail(message);
+        if let Some(runtime) = &self.runtime {
+            runtime.abort();
+        }
+        self.sync()
     }
 
     fn status_lines(
@@ -454,11 +512,17 @@ impl Panel for PluginPanel {
     }
 
     fn refresh_interval(&self) -> Duration {
-        self.refresh
+        self.input_barrier.map_or(self.refresh, |barrier| {
+            let until_deadline = barrier
+                .expires_at
+                .saturating_duration_since(Instant::now())
+                .max(Duration::from_millis(1));
+            self.refresh.min(INPUT_BARRIER_POLL).min(until_deadline)
+        })
     }
 
     fn tick(&mut self) -> bool {
-        let changed = self.sync();
+        let changed = self.expire_input_barrier() || self.sync();
         let _ = self.send(HostMessage::Tick);
         changed
     }
@@ -476,6 +540,7 @@ impl Panel for PluginPanel {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>) {
+        self.expire_input_barrier();
         self.sync();
         let size = (area.width.max(1), area.height.max(1));
         if self.last_size != Some(size)
@@ -550,6 +615,7 @@ impl Panel for PluginPanel {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
+        self.expire_input_barrier();
         let canonical = canonical_key(key);
         if matches!(self.phase, Phase::Exited(_) | Phase::Failed(_)) && canonical == "r" {
             self.start();
@@ -588,18 +654,44 @@ impl Panel for PluginPanel {
     }
 
     fn handle_paste(&mut self, text: &str) -> KeyOutcome {
-        if !self.policy.paste && self.input_barrier.is_none() {
-            return KeyOutcome::Ignored;
+        self.expire_input_barrier();
+        if !self.policy.paste {
+            // Capture and the race barrier own the event, but paste is a
+            // separate capability. Consume it without converting its contents
+            // into key messages or forwarding it to a process that opted out.
+            return if self.policy.capture || self.input_barrier_active() {
+                KeyOutcome::Consumed
+            } else {
+                KeyOutcome::Ignored
+            };
         }
-        let _ = self.send(HostMessage::Paste {
+        let message = HostMessage::Paste {
             text: text.to_string(),
-        });
+        };
+        if !host_message_fits(&message) {
+            let mut shared = self
+                .shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            shared.notice =
+                Some("paste is too large for external panel input (8 MiB message limit)".into());
+            shared.changed();
+            drop(shared);
+            self.sync();
+            return KeyOutcome::Consumed;
+        }
+        let _ = self.send(message);
         KeyOutcome::Consumed
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, area: Rect) -> KeyOutcome {
-        if !self.policy.mouse && self.input_barrier.is_none() {
-            return KeyOutcome::Ignored;
+        self.expire_input_barrier();
+        if !self.policy.mouse {
+            return if self.policy.capture || self.input_barrier_active() {
+                KeyOutcome::Consumed
+            } else {
+                KeyOutcome::Ignored
+            };
         }
         let Some((kind, button)) = mouse_kind(event.kind) else {
             return KeyOutcome::Ignored;
@@ -615,7 +707,7 @@ impl Panel for PluginPanel {
     }
 
     fn captures_input(&self) -> bool {
-        self.policy.capture || self.input_barrier.is_some()
+        self.policy.capture || self.input_barrier_active()
     }
 
     fn shutdown(&mut self) {
@@ -675,99 +767,68 @@ fn wrapped_wire_lines(
         if remaining == 0 {
             break;
         }
-        let prefix = visible_wire_prefix(line, usize::from(width), remaining);
-        let mut span_index = 0usize;
-        let mut span_offset = 0usize;
-        for row in crate::grid::wrap(&prefix, usize::from(width))
+        let prefix = visible_wire_line(line, usize::from(width), remaining, theme);
+        for row in crate::grid::wrap_line(&prefix, usize::from(width))
             .into_iter()
             .take(remaining)
         {
-            let spans = take_styled_bytes(
-                &line.spans,
-                &mut span_index,
-                &mut span_offset,
-                row.len(),
-                theme,
-            );
-            // Ratatui measures each styled span independently. A joined emoji
-            // sequence can be two cells as one string but wider when a style
-            // boundary splits it, so the postcondition must use the widths the
-            // renderer will actually add.
-            let rendered_width: usize = spans
-                .iter()
-                .map(|span| crate::grid::display_width(&span.content))
-                .sum();
-            if rendered_width > usize::from(width) {
-                let style = spans.first().map_or(Style::default(), |span| span.style);
-                output.push(Line::from(Span::styled(
-                    crate::grid::truncate(&row, usize::from(width)),
-                    style,
-                )));
-            } else {
-                output.push(Line::from(spans));
-            }
+            output.push(row);
         }
     }
     output
 }
 
-fn visible_wire_prefix(line: &WireLine, width: usize, rows: usize) -> String {
+fn visible_wire_line(
+    line: &WireLine,
+    width: usize,
+    rows: usize,
+    theme: &crate::theme::Theme,
+) -> Line<'static> {
     // A two-cell glyph in a one-cell panel is replaced by one ellipsis. Count
     // enough source width to produce every requested replacement row.
     let cell_budget = width.max(2).saturating_mul(rows.saturating_add(1));
     let byte_budget = cell_budget
         .saturating_mul(RENDER_BYTES_PER_CELL)
         .clamp(256, MAX_RETAINED_FRAME_TEXT_BYTES);
-    let mut output = String::new();
+    let mut output = Vec::new();
+    let mut bytes = 0usize;
     let mut cells = 0usize;
+    let mut complete = true;
 
-    'spans: for span in &line.spans {
+    for span in &line.spans {
+        let mut text = String::new();
         for character in span.text.chars() {
-            let bytes = character.len_utf8();
+            let character_bytes = character.len_utf8();
             let character_width = crate::grid::char_width(character);
-            if output.len().saturating_add(bytes) > byte_budget
+            if bytes.saturating_add(character_bytes) > byte_budget
                 || (character_width > 0 && cells.saturating_add(character_width) > cell_budget)
             {
-                break 'spans;
+                complete = false;
+                break;
             }
-            output.push(character);
+            text.push(character);
+            bytes = bytes.saturating_add(character_bytes);
             cells = cells.saturating_add(character_width);
         }
+        if !text.is_empty() {
+            output.push(Span::styled(text, span_style(span, theme)));
+        }
+        if !complete {
+            break;
+        }
     }
-    output
+    Line::from(output)
 }
 
-fn take_styled_bytes(
-    source: &[WireSpan],
-    span_index: &mut usize,
-    span_offset: &mut usize,
-    mut remaining: usize,
-    theme: &crate::theme::Theme,
-) -> Vec<Span<'static>> {
-    let mut output = Vec::new();
-    while remaining > 0 && *span_index < source.len() {
-        let span = &source[*span_index];
-        let available = &span.text[*span_offset..];
-        if available.is_empty() {
-            *span_index += 1;
-            *span_offset = 0;
-            continue;
-        }
-        let take = remaining.min(available.len());
-        debug_assert!(available.is_char_boundary(take));
-        output.push(Span::styled(
-            available[..take].to_string(),
-            span_style(span, theme),
-        ));
-        remaining -= take;
-        *span_offset += take;
-        if *span_offset == span.text.len() {
-            *span_index += 1;
-            *span_offset = 0;
-        }
-    }
-    debug_assert_eq!(remaining, 0);
-    output
+fn input_barrier_timeout(refresh: Duration) -> Duration {
+    refresh
+        .saturating_mul(INPUT_BARRIER_REFRESHES)
+        .clamp(MIN_INPUT_BARRIER, MAX_INPUT_BARRIER)
+}
+
+fn host_message_fits(message: &HostMessage) -> bool {
+    serde_json::to_vec(message)
+        .is_ok_and(|encoded| encoded.len().saturating_add(1) <= MAX_MESSAGE_BYTES)
 }
 
 fn canonical_key(key: KeyEvent) -> String {
@@ -978,6 +1039,7 @@ mod tests {
             runtime: None,
             shared: Arc::new(Mutex::new(Shared::starting())),
             seen_generation: 0,
+            seen_frame_sequence: 0,
             phase: Phase::Running,
             title: "test".into(),
             refresh: DEFAULT_REFRESH,
@@ -1005,6 +1067,34 @@ mod tests {
         assert!(matches!(
             shared.lock().unwrap().phase,
             Phase::Failed(ref message) if message.contains("incompatible")
+        ));
+    }
+
+    #[test]
+    fn spawn_failure_is_panel_state_and_restart_retries_the_process() {
+        let mut panel = PluginPanel::new(PluginConfig {
+            id: "missing-test-plugin".into(),
+            command: vec!["mirador-plugin-test-command-that-does-not-exist-7f09".into()],
+            config: toml::Table::new(),
+        });
+        assert!(matches!(
+            panel.phase,
+            Phase::Failed(ref error) if error.contains("could not start plugin")
+        ));
+        let first_attempt = Arc::clone(&panel.shared);
+
+        assert_eq!(
+            panel.handle_key(KeyEvent::from(KeyCode::Char('r'))),
+            KeyOutcome::Consumed
+        );
+        assert!(
+            !Arc::ptr_eq(&first_attempt, &panel.shared),
+            "restart did not create a new process session"
+        );
+        assert!(panel.sync());
+        assert!(matches!(
+            panel.phase,
+            Phase::Failed(ref error) if error.contains("could not start plugin")
         ));
     }
 
@@ -1300,42 +1390,154 @@ mod tests {
     }
 
     #[test]
-    fn a_passive_action_captures_until_a_new_frame_acknowledges_it() {
+    fn any_accepted_frame_releases_a_passive_input_barrier() {
         let passive = InputPolicy {
             keys: vec!["Enter".into()],
             ..InputPolicy::default()
         };
-        let frame = |revision, input| WireFrame {
-            revision,
-            title: None,
-            counter: None,
-            lines: Vec::new(),
-            bindings: Vec::new(),
-            input,
-            cursor: None,
-        };
         let mut panel = detached_panel(passive.clone());
-        panel.frame = Some(Arc::new(frame(4, passive)));
+        assert!(apply_message(
+            PluginMessage::Ready {
+                protocol: PROTOCOL_VERSION,
+                title: None,
+                refresh_ms: None,
+            },
+            &panel.shared,
+        ));
+        assert!(apply_message(
+            PluginMessage::Frame {
+                revision: u64::MAX,
+                title: None,
+                counter: None,
+                lines: Vec::new(),
+                bindings: Vec::new(),
+                input: passive,
+                cursor: None,
+            },
+            &panel.shared,
+        ));
+        assert!(panel.sync());
 
-        // Simulate a successfully queued named key. Until revision 5 arrives,
-        // rapid follow-up input belongs to the pending plugin transition.
+        // The maximum revision cannot be exceeded. A second valid frame with
+        // that revision is still an acknowledgement even though it cannot
+        // replace the retained snapshot.
         panel.begin_input_barrier();
         assert!(panel.captures_input());
         assert_eq!(
             panel.handle_key(KeyEvent::from(KeyCode::Char('q'))),
             KeyOutcome::Consumed
         );
-        {
-            let mut shared = panel.shared.lock().unwrap();
-            shared.frame = Some(Arc::new(frame(5, InputPolicy::default())));
-            shared.generation += 1;
-        }
-        assert!(panel.sync());
+        assert!(apply_message(
+            PluginMessage::Frame {
+                revision: u64::MAX,
+                title: None,
+                counter: None,
+                lines: Vec::new(),
+                bindings: Vec::new(),
+                input: InputPolicy::default(),
+                cursor: None,
+            },
+            &panel.shared,
+        ));
+        assert!(
+            !panel.sync(),
+            "an acknowledgement without a new snapshot must not force a redraw"
+        );
         assert!(!panel.captures_input());
         assert_eq!(
             panel.handle_key(KeyEvent::from(KeyCode::Char('q'))),
             KeyOutcome::Ignored
         );
+    }
+
+    #[test]
+    fn an_unacknowledged_input_barrier_expires_as_a_failed_panel() {
+        let mut panel = detached_panel(InputPolicy {
+            keys: vec!["Enter".into()],
+            ..InputPolicy::default()
+        });
+        panel.input_barrier = Some(InputBarrier {
+            frame_sequence: 0,
+            expires_at: Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("one millisecond fits before now"),
+        });
+
+        assert_eq!(panel.refresh_interval(), Duration::from_millis(1));
+        assert!(panel.expire_input_barrier());
+        assert!(!panel.captures_input());
+        assert!(matches!(
+            panel.phase,
+            Phase::Failed(ref error) if error.contains("acknowledge input")
+        ));
+        assert_eq!(
+            panel.handle_key(KeyEvent::from(KeyCode::Char('q'))),
+            KeyOutcome::Ignored,
+            "a failed plugin must return ordinary shell keys to Mirador"
+        );
+    }
+
+    #[test]
+    fn a_barrier_never_grants_undeclared_paste_or_mouse_capabilities() {
+        let mut panel = detached_panel(InputPolicy::default());
+        let (runtime, received) = Runtime::stub();
+        panel.runtime = Some(runtime);
+        panel.input_barrier = Some(InputBarrier {
+            frame_sequence: 0,
+            expires_at: Instant::now() + Duration::from_secs(1),
+        });
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(panel.handle_paste("private"), KeyOutcome::Consumed);
+        assert_eq!(
+            panel.handle_mouse(mouse, Rect::new(0, 0, 10, 10)),
+            KeyOutcome::Consumed
+        );
+        assert!(
+            matches!(
+                received.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ),
+            "undeclared input reached the plugin process"
+        );
+        panel.shutdown();
+    }
+
+    #[test]
+    fn oversized_user_paste_is_dropped_without_blame_or_process_failure() {
+        let mut panel = detached_panel(InputPolicy {
+            paste: true,
+            ..InputPolicy::default()
+        });
+        let (runtime, received) = Runtime::stub();
+        panel.runtime = Some(runtime);
+
+        assert_eq!(
+            panel.handle_paste(&"x".repeat(MAX_MESSAGE_BYTES)),
+            KeyOutcome::Consumed
+        );
+        let shared = panel.shared.lock().unwrap();
+        assert!(
+            !matches!(shared.phase, Phase::Failed(_)),
+            "host input size must not be reported as a plugin protocol failure"
+        );
+        assert!(
+            shared
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("paste is too large"))
+        );
+        drop(shared);
+        assert!(matches!(
+            received.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        panel.shutdown();
     }
 
     #[test]

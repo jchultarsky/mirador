@@ -117,7 +117,10 @@ glyphs.rs    block numerals, bold-uppercase labels, weather art
 theme.rs     colours and gradient stops
 themes.rs    `theme = "name"`: bundled themes, inherits, palettes
 config/      mod.rs: paths, loading, validation; widgets.rs: one settings
-             struct per panel; layout.rs: the grid
+             struct per panel; layout.rs: the grid; plugins.rs: explicit
+             process declarations and plugin-owned opaque config
+plugin/      mod.rs: external Panel adapter, bounded input and rendering;
+             process.rs: JSON-lines workers, limits and child lifecycle
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
@@ -392,9 +395,9 @@ why the chime defaults off and a paused timer greys out instead of blinking.
 The filter still holds for anything not asked for by name.
 
 **The filter governs what mirador *ships*, which after discussion #191 is
-narrower than it used to be.** With external panels, "does this answer one of
-the four questions" decides what goes in the binary; it does not decide what a
-reader may put on their own dashboard. The two cases that forced the
+narrower than it used to be.** If external panels happen, "does this answer one
+of the four questions" decides what goes in the binary; it does not decide what
+a reader may put on their own dashboard. The two cases that forced the
 distinction are worth keeping: an audiobook client is welcome as a plugin and
 would never be a widget here, and a terminal is refused in **both** places. The
 filter and the plugin boundary are different rules and they do not always agree.
@@ -841,18 +844,17 @@ External widgets were in the original vision — "Grafana for the terminal,
 personal rather than corporate" — and the reason they were never built is that
 every design considered either embedded Python or Lua, or a public Rust API, and
 both were worse than not having the feature. A process boundary costs neither,
-which is why `panel.rs` now distinguishes the private in-tree trait from the
-public process protocol instead of trying to turn one into the other.
+which is why `panel.rs` no longer declares itself not-a-plugin-API.
 
-The contract is now written in `docs/plugin-protocol.md`, independently of any
-SDK, and these are the parts the host must keep: `Ctrl+C` stays host-owned with
-**no** plugin exception; plugins take input from the start, because a panel you
-can only watch is not much of a widget; **the host does the clipping and
-wrapping**, since a plugin cannot be trusted with invariant 19 and the terminal
-cuts silently either way; an external panel is visibly external, because
-mirador promises it does not phone home and a plugin can; credentials have no
-host configuration, persistence or logging channel; startup, messages, rates,
-retention and queues are bounded; and **no PTY**.
+Nothing is built and what was posted is a position rather than a contract, but
+these parts were stated firmly and are the ones to hold: `Ctrl+C` stays
+host-owned with **no** exception, not even the first press; plugins take input
+from the start, because a panel you can only watch is not much of a widget;
+**the host does the clipping**, since a plugin cannot be trusted with invariant
+19 and the terminal cuts silently either way; an external panel must be visibly
+external, because mirador promises it does not phone home and a plugin can; the
+host never sees, stores, forwards or logs a plugin's credentials; and **no
+PTY**.
 
 **The boundary is *a view with controls* versus *a host for another program*,**
 and the audiobook client is what settled it. Off-axis-ness is not the test —
@@ -1588,12 +1590,14 @@ note weighed rather than what the pane showed. The task panel had the identical
 defect one panel over. Both are cached now, and the cost is flat in the size of
 the note.
 
-[Discussion #191](https://github.com/jchultarsky/mirador/discussions/191) is the
-source of the external-panel direction and its invariants. The agreed contract
-is the language-neutral specification in `docs/plugin-protocol.md`; the Rust
-code is the bounded host for that contract, not the API plugin authors link
-against. Judge changes to either against the written host obligations before
-judging an individual SDK or example plugin.
+The live work is a **discussion**, which is not the same as an open issue:
+[#191](https://github.com/jchultarsky/mirador/discussions/191), external panels
+over a process boundary. The owner has said yes to the direction and posted the
+invariants he wants it to hold to; krflol has a working prototype and has not
+yet replied. **The next step is agreeing the contract in text, before either
+side judges the implementation** — that ordering was proposed deliberately, so
+the prototype is reviewed against a written contract rather than against
+somebody's instincts.
 
 It grew out of [#188](https://github.com/jchultarsky/mirador/discussions/188),
 which asked for a terminal widget and was answered no — mirador is a pane
