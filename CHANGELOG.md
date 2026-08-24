@@ -7,10 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-24
+
 ### Added
 
 - **Linux aarch64 binaries.** Releases now carry `mirador-aarch64-unknown-linux-gnu.tar.gz`,
   built natively on GitHub's ARM runners, alongside the x86-64 Linux archive.
+
+### Changed
+
+- **`ureq` 3.3.0 → 3.4.0.** Pooled connections now age out as configured, and
+  IPv6-literal hosts present the right TLS server name. No behaviour change on
+  the paths mirador exercises; the fetch stack was driven live before release.
 
 ## [1.5.0] - 2026-08-02
 
@@ -1623,7 +1631,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/jchultarsky/mirador/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/jchultarsky/mirador/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/jchultarsky/mirador/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/jchultarsky/mirador/compare/v1.3.2...v1.4.0

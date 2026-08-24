@@ -1675,9 +1675,10 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.5.0` is released**, on crates.io and as a GitHub release with binaries
-  for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64.
-  This line goes
+- **`1.5.1` is released**, on crates.io and as a GitHub release with binaries
+  for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows
+  x86-64 — the first release where the aarch64 Linux archive exists, so until
+  someone runs it that target is built, not exercised. This line goes
   stale every release and is worth a glance before you trust anything near it;
   `git tag --list 'v*' | sort -V | tail -1` is the truth — it had been four
   releases behind by the time anybody noticed. `0.0.0` is still on
