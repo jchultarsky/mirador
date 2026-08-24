@@ -190,6 +190,7 @@ Get-Content .\mirador-x86_64-pc-windows-msvc.zip.sha256
 | macOS, Apple silicon | `mirador-aarch64-apple-darwin.tar.gz` |
 | macOS, Intel | `mirador-x86_64-apple-darwin.tar.gz` |
 | Linux x86-64 | `mirador-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `mirador-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows x86-64 | `mirador-x86_64-pc-windows-msvc.zip` |
 
 Requires Rust 1.95 or newer to build from source.

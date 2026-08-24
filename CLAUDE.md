@@ -1676,7 +1676,8 @@ and had to be added back was the one that did not.
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
 - **`1.5.0` is released**, on crates.io and as a GitHub release with binaries
-  for macOS arm64, macOS x86-64, Linux x86-64 and Windows x86-64. This line goes
+  for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64.
+  This line goes
   stale every release and is worth a glance before you trust anything near it;
   `git tag --list 'v*' | sort -V | tail -1` is the truth — it had been four
   releases behind by the time anybody noticed. `0.0.0` is still on
@@ -1735,6 +1736,11 @@ and had to be added back was the one that did not.
   `dist` provides its own version-tag guard (`dist plan --tag=v9.9.9` exits
   255) and its own prerelease detection from the semver hyphen, which is why
   the hand-written versions of both were dropped when it took the file over.
+
+  The target list lives only in `[workspace.metadata.dist] targets` — the
+  generated workflow is fully generic, and the matrix is computed at runtime by
+  the `plan` job. Adding a target means editing Cargo.toml and re-running
+  `dist generate`; the workflow file itself may not change at all.
 
 - **Windows runs**, confirmed by the owner on 25 July 2026 and again on
   28 July — so all three shipped targets have been started, not merely built.

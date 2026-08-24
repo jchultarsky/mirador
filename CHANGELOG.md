@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Linux aarch64 binaries.** Releases now carry `mirador-aarch64-unknown-linux-gnu.tar.gz`,
+  built natively on GitHub's ARM runners, alongside the x86-64 Linux archive.
+
 ## [1.5.0] - 2026-08-02
 
 Both features in this release came from outside the project, contributed by
