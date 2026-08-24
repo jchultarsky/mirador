@@ -1033,27 +1033,34 @@ a recurring calendar expands, and it cloned the expansion four times a frame —
 and nothing else does. Verified by loading 5 items and then 500: `todo` stayed
 at 667 allocations a frame both times, `notes` at 783 and 768.
 
-For reference, allocations per frame with each panel alone, on an idle
-dashboard. Roughly 150 of each figure is the shell — frames, layout, status bar
-— so `cpu`, `network` and the fixed `agenda` are at the floor:
+For reference, allocations per frame with each panel alone, all thirteen,
+re-swept **2026-08-24** at 120x40 with a fresh `HOME` per run. The shell —
+frames, layout, status bar — is bounded by the smallest figure, so it costs at
+most ~80 here. Every figure was stable across its 20 sampled frames:
 
 ```
-notes 1118   calendar 892   todo 885   weather 755   clocks 438
-pomodoro 404  stocks 348    watchlog 271  news 252
-agenda 175    cpu 174       network 159      (whole dashboard: 1345)
+weather 831   calendar 568   stocks 425   clocks 325   todo 303
+pomodoro 197  notes 180      calculator 122
+cpu 107       agenda 102     network 102  watchlog 86   news 80
+                                          (whole dashboard: 1143)
 ```
 
-The calculator is the thirteenth and is **not** in that table: it shipped
-after the sweep. It was measured on its own on 2026-08-24, by the recipe
-below, and holds the rule: 122 allocations a frame with an empty tape, 256
-with five rows on screen, 981 with the panel full — and **still 981 after a
-hundred further entries past the full screen**, with the tape at its 200-entry
-cap and the overflow path exercised. About 27 allocations a visible row, and
-the arithmetic closes: (981 − 122) / 27 is the ~32 rows a 40-line panel
-draws. Do not compare those figures against the table above — the code and
-the rig have both moved since that sweep, and the empty-tape figure lands
-below the table's own shell floor. Within one rig the property is what
-matters: flat in the data, linear in the screen.
+Two notes on the rig, because the original sweep's figures were roughly
+twice these and the difference is not a regression in either direction.
+Frames were *forced with an unbound key* (`F6`) rather than waited for —
+a panel whose `tick` returns false never redraws an idle single-panel
+dashboard, so a purely idle rig cannot measure `calculator`, `todo` or
+`notes` at all. And the code has moved since the first sweep: `notes`
+falling from 1118 to 180 is #178's caching meeting the measurement — the
+old figure had the reader wrapping the whole body every frame.
+
+The calculator was additionally probed against its own data the same day,
+and holds the rule: 122 a frame with an empty tape, 256 with five rows on
+screen, 981 with the panel full — and **still 981 after a hundred further
+entries past the full screen**, with the tape at its 200-entry cap and the
+overflow path exercised. About 27 allocations a visible row, and the
+arithmetic closes: (981 − 122) / 27 is the ~32 rows a 40-line panel draws.
+Flat in the data, linear in the screen.
 
 Nothing here is worth optimising. A thousand small allocations a frame at about
 one frame a second is ordinary work for building styled spans, and the
@@ -1061,7 +1068,9 @@ measurement exists to catch *growth*, not to be minimised.
 
 **To repeat the measurement:** put a counting `GlobalAlloc` in `main.rs`, wrap
 the `terminal.draw` call in `App::run` to record the delta, and write it to a
-file each frame. `unsafe_code = "forbid"` in Cargo.toml has to be relaxed for
+file each frame. Drive frames with an unbound key under tmux rather than
+waiting for ticks — the delta wraps only the draw, so the keypress itself
+costs nothing, and every panel yields frames on demand. `unsafe_code = "forbid"` in Cargo.toml has to be relaxed for
 that build, so do it on a scratch branch and check `git status` is clean
 afterwards — shipping that lint relaxed would be a worse bug than any it found.
 Then generate one config per widget with a single-panel `[layout]` and run each
