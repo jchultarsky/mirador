@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fetching works again on machines that prefer IPv6 without an IPv6 route.**
+  When DNS returns an AAAA record first and the kernel has no route to it,
+  every connect died instantly with `No route to host` and the IPv4 address
+  was never tried — a condition browsers and curl mask with happy-eyeballs
+  fallback, so the machine looks healthy everywhere except mirador. A request
+  that fails unroutable is now retried pinned to one address family at a
+  time. Reported from NetBSD in
+  [#205](https://github.com/jchultarsky/mirador/issues/205).
+
 ## [1.6.0] - 2026-08-24
 
 ### Added

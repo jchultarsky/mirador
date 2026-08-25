@@ -141,6 +141,8 @@ note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
 poll.rs      the sliced sleep the background threads share — weather,
              stocks and news fetch; agenda reloads a file
+fetch.rs     the blocking GET those fetches share, and its address-family
+             fallback for a v6-first resolver with no v6 route (#205)
 samples.rs   the bounded history behind the cpu and network graphs
 selection.rs list cursor movement and click-to-row
 clipboard.rs OSC 52, with base64 hand-rolled rather than taken as a dependency

@@ -194,21 +194,17 @@ fn fetch(url: &str) -> Result<String> {
         max_version: Option<String>,
     }
 
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        // crates.io asks for a user agent that says who is calling and how to
-        // get in touch. Honouring that is the price of using the API politely.
-        .user_agent(concat!(
-            "mirador/",
-            env!("CARGO_PKG_VERSION"),
-            " (update check; https://github.com/jchultarsky/mirador)"
-        ))
-        .build()
-        .new_agent();
+    // crates.io asks for a user agent that says who is calling and how to
+    // get in touch. Honouring that is the price of using the API politely.
+    let ua = concat!(
+        "mirador/",
+        env!("CARGO_PKG_VERSION"),
+        " (update check; https://github.com/jchultarsky/mirador)"
+    );
 
     // Read as text then parse, matching how the other two network paths in this
     // crate do it — it keeps the JSON handling in one crate rather than two.
-    let text = agent.get(url).call()?.body_mut().read_to_string()?;
+    let text = crate::fetch::get(url, HTTP_TIMEOUT, Some(ua))?;
     let body: Body = serde_json::from_str(&text)?;
     // `max_stable_version` skips pre-releases, which is what someone running a
     // release build wants to hear about. It is absent on a crate that has only
