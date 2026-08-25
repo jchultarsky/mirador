@@ -143,8 +143,9 @@ dashboard.
 
 Write `assets/themes/<name>.toml` and add it to `BUNDLED` in `src/themes.rs`.
 The `t` picker then lists it — that part needs nothing else. Two prose counts
-do have to follow, though, and nothing pins them: "Ten ship inside the binary"
-in `assets/default_config.toml`, and the theme table in the README.
+do have to follow, though, and nothing pins them: the bundled-count sentence
+("Sixteen ship inside the binary…") in `assets/default_config.toml`, and the
+theme table in the README.
 
 Four things will catch you out. The first three have tests rather than
 conventions behind them:

@@ -1,0 +1,65 @@
+# Gruvbox light — retro groove in daylight, by Pavel Pertsev.
+#
+# The mapping mirrors the dark `gruvbox` file role for role, using Gruvbox's
+# own light-mode answer to each colour: where dark mode reaches for the
+# "bright" accents, light mode uses the "faded" set — the same hues pulled
+# darker so they hold their contrast on cream — and the dark greys give way to
+# the light background ramp. The signature orange stays the accent, exactly as
+# it is in the dark file.
+#
+# Values from morhetz/gruvbox-contrib's colour table.
+
+border         = "light3"
+border_focused = "faded-orange"
+rule           = "light1"
+title          = "faded-orange"
+text           = "reset"
+muted          = "gray"
+label          = "faded-aqua"
+accent         = "faded-orange"
+key            = "faded-yellow"
+success        = "faded-green"
+warning        = "faded-yellow"
+error          = "faded-red"
+track          = "light1"
+
+[palette]
+light1       = "#ebdbb2"
+light2       = "#d5c4a1"
+light3       = "#bdae93"
+gray         = "#928374"
+faded-red    = "#9d0006"
+faded-green  = "#79740e"
+faded-yellow = "#b57614"
+faded-blue   = "#076678"
+faded-purple = "#8f3f71"
+faded-aqua   = "#427b58"
+faded-orange = "#af3a03"
+
+# Light starts for the ramps, mirroring where the dark file starts at its
+# own chrome: an idle graph should recede into the parchment, not stain it.
+
+[cpu_gradient]
+start = "#ebdbb2"
+mid   = "#b57614"
+end   = "#9d0006"
+
+[rx_gradient]
+start = "#d5c4a1"
+mid   = "#427b58"
+end   = "#79740e"
+
+[tx_gradient]
+start = "#d5c4a1"
+mid   = "#8f3f71"
+end   = "#076678"
+
+[gain_gradient]
+start = "#d5c4a1"
+mid   = "#79740e"
+end   = "#79740e"
+
+[loss_gradient]
+start = "#d5c4a1"
+mid   = "#9d0006"
+end   = "#9d0006"

@@ -1,0 +1,66 @@
+# Everforest light — a green-based comfort palette, by Sainnhe Park.
+#
+# The medium light variant. Everforest's whole identity is green, so green
+# carries the focus and title the way orange carries Gruvbox's — and it doubles
+# as `success`, which the palette invites: its green *is* its statement of
+# things being well. Aqua takes the labels to keep two distinct green-family
+# tones in play, and the background ramp's own bg tones make an unusually
+# gentle chrome — the palette is designed so that even its greys leaf toward
+# green.
+#
+# Values from sainnhe/everforest's palette.md (light medium, palette1 + 2).
+
+border         = "bg5"
+border_focused = "green"
+rule           = "bg2"
+title          = "green"
+text           = "reset"
+muted          = "grey1"
+label          = "aqua"
+accent         = "green"
+key            = "purple"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "bg3"
+
+[palette]
+bg2    = "#efebd4"
+bg3    = "#e6e2cc"
+bg5    = "#bdc3af"
+grey1  = "#939f91"
+red    = "#f85552"
+orange = "#f57d26"
+yellow = "#dfa000"
+green  = "#8da101"
+aqua   = "#35a77c"
+blue   = "#3a94c5"
+purple = "#df69ba"
+
+# Light starts from the palette's own background ramp, so idle graphs sink
+# into the forest floor instead of standing on it.
+
+[cpu_gradient]
+start = "#e6e2cc"
+mid   = "#dfa000"
+end   = "#f85552"
+
+[rx_gradient]
+start = "#e6e2cc"
+mid   = "#35a77c"
+end   = "#8da101"
+
+[tx_gradient]
+start = "#e6e2cc"
+mid   = "#3a94c5"
+end   = "#df69ba"
+
+[gain_gradient]
+start = "#e6e2cc"
+mid   = "#8da101"
+end   = "#8da101"
+
+[loss_gradient]
+start = "#e6e2cc"
+mid   = "#f85552"
+end   = "#f85552"

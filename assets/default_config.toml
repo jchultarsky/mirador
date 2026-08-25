@@ -145,11 +145,13 @@ rows = [
 #
 #     theme = "high-contrast"
 #
-# Ten ship inside the binary. Four are mirador's own — `default` (this),
-# `default-light`, `high-contrast` and `ansi` — and six are ports of palettes
-# you may already be running elsewhere: `nord`, `gruvbox`, `dracula`,
-# `catppuccin-mocha`, `tokyo-night` and `solarized-dark`. All six are dark; on
-# a light terminal, `default-light` is the one to reach for.
+# Sixteen ship inside the binary. Four are mirador's own — `default` (this),
+# `default-light`, `high-contrast` and `ansi` — and twelve are ports of
+# palettes you may already be running elsewhere: `nord`, `gruvbox`,
+# `gruvbox-light`, `dracula`, `catppuccin-mocha`, `catppuccin-latte`,
+# `tokyo-night`, `kanagawa`, `solarized-dark`, `solarized-light`,
+# `everforest-light` and `rose-pine-dawn`. Five of the ports are light, so a
+# pale terminal has real choices beyond `default-light`.
 #
 # Anything in themes/<name>.toml beside this file is found first, so a bundled
 # theme can be replaced without renaming it. A theme file may `inherits`

@@ -1,0 +1,67 @@
+# Catppuccin Latte — the one light flavour of the four.
+#
+# The mapping mirrors `catppuccin-mocha` role for role: mauve is still the
+# documented accent, and Latte's surface/overlay ramp provides the same three
+# distinct chrome greys the dark flavour has — just running away from a light
+# base instead of a dark one. Latte's accents are the saturated, darker
+# renderings of the same names, which is Catppuccin's own answer to keeping
+# contrast on paper.
+#
+# Values from github.com/catppuccin/catppuccin.
+
+border         = "surface1"
+border_focused = "mauve"
+rule           = "surface0"
+title          = "mauve"
+text           = "reset"
+muted          = "overlay0"
+label          = "teal"
+accent         = "mauve"
+key            = "blue"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "surface0"
+
+[palette]
+surface0 = "#ccd0da"
+surface1 = "#bcc0cc"
+overlay0 = "#9ca0b0"
+subtext0 = "#6c6f85"
+mauve    = "#8839ef"
+red      = "#d20f39"
+peach    = "#fe640b"
+yellow   = "#df8e1d"
+green    = "#40a02b"
+teal     = "#179299"
+sky      = "#04a5e5"
+blue     = "#1e66f5"
+lavender = "#7287fd"
+
+# Ramps start at the light surfaces, the mirror of mocha starting at its dark
+# ones: idle graphs recede into the latte rather than floating over it.
+
+[cpu_gradient]
+start = "#ccd0da"
+mid   = "#df8e1d"
+end   = "#d20f39"
+
+[rx_gradient]
+start = "#bcc0cc"
+mid   = "#04a5e5"
+end   = "#40a02b"
+
+[tx_gradient]
+start = "#bcc0cc"
+mid   = "#1e66f5"
+end   = "#8839ef"
+
+[gain_gradient]
+start = "#bcc0cc"
+mid   = "#40a02b"
+end   = "#40a02b"
+
+[loss_gradient]
+start = "#bcc0cc"
+mid   = "#d20f39"
+end   = "#d20f39"

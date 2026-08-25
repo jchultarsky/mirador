@@ -1,0 +1,66 @@
+# Rosé Pine Dawn — "all natural pine, faux fur and a bit of soho vibes",
+# in its light variant.
+#
+# Rosé Pine names its colours by role rather than hue, and the roles map onto
+# mirador's almost one to one: their `muted` is mirador's muted, their
+# highlight ramp is the chrome, and rose — the palette's namesake — takes the
+# accent. The one judgement call is `success`: the palette has no green, and
+# pine is what Rosé Pine's own terminal ports assign to green, so pine it is.
+# Gold and love are similarly their yellow and red.
+#
+# Values from rose-pine/neovim's palette.lua (the canonical role table).
+
+border         = "highlight-high"
+border_focused = "rose"
+rule           = "overlay"
+title          = "rose"
+text           = "reset"
+muted          = "subtle"
+label          = "foam"
+accent         = "rose"
+key            = "iris"
+success        = "pine"
+warning        = "gold"
+error          = "love"
+track          = "highlight-med"
+
+[palette]
+overlay        = "#f2e9e1"
+highlight-low  = "#f4ede8"
+highlight-med  = "#dfdad9"
+highlight-high = "#cecacd"
+subtle         = "#797593"
+love           = "#b4637a"
+gold           = "#ea9d34"
+rose           = "#d7827e"
+pine           = "#286983"
+foam           = "#56949f"
+iris           = "#907aa9"
+
+# Ramps rise out of the overlay tone, the palest chrome the palette has, so
+# an idle graph is barely a watermark on the dawn background.
+
+[cpu_gradient]
+start = "#f2e9e1"
+mid   = "#ea9d34"
+end   = "#b4637a"
+
+[rx_gradient]
+start = "#f2e9e1"
+mid   = "#56949f"
+end   = "#286983"
+
+[tx_gradient]
+start = "#f2e9e1"
+mid   = "#d7827e"
+end   = "#907aa9"
+
+[gain_gradient]
+start = "#f2e9e1"
+mid   = "#286983"
+end   = "#286983"
+
+[loss_gradient]
+start = "#f2e9e1"
+mid   = "#b4637a"
+end   = "#b4637a"
