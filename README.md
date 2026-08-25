@@ -4,7 +4,7 @@
 [![crates.io](https://img.shields.io/crates/v/mirador.svg)](https://crates.io/crates/mirador)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-dea584.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#install)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20NetBSD-lightgrey.svg)](#install)
 
 An opinionated personal dashboard for your terminal: world clocks, a calendar,
 weather, a real task list, notes, a market watchlist, and live CPU and network
@@ -192,22 +192,23 @@ Get-Content .\mirador-x86_64-pc-windows-msvc.zip.sha256
 | Linux x86-64 | `mirador-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux, ARM64 | `mirador-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows x86-64 | `mirador-x86_64-pc-windows-msvc.zip` |
+| NetBSD | no prebuilt archive — via pkgsrc: [`sysutils/mirador`](https://pkgsrc.se/sysutils/mirador) |
 
 Requires Rust 1.95 or newer to build from source.
 
-**NetBSD** (and anywhere pkgsrc runs) has a community package:
-`pkgin install mirador`, or build from
-[`sysutils/mirador`](https://pkgsrc.se/sysutils/mirador). It is packaged and
-maintained in pkgsrc rather than by this repository — the first BSD packaging
-of mirador, and the platform whose bug report fixed IPv6-preferring networks
-for everyone (1.6.1).
+The NetBSD package is maintained in pkgsrc rather than by this repository —
+the first BSD packaging of mirador, and the platform whose bug report fixed
+IPv6-preferring networks for everyone (1.6.1). `pkgin install mirador` once
+binary packages are built, or build from the pkgsrc tree.
 
 **Windows** has been run and works — installed with the PowerShell one-liner
-above, in the default Windows terminal. It is still the least-travelled of the
-three: macOS and Linux are used daily and Windows has been checked rather than
-lived in, so a report of something off there is genuinely useful. Windows on
-ARM is deliberately absent: `ring`, reached through `ureq`'s TLS, does not
-build for it.
+above, in the default Windows terminal. It is still the least-travelled of
+the prebuilt platforms: macOS and Linux are used daily and Windows has been
+checked rather than lived in, so a report of something off there is genuinely
+useful. **NetBSD** is the newest arrival, running from pkgsrc since 1.6.1 and
+tested by its packager rather than by CI — reports from there are equally
+welcome. Windows on ARM is deliberately absent: `ring`, reached through
+`ureq`'s TLS, does not build for it.
 
 ## Quick start
 
