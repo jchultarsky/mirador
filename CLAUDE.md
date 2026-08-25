@@ -1707,10 +1707,12 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.6.0` is released**, on crates.io and as a GitHub release with binaries
+- **`1.6.1` is released**, on crates.io and as a GitHub release with binaries
   for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows
-  x86-64. It is the release that ships the external panel protocol, so v1 of
-  that protocol is a compatibility promise from here on. The aarch64 Linux
+  x86-64. It carries the address-family fallback (#205, #207), confirmed on
+  NetBSD before tagging by the pkgsrc packager — the first BSD mirador has
+  been seen running on. 1.6.0 before it shipped the external panel protocol,
+  so v1 of that protocol is a compatibility promise. The aarch64 Linux
   archive first shipped in 1.5.1 and was executed the same day by its
   contributor — "it starts and draws" on Fedora 44 Asahi
   ([#197](https://github.com/jchultarsky/mirador/pull/197)) — so every
