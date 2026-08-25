@@ -1597,21 +1597,25 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**The tracker is empty.** [#178](https://github.com/jchultarsky/mirador/issues/178)
-was the last entry and shipped in 1.4.1 — the notes reader wrapped a whole note
-body on every frame and then scrolled past most of it, so drawing cost what the
-note weighed rather than what the pane showed. The task panel had the identical
-defect one panel over. Both are cached now, and the cost is flat in the size of
-the note.
+**The tracker is empty.** [#205](https://github.com/jchultarsky/mirador/issues/205)
+was the last entry and shipped in 1.6.1 the day it was diagnosed — the first
+BSD sighting, and a real fetch-layer defect underneath it: a resolver that
+answers AAAA-first on a host with no IPv6 route killed every fetch, because
+`ureq` walks its address list only on *connection refused* and an unroutable
+connect bailed with the IPv4 address untried. `fetch.rs` now retries pinned to
+one family at a time, the reporter confirmed it from pkgsrc infrastructure
+before the tag, and the same broadening is offered upstream as
+[ureq#1195](https://github.com/algesten/ureq/pull/1195) — **the one piece of
+this still in flight.** If it merges and ships, a `ureq` bump makes the
+fallback redundant; keep the fallback anyway, as defence for whatever `ureq`
+a distro builds against.
 
-The live work is a **discussion**, which is not the same as an open issue:
-[#191](https://github.com/jchultarsky/mirador/discussions/191), external panels
-over a process boundary. The owner has said yes to the direction and posted the
-invariants he wants it to hold to; krflol has a working prototype and has not
-yet replied. **The next step is agreeing the contract in text, before either
-side judges the implementation** — that ordering was proposed deliberately, so
-the prototype is reviewed against a written contract rather than against
-somebody's instincts.
+The external-panel work that was live here is settled:
+[#191](https://github.com/jchultarsky/mirador/discussions/191)'s contract was
+agreed in text on 2026-08-24 and shipped in 1.6.0 as protocol v1, now the
+third compatibility promise. The SDK and plugins side belongs to krflol's
+`mirador-plugins` repository, per the division recorded in "Contributions
+from outside" — activity there is expected and is not mirador's queue.
 
 It grew out of [#188](https://github.com/jchultarsky/mirador/discussions/188),
 which asked for a terminal widget and was answered no — mirador is a pane
@@ -1620,9 +1624,14 @@ holds and is now part of the plugin contract rather than a one-off refusal: no
 PTY, in-tree or out. See "Contributions from outside" for what was committed to
 and why.
 
-This heading has now described the wrong issue as the last one three times —
-#132, then #153, now #153 again after #178 closed. The entry is written when
-work starts and nothing makes anybody revisit it when the work lands.
+This heading has now described the wrong issue as the last one four times —
+#132, then #153, #153 again after #178 closed, then #178 for a day after #205
+closed, alongside a #191 status that had been settled and shipped for a day.
+The entry is written when work starts and nothing makes anybody revisit it
+when the work lands. The fourth occurrence was caught only because someone
+asked "is there anything else?" and the answer was checked against the
+tracker instead of against this file — which is the right order, and the
+reason this paragraph keeps its count.
 
 This heading has twice described an issue as open for a day after it was closed
 — #132 before #153. That is the failure it is most prone to, and it is the same
