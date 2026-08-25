@@ -1,0 +1,67 @@
+# Kanagawa — colours of Hokusai's Great Wave, by Tommaso Laurenzi.
+#
+# The wave variant, which is the one people mean by "kanagawa". Muted ink
+# backgrounds under low-saturation pastels — closer in temperament to mirador's
+# own default than any other port here, dark wood and old paper rather than
+# neon. Crystal blue is the scheme's de facto accent (it is what the upstream
+# theme paints functions, the thing you look at). `warning` is roninYellow and
+# `error` peachRed, Kanagawa's own softer diagnostic pair — samuraiRed exists
+# but is a shout, and this dashboard does not shout.
+#
+# Values from rebelot/kanagawa.nvim's colors.lua.
+
+border         = "sumi-ink6"
+border_focused = "crystal-blue"
+rule           = "sumi-ink4"
+title          = "crystal-blue"
+text           = "reset"
+muted          = "fuji-gray"
+label          = "wave-aqua2"
+accent         = "crystal-blue"
+key            = "oni-violet"
+success        = "spring-green"
+warning        = "ronin-yellow"
+error          = "peach-red"
+track          = "sumi-ink5"
+
+[palette]
+sumi-ink4    = "#2A2A37"
+sumi-ink5    = "#363646"
+sumi-ink6    = "#54546D"
+fuji-gray    = "#727169"
+old-white    = "#C8C093"
+crystal-blue = "#7E9CD8"
+spring-blue  = "#7FB4CA"
+wave-aqua2   = "#7AA89F"
+spring-green = "#98BB6C"
+carp-yellow  = "#E6C384"
+ronin-yellow = "#FF9E3B"
+oni-violet   = "#957FB8"
+sakura-pink  = "#D27E99"
+wave-red     = "#E46876"
+peach-red    = "#FF5D62"
+
+[cpu_gradient]
+start = "#363646"
+mid   = "#E6C384"
+end   = "#FF5D62"
+
+[rx_gradient]
+start = "#363646"
+mid   = "#7AA89F"
+end   = "#98BB6C"
+
+[tx_gradient]
+start = "#363646"
+mid   = "#7FB4CA"
+end   = "#957FB8"
+
+[gain_gradient]
+start = "#363646"
+mid   = "#98BB6C"
+end   = "#98BB6C"
+
+[loss_gradient]
+start = "#363646"
+mid   = "#E46876"
+end   = "#FF5D62"

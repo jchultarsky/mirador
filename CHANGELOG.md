@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Six more bundled themes, chosen light-first.** The first six ports were
+  all dark, so this batch is five light and one dark: `solarized-light`,
+  `gruvbox-light`, `catppuccin-latte`, `rose-pine-dawn`, `everforest-light`,
+  and `kanagawa` (Wave). Each is a port in the established sense — hex values
+  from the palette's own specification, cited in the file, with the mapping
+  mirroring its dark sibling where one exists and body text left on the
+  terminal's own foreground. Light themes start their graph ramps light, so
+  an idle chart recedes into a pale background.
+
 ## [1.7.0] - 2026-08-25
 
 ### Added

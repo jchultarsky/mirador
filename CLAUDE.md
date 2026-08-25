@@ -244,7 +244,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 325 of them, including the ones mirador
+    trip through `toml` discards all 327 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -486,18 +486,28 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
 
 ## Named themes — built
 
-`theme = "name"` resolves through `themes.rs`. Ten themes are `include_str!`-
+`theme = "name"` resolves through `themes.rs`. Sixteen themes are `include_str!`-
 baked and anything in `<config>/mirador/themes/<name>.toml` is found first, so a
 bundled theme can be replaced without renaming it.
 
 Four are mirador's own (`default`, `default-light`, `high-contrast`, `ansi`).
-Six are **ports** of palettes from elsewhere — `nord`, `gruvbox`, `dracula`,
-`catppuccin-mocha`, `tokyo-night`, `solarized-dark`. Each file cites the
-upstream source its hex values came from, and that is the point: someone who
-picks `nord` wants Nord. Adjust the *mapping* onto mirador's keys if a palette
-reads badly; never adjust the palette. All six keep `text = "reset"`, so body
-text still follows the terminal's own foreground — invariant 8 is not suspended
-because a theme has a name.
+Twelve are **ports** of palettes from elsewhere — `nord`, `gruvbox`,
+`gruvbox-light`, `dracula`, `catppuccin-mocha`, `catppuccin-latte`,
+`tokyo-night`, `kanagawa`, `solarized-dark`, `solarized-light`,
+`everforest-light`, `rose-pine-dawn`. The 2026-08-25 batch of six was chosen
+deliberately light-heavy (five light, one dark) because the first six ports
+were all dark and the owner asked for variety. The `t` picker sorts names
+alphabetically — verified by opening it, not assumed from `BUNDLED`'s order —
+which happens to seat each palette's modes together anyway. Each file
+cites the upstream source its hex values came from, and that is the point:
+someone who picks `nord` wants Nord. Adjust the *mapping* onto mirador's keys
+if a palette reads badly; never adjust the palette. A light port mirrors its
+dark sibling's mapping role for role, using the palette's own light-mode
+answers (gruvbox's "faded" set, Latte's darker renderings), and its gradients
+*start light* so an idle graph recedes into a pale background — the
+`default-light` rule. All twelve keep `text = "reset"`, so body text still
+follows the terminal's own foreground — invariant 8 is not suspended because
+a theme has a name.
 
 Adding one: write `assets/themes/<name>.toml`, add it to `BUNDLED`. Three things
 will bite, and all three are pinned by tests rather than left to memory — the

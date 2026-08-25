@@ -62,18 +62,39 @@ const BUNDLED: &[(&str, &str)] = &[
     // be "improved" away from it. Someone picking `nord` wants Nord.
     ("nord", include_str!("../assets/themes/nord.toml")),
     ("gruvbox", include_str!("../assets/themes/gruvbox.toml")),
+    (
+        "gruvbox-light",
+        include_str!("../assets/themes/gruvbox-light.toml"),
+    ),
     ("dracula", include_str!("../assets/themes/dracula.toml")),
     (
         "catppuccin-mocha",
         include_str!("../assets/themes/catppuccin-mocha.toml"),
     ),
     (
+        "catppuccin-latte",
+        include_str!("../assets/themes/catppuccin-latte.toml"),
+    ),
+    (
         "tokyo-night",
         include_str!("../assets/themes/tokyo-night.toml"),
     ),
+    ("kanagawa", include_str!("../assets/themes/kanagawa.toml")),
     (
         "solarized-dark",
         include_str!("../assets/themes/solarized-dark.toml"),
+    ),
+    (
+        "solarized-light",
+        include_str!("../assets/themes/solarized-light.toml"),
+    ),
+    (
+        "everforest-light",
+        include_str!("../assets/themes/everforest-light.toml"),
+    ),
+    (
+        "rose-pine-dawn",
+        include_str!("../assets/themes/rose-pine-dawn.toml"),
     ),
 ];
 

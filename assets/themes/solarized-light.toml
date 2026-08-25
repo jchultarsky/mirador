@@ -1,0 +1,70 @@
+# Solarized light — by Ethan Schoonover.
+#
+# The daylight half of the same measured-contrast design as `solarized-dark`,
+# and the mapping mirrors it: the accents are identical by design — Solarized
+# shares its eight accents across both modes and swaps only the base greys —
+# so this file differs from its sibling exactly where Solarized itself does.
+#
+# The greys invert with the background: base2 (cream chrome) takes the roles
+# base02 (near-black chrome) has in the dark file, and secondary text moves
+# from base0 down to base00, the darker grey a pale background needs. As in
+# the dark file, `muted` and `border` are deliberately one step apart so
+# secondary text and chrome never blur together.
+#
+# Values from ethanschoonover.com/solarized.
+
+border         = "base1"
+border_focused = "blue"
+rule           = "base2"
+title          = "blue"
+text           = "reset"
+muted          = "base00"
+label          = "cyan"
+accent         = "blue"
+key            = "violet"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "base2"
+
+[palette]
+base2   = "#eee8d5"
+base1   = "#93a1a1"
+base0   = "#839496"
+base00  = "#657b83"
+yellow  = "#b58900"
+orange  = "#cb4b16"
+red     = "#dc322f"
+magenta = "#d33682"
+violet  = "#6c71c4"
+blue    = "#268bd2"
+cyan    = "#2aa198"
+green   = "#859900"
+
+# Ramps start at the cream chrome rather than a dark tone, so an idle graph
+# recedes into a pale background instead of sitting on it as a smudge.
+
+[cpu_gradient]
+start = "#eee8d5"
+mid   = "#b58900"
+end   = "#dc322f"
+
+[rx_gradient]
+start = "#eee8d5"
+mid   = "#2aa198"
+end   = "#859900"
+
+[tx_gradient]
+start = "#eee8d5"
+mid   = "#268bd2"
+end   = "#6c71c4"
+
+[gain_gradient]
+start = "#eee8d5"
+mid   = "#859900"
+end   = "#859900"
+
+[loss_gradient]
+start = "#eee8d5"
+mid   = "#dc322f"
+end   = "#dc322f"

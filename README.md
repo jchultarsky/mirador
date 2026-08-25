@@ -1061,18 +1061,24 @@ Four are mirador's own:
 | `high-contrast` | Bright rooms, projectors, low vision. `muted` is deliberately *not* dim — faint grey is the first thing to vanish on a washed-out screen, so de-emphasis is carried by hue instead |
 | `ansi` | The sixteen ANSI colours and nothing else, so it follows whatever palette your terminal already uses and works with no true-colour support |
 
-Six more are ports of palettes you may already be running in your editor,
-terminal or multiplexer, so mirador can match the rest of your screen. All six
-are dark:
+Twelve more are ports of palettes you may already be running in your editor,
+terminal or multiplexer, so mirador can match the rest of your screen — seven
+dark, five light:
 
 | Theme | Palette |
 | --- | --- |
 | `nord` | [Nord](https://www.nordtheme.com/docs/colors-and-palettes) — arctic, north-bluish; Frost for the instruments, Aurora for the signals |
-| `gruvbox` | [Gruvbox](https://github.com/morhetz/gruvbox) dark — retro groove; the warmest and highest-contrast of the six |
+| `gruvbox` | [Gruvbox](https://github.com/morhetz/gruvbox) dark — retro groove; the warmest and highest-contrast of the ports |
+| `gruvbox-light` | The same retro groove on parchment — the "faded" accents, which are Gruvbox's own light-mode set |
 | `dracula` | [Dracula](https://spec.draculatheme.com/) — the loudest, six saturated accents at the same brightness |
 | `catppuccin-mocha` | [Catppuccin](https://github.com/catppuccin/catppuccin) Mocha — pastel accents on soft charcoal |
+| `catppuccin-latte` | Catppuccin's one light flavour — the same names, rendered darker so they hold on paper |
 | `tokyo-night` | [Tokyo Night](https://github.com/enkia/tokyo-night-vscode-theme) Storm — the lifted variant, so mirador's slate chrome stays visible |
-| `solarized-dark` | [Solarized](https://ethanschoonover.com/solarized/) dark — designed against measured contrast rather than by eye, and the calmest of the six |
+| `kanagawa` | [Kanagawa](https://github.com/rebelot/kanagawa.nvim) Wave — Hokusai's ink and pastels; the closest in temperament to mirador's own default |
+| `solarized-dark` | [Solarized](https://ethanschoonover.com/solarized/) dark — designed against measured contrast rather than by eye, and the calmest of the ports |
+| `solarized-light` | The daylight half of the same design — Solarized shares its accents across both modes and swaps only the greys |
+| `everforest-light` | [Everforest](https://github.com/sainnhe/everforest) light — a green-based comfort palette; even its greys lean toward the forest |
+| `rose-pine-dawn` | [Rosé Pine](https://rosepinetheme.com/) Dawn — soho vibes at first light; rose for the instruments, pine standing in for green |
 
 These are ports, not reinterpretations: the hex values come from each palette's
 own specification, and the theme file cites its source. Body text stays `reset`
