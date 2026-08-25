@@ -31,7 +31,7 @@ use crate::grid::{Column, Grid};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 use crate::quote::{Quote, QuoteSource, Watchlist, source_for, sparkline};
 use crate::textfield::TextField;
-use crate::theme::Theme;
+use crate::theme::{Gradients, Theme};
 
 const BINDINGS: &[Binding] = &[
     Binding::primary("a", "add"),
@@ -53,6 +53,27 @@ const MIN_SECONDS_BETWEEN_POLLS: u64 = 60;
 
 /// Widest the intraday sparkline is drawn.
 const SPARK_WIDTH: u16 = 12;
+
+/// The day's move, in basis points, that saturates the gain/loss ramp.
+///
+/// A row's change, percentage and sparkline take their colour from
+/// `gain_gradient` or `loss_gradient` by the *size* of the day's move, the
+/// same way the cpu ramp colours graph and number together. Two percent is
+/// full brightness: the shipped watchlist is mostly indices, where a 1% day
+/// is already loud — that lands mid-ramp — while a single stock's earnings
+/// pop pins the top. Below it the ramp starts dark and desaturated, so a
+/// drifting tenth of a percent recedes instead of shouting the way a flat
+/// success/error colour did. A calm dashboard should not paint a 0.1% dip
+/// the same red as a crash.
+const FULL_RAMP_BP: u64 = 200;
+
+/// A percentage move as whole basis points, for the ramp arithmetic.
+///
+/// The cast saturates, and a NaN becomes 0 — the dark foot of the ramp, which
+/// is the honest colour for a move nobody can quantify.
+fn move_bp(pct: f64) -> u64 {
+    (pct.abs() * 100.0).round() as u64
+}
 
 /// Columns the `▸ ` selection marker occupies to the left of the grid.
 const SELECTION_MARKER: u16 = 2;
@@ -442,6 +463,7 @@ impl StocksPanel {
         cell: &Cell,
         stale: bool,
         theme: &Theme,
+        gradients: &Gradients,
         grid: &Grid,
         spark: u16,
     ) -> Line<'static> {
@@ -474,13 +496,15 @@ impl StocksPanel {
                 let change = q.change();
                 // A price that may have moved since must not be coloured as
                 // though the direction were current, so a stale row goes muted
-                // whichever way it last went.
+                // whichever way it last went. A live one takes its colour off
+                // the gain or loss ramp by the size of the move — see
+                // `FULL_RAMP_BP` for why the size and not just the sign.
                 let tone = if stale {
                     theme.muted
                 } else if change > 0.0 {
-                    theme.success
+                    gradients.gain.scaled(move_bp(q.change_pct()), FULL_RAMP_BP)
                 } else if change < 0.0 {
-                    theme.error
+                    gradients.loss.scaled(move_bp(q.change_pct()), FULL_RAMP_BP)
                 } else {
                     theme.muted
                 };
@@ -826,7 +850,15 @@ impl Panel for StocksPanel {
             .iter()
             .map(|(symbol, cell)| {
                 let stale = cell.is_stale(self.stale_after);
-                ListItem::new(Self::row(symbol, cell, stale, theme, &grid, spark))
+                ListItem::new(Self::row(
+                    symbol,
+                    cell,
+                    stale,
+                    theme,
+                    ctx.gradients,
+                    &grid,
+                    spark,
+                ))
             })
             .collect();
 
@@ -937,6 +969,11 @@ mod tests {
 
     fn press(p: &mut StocksPanel, code: KeyCode) {
         p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    /// The default theme's baked ramps, for rows built directly in tests.
+    fn grads() -> Gradients {
+        Theme::default().gradients()
     }
 
     /// A cell holding a live quote, as a successful fetch leaves it.
@@ -1233,7 +1270,7 @@ mod tests {
                 Cell::default(),
                 failed("network request failed"),
             ] {
-                let line = StocksPanel::row("^GSPC", &cell, false, &theme, &grid, 8);
+                let line = StocksPanel::row("^GSPC", &cell, false, &theme, &grads(), &grid, 8);
                 let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
                 assert!(
                     crate::grid::display_width(text.trim_end()) <= usize::from(width),
@@ -1343,7 +1380,7 @@ mod tests {
                 true,
             ),
         ] {
-            let line = StocksPanel::row("AAPL", &cell, stale, &theme, &grid, 8);
+            let line = StocksPanel::row("AAPL", &cell, stale, &theme, &grads(), &grid, 8);
             let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
             assert!(
                 !text.trim().is_empty(),
@@ -1371,7 +1408,7 @@ mod tests {
         down.price = 9.0;
 
         let text = |q: Quote| -> String {
-            StocksPanel::row("X", &ready(q), false, &theme, &grid, 0)
+            StocksPanel::row("X", &ready(q), false, &theme, &grads(), &grid, 0)
                 .spans
                 .iter()
                 .map(|s| s.content.as_ref())
@@ -1387,7 +1424,7 @@ mod tests {
         assert!(fall.contains("-10.00%"), "got `{fall}`");
 
         let colour_of = |q: Quote| {
-            StocksPanel::row("X", &ready(q), false, &theme, &grid, 0).spans[4]
+            StocksPanel::row("X", &ready(q), false, &theme, &grads(), &grid, 0).spans[4]
                 .style
                 .fg
         };
@@ -1396,6 +1433,86 @@ mod tests {
             colour_of(down),
             "a gain and a loss must not look the same"
         );
+    }
+
+    /// The row's colour comes off the gain/loss ramp by the size of the move,
+    /// not from the flat success/error signals. A flat colour painted a 0.1%
+    /// dip the same red as a crash; the ramp is what lets a quiet day recede.
+    #[test]
+    fn a_days_move_takes_its_colour_from_the_ramp_by_its_size() {
+        let theme = Theme::default();
+        let gradients = grads();
+        let grid = Grid::new(COLUMNS, 60);
+
+        let at_pct = |pct: f64| -> Quote {
+            Quote {
+                symbol: "X".into(),
+                price: 100.0 * (1.0 + pct / 100.0),
+                previous_close: 100.0,
+                currency: None,
+                series: vec![],
+                delayed: false,
+            }
+        };
+        let colour_of = |q: Quote| {
+            StocksPanel::row("X", &ready(q), false, &theme, &gradients, &grid, 0).spans[4]
+                .style
+                .fg
+        };
+
+        // The exact levels the arithmetic promises: basis points against the
+        // 2% saturation point.
+        assert_eq!(
+            colour_of(at_pct(0.5)),
+            Some(gradients.gain.scaled(50, FULL_RAMP_BP)),
+            "half a percent is a quarter of the way up the gain ramp"
+        );
+        assert_eq!(
+            colour_of(at_pct(-0.5)),
+            Some(gradients.loss.scaled(50, FULL_RAMP_BP)),
+            "and the same distance up the loss ramp on the way down"
+        );
+
+        // A big day saturates rather than walking off the table.
+        assert_eq!(
+            colour_of(at_pct(9.0)),
+            Some(gradients.gain.at(100)),
+            "a move past the saturation point pins the bright end"
+        );
+
+        // The old flat signals are gone from live rows: a small move must be
+        // dimmer than a large one, which no flat colour can be.
+        assert_ne!(
+            colour_of(at_pct(0.1)),
+            colour_of(at_pct(5.0)),
+            "a drift and a surge must not be painted alike"
+        );
+        assert_ne!(
+            colour_of(at_pct(0.1)),
+            Some(theme.success),
+            "a live row's colour comes from the ramp, not theme.success"
+        );
+    }
+
+    /// A flat day is not a gain of zero brightness — it is no direction at
+    /// all, and it stays muted exactly like a stale row does.
+    #[test]
+    fn an_unmoved_price_is_muted_not_faintly_green() {
+        let theme = Theme::default();
+        let grid = Grid::new(COLUMNS, 60);
+        let flat = Quote {
+            symbol: "X".into(),
+            price: 100.0,
+            previous_close: 100.0,
+            currency: None,
+            series: vec![],
+            delayed: false,
+        };
+        let colour = StocksPanel::row("X", &ready(flat), false, &theme, &grads(), &grid, 0).spans
+            [4]
+        .style
+        .fg;
+        assert_eq!(colour, Some(theme.muted));
     }
 
     #[test]
@@ -1518,7 +1635,7 @@ mod tests {
         // to render as three dashes and an empty sparkline for a full refresh
         // interval, because the error replaced the quote outright.
         assert!(cell.error.is_some(), "the reason is still recorded");
-        let row: String = StocksPanel::row("AAPL", cell, true, &theme, &grid, 8)
+        let row: String = StocksPanel::row("AAPL", cell, true, &theme, &grads(), &grid, 8)
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -1540,10 +1657,10 @@ mod tests {
             "a retained price must be labelled with its age: `{status}`"
         );
 
-        let live = StocksPanel::row("AAPL", cell, false, &theme, &grid, 8).spans[2]
+        let live = StocksPanel::row("AAPL", cell, false, &theme, &grads(), &grid, 8).spans[2]
             .style
             .fg;
-        let stale = StocksPanel::row("AAPL", cell, true, &theme, &grid, 8).spans[2]
+        let stale = StocksPanel::row("AAPL", cell, true, &theme, &grads(), &grid, 8).spans[2]
             .style
             .fg;
         assert_ne!(

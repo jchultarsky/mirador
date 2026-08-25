@@ -193,10 +193,11 @@ start = "#4a3a5a"
 mid   = "#8a6f9f"
 end   = "#c7afd7"
 
-# Two further ramps are accepted — [theme.gain_gradient] and
-# [theme.loss_gradient], green and red in the shipped themes. Nothing draws
-# from them yet: they are reserved for the markets panel's sparkline, and a
-# theme may set them now so it is already complete when that lands.
+# Two further ramps — [theme.gain_gradient] and [theme.loss_gradient], green
+# and red in the shipped themes — colour the markets panel: a row's change,
+# percentage and sparkline take their colour by the *size* of the day's move,
+# saturating at 2%. A drifting tenth of a percent sits at the ramp's dark
+# foot; a crash earns the bright end. Flat rows and stale ones stay muted.
 
 # ---------------------------------------------------------------------------
 # World clocks

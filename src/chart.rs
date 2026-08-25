@@ -82,7 +82,6 @@ impl Gradient {
 
     /// The colour for `value` on a 0..=`max` scale. A zero `max` yields the
     /// bottom of the ramp rather than dividing by zero.
-    #[allow(dead_code)] // Wanted by the watchlist panel, which is not yet built.
     pub fn scaled(&self, value: u64, max: u64) -> Color {
         if max == 0 {
             return self.at(0);

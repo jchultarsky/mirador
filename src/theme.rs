@@ -264,15 +264,10 @@ pub struct Gradients {
     pub cpu: Gradient,
     pub rx: Gradient,
     pub tx: Gradient,
-    /// For a rising position. The watchlist panel landed without a gradient
-    /// sparkline, so nothing reads this yet; it stays settable because themes
-    /// already set it and `deny_unknown_fields` makes removal a breaking
-    /// change. Reserved for the markets sparkline, and documented as such in
-    /// the shipped config.
-    #[allow(dead_code)]
+    /// For a rising position: the stocks panel colours a row's change,
+    /// percentage and sparkline from this ramp by the size of the day's move.
     pub gain: Gradient,
-    /// For a falling position. Same story as `gain`.
-    #[allow(dead_code)]
+    /// For a falling position; the red half of the same arrangement.
     pub loss: Gradient,
 }
 
