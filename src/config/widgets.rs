@@ -26,9 +26,10 @@ pub struct ClocksConfig {
     pub date_format: String,
     /// Show each zone's offset relative to the primary clock.
     pub show_offset: bool,
-    /// Include seconds in the large clock. Off by default: a ticking seconds
-    /// field draws the eye every second, which is the opposite of what a
-    /// leave-it-running dashboard wants.
+    /// Include seconds in the large clock. On by default — the block numerals
+    /// are the panel's whole face, and a chronometer that visibly runs is the
+    /// look the design is after; `s` turns them off at a keystroke for anyone
+    /// who finds the tick draws the eye.
     pub show_seconds: bool,
 }
 
@@ -86,7 +87,8 @@ pub struct WeatherConfig {
     pub longitude: Option<f64>,
     /// `metric` (C, km/h) or `imperial` (F, mph).
     pub units: String,
-    /// Number of forecast hours to show, 1 to 24.
+    /// Forecast hours to show — a floor the panel is sized for, not a cap: a
+    /// taller panel shows more, up to the 24 hours the fetch retrieves.
     pub forecast_hours: u8,
     /// Minutes between refreshes.
     pub refresh_minutes: u64,
@@ -210,8 +212,9 @@ pub struct AgendaConfig {
     /// No default that guesses at a path. An agenda pointing somewhere the user
     /// did not choose is either empty, which looks broken, or somebody else's.
     pub file: Option<PathBuf>,
-    /// How many days ahead to show. A floor on the window rather than a cap on
-    /// the panel — a taller panel simply scrolls less.
+    /// How far ahead the window reaches, clamped to 1..=365. This one is a
+    /// hard cutoff, not a floor: the parser never expands an event beyond it,
+    /// so a taller panel shows the same window with less scrolling.
     pub days: u16,
     /// Show a location beside the summary, when the row has room for both.
     pub show_location: bool,
@@ -237,8 +240,10 @@ impl Default for AgendaConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CalendarConfig {
-    /// How many months to show, starting with the current one. The panel draws
-    /// as many as its size allows, up to this number.
+    /// How many months across, starting with the current one — a floor, not a
+    /// ceiling: a tall panel stacks further rows of months rather than leaving
+    /// a void, up to twelve in view. Width the panel does not have comes off
+    /// this count rather than truncating a grid.
     pub months: u8,
     /// `sunday` or `monday`.
     pub week_starts: String,

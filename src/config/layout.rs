@@ -180,7 +180,8 @@ impl Default for LayoutRow {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LayoutPanel {
-    /// Widget id: `clocks`, `weather`, `todo`, `cpu` or `network`.
+    /// Widget id: any name in `WIDGET_NAMES` (`clocks` through `calculator`),
+    /// or the id of a declared `[[plugins]]` entry.
     pub widget: String,
     /// Relative width weight.
     pub width: u16,
