@@ -1709,8 +1709,12 @@ and had to be added back was the one that did not.
   for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows
   x86-64. It is the release that ships the external panel protocol, so v1 of
   that protocol is a compatibility promise from here on. The aarch64 Linux
-  archive first shipped in 1.5.1 and is still built, not exercised, until
-  someone runs it on real ARM hardware. This line goes
+  archive first shipped in 1.5.1 and was executed the same day by its
+  contributor — "it starts and draws" on Fedora 44 Asahi
+  ([#197](https://github.com/jchultarsky/mirador/pull/197)) — so every
+  shipped binary on every shipped target has been run at least once. Note
+  that "starts and draws" is all it verifies: terminal focus reporting on a
+  non-Apple terminal remains untried. This line goes
   stale every release and is worth a glance before you trust anything near it;
   `git tag --list 'v*' | sort -V | tail -1` is the truth — it had been four
   releases behind by the time anybody noticed. `0.0.0` is still on
