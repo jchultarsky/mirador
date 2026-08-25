@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The shipped config now documents external panels**, so `--print-config`
+  and a first run's `config.toml` finally show `[[plugins]]`, alongside newly
+  documented clamps and floors and two reserved theme gradient keys. A
+  documentation-review pass also corrected the protocol specification
+  (undocumented bounds an SDK author could trip on, two wrong claims about
+  cursor and mouse handling), the README (the config file's real name, the
+  three persistence destinations, NetBSD via pkgsrc's `sysutils/mirador` in
+  the install section) and CONTRIBUTING (the widget checklist's missing
+  layout step, the shared fetch helper).
+- **`ureq`'s declared floor is 3.4.0**, the version every release since 1.5.1
+  has actually shipped; the 1.5.1 entry announced the bump but the manifest
+  minimum was never raised.
+
 ## [1.6.1] - 2026-08-25
 
 ### Fixed
