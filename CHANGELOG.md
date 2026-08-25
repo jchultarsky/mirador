@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The markets panel colours a row by the size of the day's move.** The
+  change, percentage and sparkline now take their colour from the theme's
+  `gain_gradient` / `loss_gradient` ramps, saturating at a 2% move — a
+  drifting tenth of a percent sits at the ramp's dark desaturated foot
+  instead of shouting the same green or red as a crash. Flat and stale rows
+  stay muted, exactly as before. This is what those two theme keys were
+  reserved for; themes that already set them light up unchanged.
+
 ### Changed
 
 - **The shipped config now documents external panels**, so `--print-config`

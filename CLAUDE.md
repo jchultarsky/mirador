@@ -244,7 +244,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 324 of them, including the ones mirador
+    trip through `toml` discards all 325 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -475,6 +475,14 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
   same trick for any other user-editable list.
 - `parse_chart` is split from the HTTP call so it is tested against captured
   JSON. **No test in this repo touches the network** — keep it that way.
+- **A row's colour is the size of the day's move, not just its sign.** The
+  change, percentage and sparkline draw from `gain_gradient`/`loss_gradient`,
+  saturating at 2% (`FULL_RAMP_BP`) — the ramp starts dark and desaturated,
+  so a 0.1% drift recedes where the old flat success/error painted it as loud
+  as a crash. Flat and stale rows stay muted. The two gradient keys sat in
+  every theme unread from the day themes shipped until 2026-08-25; the
+  `#[allow(dead_code)]` notes saying they were "wanted by the watchlist
+  panel" are gone because the wanting is over.
 
 ## Named themes — built
 
