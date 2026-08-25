@@ -733,23 +733,13 @@ fn hour_label(timestamp: &str) -> Option<String> {
 
 /// A blocking GET with a timeout, returning the body as a string.
 fn http_get(url: &str) -> Result<String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .user_agent(concat!("mirador/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .new_agent();
-
-    let mut response = agent.get(url).call().map_err(|e| match e {
+    let ua = concat!("mirador/", env!("CARGO_PKG_VERSION"));
+    crate::fetch::get(url, HTTP_TIMEOUT, Some(ua)).map_err(|e| match e {
         ureq::Error::StatusCode(code) => {
             anyhow::anyhow!("the weather service returned HTTP {code}")
         }
         other => anyhow::anyhow!("network request failed: {other}"),
-    })?;
-
-    response
-        .body_mut()
-        .read_to_string()
-        .context("reading the response body")
+    })
 }
 
 /// Percent-encode the characters that matter for a query string value.

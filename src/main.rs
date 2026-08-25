@@ -13,6 +13,7 @@ mod dateinput;
 #[cfg(test)]
 mod docs;
 mod feed;
+mod fetch;
 mod frame;
 mod glyphs;
 mod grid;

@@ -803,13 +803,7 @@ fn interleave(stories: Vec<Story>) -> Vec<Story> {
 
 /// Fetch and parse one feed.
 fn read_feed(url: &str) -> anyhow::Result<Vec<Story>> {
-    let body = ureq::get(url)
-        .config()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .build()
-        .call()?
-        .body_mut()
-        .read_to_string()?;
+    let body = crate::fetch::get(url, HTTP_TIMEOUT, None)?;
     crate::feed::parse(&body)
 }
 

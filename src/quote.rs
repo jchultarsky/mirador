@@ -262,13 +262,7 @@ fn http_get(_url: &str) -> Result<String> {
 
 #[cfg(not(test))]
 fn http_get(url: &str) -> Result<String> {
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .user_agent(BROWSER_UA)
-        .build()
-        .new_agent();
-
-    let mut response = agent.get(url).call().map_err(|e| match e {
+    crate::fetch::get(url, HTTP_TIMEOUT, Some(BROWSER_UA)).map_err(|e| match e {
         ureq::Error::StatusCode(429) => anyhow::anyhow!(
             "the quote service is rate-limiting this network (HTTP 429). \
              Yahoo blocks datacenter and VPN addresses outright; on such a \
@@ -282,12 +276,7 @@ fn http_get(url: &str) -> Result<String> {
             anyhow::anyhow!("the quote service returned HTTP {code}")
         }
         other => anyhow::anyhow!("network request failed: {other}"),
-    })?;
-
-    response
-        .body_mut()
-        .read_to_string()
-        .context("reading the response body")
+    })
 }
 
 /// Percent-encode the characters that matter in a path segment.
