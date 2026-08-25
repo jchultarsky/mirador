@@ -848,8 +848,11 @@ every design considered either embedded Python or Lua, or a public Rust API, and
 both were worse than not having the feature. A process boundary costs neither,
 which is why `panel.rs` no longer declares itself not-a-plugin-API.
 
-Nothing is built and what was posted is a position rather than a contract, but
-these parts were stated firmly and are the ones to hold: `Ctrl+C` stays
+That was written when nothing was built and what had been posted was a
+position rather than a contract. Both halves have since flipped — the contract
+was agreed in text on 2026-08-24 and shipped in 1.6.0 as protocol v1, a
+compatibility promise — but the parts stated firmly then are the ones that
+held, unchanged, all the way through: `Ctrl+C` stays
 host-owned with **no** exception, not even the first press; plugins take input
 from the start, because a panel you can only watch is not much of a widget;
 **the host does the clipping**, since a plugin cannot be trusted with invariant
@@ -1686,9 +1689,10 @@ and had to be added back was the one that did not.
     capture lands a few milliseconds in, `agg` faithfully renders those
     milliseconds of empty terminal, and the GIF opens on a black frame — the one
     a still preview shows, and a flicker on every loop.
-  - **150x42, not smaller.** The clock drops its block numerals when its row is
-    short, and those numerals are the one thing in mirador that looks like
-    nothing else.
+  - **200x50, not smaller** (the script's `COLS`/`ROWS` are the truth if this
+    number goes stale again — it sat at "150x42" here long after the script
+    moved on). The clock drops its block numerals when its row is short, and
+    those numerals are the one thing in mirador that looks like nothing else.
   - **The order of the segments is now taste, not a workaround.** It used to
     matter: toggling any panel rebuilt every panel, so starting the pomodoro
     before the picker segment recorded the timer silently resetting, and the

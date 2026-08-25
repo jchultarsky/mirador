@@ -195,6 +195,13 @@ Get-Content .\mirador-x86_64-pc-windows-msvc.zip.sha256
 
 Requires Rust 1.95 or newer to build from source.
 
+**NetBSD** (and anywhere pkgsrc runs) has a community package:
+`pkgin install mirador`, or build from
+[`sysutils/mirador`](https://pkgsrc.se/sysutils/mirador). It is packaged and
+maintained in pkgsrc rather than by this repository — the first BSD packaging
+of mirador, and the platform whose bug report fixed IPv6-preferring networks
+for everyone (1.6.1).
+
 **Windows** has been run and works — installed with the PowerShell one-liner
 above, in the default Windows terminal. It is still the least-travelled of the
 three: macOS and Linux are used daily and Windows has been checked rather than
@@ -243,7 +250,7 @@ Some settings you change with a keystroke are remembered across restarts:
 | Where the panels are | `m` | — |
 | Panel sizes | `Ctrl+arrows` | — |
 
-They go to two different places, and the split is deliberate.
+They go to three different places, and the split is deliberate.
 
 **Anything to do with `[layout]` is written back into your config** — which
 panels exist, and how wide they are. That is the part of the file you actually
@@ -262,6 +269,13 @@ else, so editing any other value in your config still takes effect. Delete that
 file and every remembered setting falls back to what the config says; it says
 so at the top of itself, because a preference you cannot remember setting needs
 an obvious way back.
+
+**And the two editable lists are data, not settings.** Watchlist symbols and
+the world-clock list go to files of their own beside your tasks —
+`watchlist.toml` and `zones.toml` — because a list you edit from the panel is
+something mirador owns, not a preference measured against the config. That is
+also why `[stocks].symbols` and the clock zones in the config only seed the
+first run: after that, the files are the truth.
 
 ### Upgrading
 
@@ -347,7 +361,7 @@ to-do list as a flat checklist; this one has due dates, priorities, tags,
 notes, filtering and full editing without leaving the dashboard.
 
 ```
-╭┤3 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
+╭┤4 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
 │ 1 overdue   1 due today   3 open   by smart                                │
 │   DONE PRI TASK                              TAGS                      DUE │
 │   [ ]  ▮▮▮ Renew the domain                  #admin            2 days late │
@@ -373,7 +387,7 @@ or `title` when you want something simpler.
 Free-form notes in a master-detail layout, the shape a mail client uses.
 
 ```
-╭┤2 Notes├───────────────────────────────┤1├╮
+╭┤6 Notes├───────────────────────────────┤1├╮
 │ 1 note                                    │
 │   TITLE                              DATE │
 │   Release checklist                ·25 J… │
@@ -437,7 +451,7 @@ run. The large clock is not removable, and nothing can be moved into its place
 either, because a clock panel with nothing to draw large is not a clock panel.
 
 ```
-╭┤1 Calendar├───────────────────╮
+╭┤2 Calendar├───────────────────╮
 │      July 2026                │
 │ Su Mo Tu We Th Fr Sa          │
 │           1  2  3  4          │
@@ -458,7 +472,7 @@ Current conditions and an hourly forecast from [Open-Meteo](https://open-meteo.c
 which needs no key and no account. `u` switches between imperial and metric at
 runtime, converting what is already on screen rather than re-fetching. `L` sets
 the location without touching your config; the panel re-geocodes and refetches
-on the spot.
+on the spot. `r` refetches by hand, ahead of the regular refresh.
 
 A failed refresh keeps the last reading and shows its age in amber rather than
 blanking the panel — weather two hours old is still useful, and an empty panel
@@ -469,7 +483,7 @@ is not. Columns drop as the panel narrows, in the order that costs you least.
 A watchlist with the last price, the day's change, and an intraday sparkline.
 
 ```
-╭┤1 Markets├──────────────────────────────────────────────────────────────┤7├╮
+╭┤Markets├────────────────────────────────────────────────────────────────┤7├╮
 │   SYMBOL         LAST       CHG        % TODAY                             │
 │ ▸ ^GSPC       7413.18     +1.20   +0.02% ▇▄▃▃▂▃▂▁▂▂▃▃                      │
 │   ^DJI       52210.08   +262.83   +0.51% ▇▅▃▃▂▂▂▂▂▂▃▄                      │
@@ -605,7 +619,7 @@ floor.
 What happened while you were not looking.
 
 ```
-╭┤7 Watch log├──────────────────────────────────╮
+╭┤8 Watch log├──────────────────────────────────╮
 │ 14:02  Standup appeared in your calendar      │
 │ ──────────────────── since you were here ──── │
 │ 13:30  Renew the domain went overdue          │
@@ -619,7 +633,9 @@ tasks change because you changed them. An entry is something that happened *to*
 you rather than because of you, and that you would want to know even if you
 never looked at the panel it came from. Out of the box that means three things:
 the day turning, a task crossing into overdue because of it, and an event
-appearing in your `.ics` that you did not put there.
+appearing in your `.ics` that you did not put there. An external panel can be
+a fourth source: a plugin may hand the log a bounded, *completed* event —
+outcomes, not progress — and it appears here under that plugin's id.
 
 The day turning is the one that always happens, which is more useful than it
 sounds — it is the divider that tells you where one day's entries end, and it
@@ -735,9 +751,9 @@ functions — the tape and carrying an answer forward cover what those were for.
 
 ### CPU and network
 
-CPU shows average load, a moving history graph and a per-core meter row.
-Network shows receive and transmit rates as two graphs, plus a session total
-and the peak rate seen.
+CPU shows average load, a moving history graph and a per-core meter row —
+`c` toggles that row when the panel is focused. Network shows receive and
+transmit rates as two graphs, plus a session total and the peak rate seen.
 
 Both draw their history in **braille**, which packs two samples into every
 character cell and four levels into every row — twice the horizontal
@@ -772,6 +788,10 @@ Every flag is optional; with none of them mirador opens the dashboard.
 | `-y`, `--yes` | Do not ask for confirmation |
 | `-h`, `--help` | Print help and exit |
 | `-V`, `--version` | Print the version and exit |
+
+The config path resolves in that order: `--config` wins over the
+`MIRADOR_CONFIG` environment variable, which wins over the platform default —
+the same order `--config-path` reports.
 
 Neither reset deletes anything. Every file they touch is renamed to a numbered
 `.bak` beside itself, and both list what they will affect before doing it.
@@ -824,10 +844,11 @@ In the task panel:
 | Key | Action |
 | --- | --- |
 | `j` / `k`, `↑` / `↓` | Move the selection |
-| `g` / `G` | Jump to first / last |
+| `g` / `G`, `Home` / `End` | Jump to first / last |
+| `PageUp` / `PageDown` | Move a screen at a time |
 | `Space` | Toggle done |
-| `a` | Add a task |
-| `e` | Edit the selected task |
+| `a` / `n` | Add a task |
+| `e` / `Enter` | Edit the selected task |
 | `d` | Delete (asks first) |
 | `p` / `P` | Cycle priority forward / back |
 | `s` | Cycle sort mode |
@@ -1107,7 +1128,9 @@ it makes a stale config look like stale code.
 ## Task file format
 
 Tasks live in one TOML file — by default under your platform's data directory,
-or wherever `[todo].file` points. Press `o` in the task panel to see the path.
+or wherever `[todo].file` points. Press `o` in the task panel to see the path —
+and the same key answers in every file-backed panel: notes, the watchlist, the
+clock zones and the agenda all show theirs.
 
 ```toml
 [[task]]
@@ -1129,8 +1152,8 @@ created = "2026-07-30"
 completed = "2026-08-02"   # set when `done` flips; used by the `c` filter
 ```
 
-Only `id`, `title`, `done` and `created` are required; everything else may be
-left out.
+Only `id`, `title` and `created` are required; everything else — `done`
+included — may be left out.
 
 Writes are atomic — the file is written under a temporary name, flushed to the
 disk, and renamed over the original — so an interrupted save or a full disk can
@@ -1144,7 +1167,7 @@ about the files mirador reads, and it is worth being precise about what it
 covers.
 
 **Your config.** No option that has ever shipped in a released version has been
-removed — every key in every `mirador.toml` written since `0.1.0` is still
+removed — every key in every `config.toml` written since `0.1.0` is still
 accepted, checked against every released version. Options are added, never
 renamed out from under you. The four keys that predate `0.1.0` are handled by
 `mirador --migrate-config`, which edits the file in place and tells you what it
