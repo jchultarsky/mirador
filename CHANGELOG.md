@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-25
+
 ### Added
 
 - **Six more bundled themes, chosen light-first.** The first six ports were
@@ -17,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mirroring its dark sibling where one exists and body text left on the
   terminal's own foreground. Light themes start their graph ramps light, so
   an idle chart recedes into a pale background.
+
+### Changed
+
+- **NetBSD appears in the platform badge and the install table**, pointing at
+  pkgsrc's `sysutils/mirador` — the community package that arrived with
+  1.6.1's fix.
 
 ## [1.7.0] - 2026-08-25
 
@@ -1699,7 +1707,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/jchultarsky/mirador/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/jchultarsky/mirador/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/jchultarsky/mirador/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/jchultarsky/mirador/compare/v1.5.1...v1.6.0
