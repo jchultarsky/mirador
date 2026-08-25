@@ -1449,6 +1449,18 @@ ever disagree again.
   page reclaim, not accumulation. **Do not draw a trend from two RSS samples of
   this program**: an earlier pair read as "+3548 KB in 5–6 h" and looked like a
   leak, when both samples simply landed at different points in the same cycle.
+
+  **Re-run against 1.5.1, 2026-08-24→25** (15 h, 60 samples, default 13-panel
+  dashboard, fresh `HOME`, macOS): a different shape and the same verdict.
+  Ninety minutes of warm-up (15120 → 16272 KB, and the first sample predates
+  the caches filling — a naive "net +1232" reading is the warm-up, not a
+  trend), then an asymptote in 16 KB page steps: **dead flat at 16336 KB for
+  eight consecutive hours**, ending 16352. Total movement after warm-up, 80 KB
+  in 13.5 h. The 2026-07 run oscillated; this one plateaued — allocator
+  behaviour differs by machine, and both shapes are healthy. What a leak looks
+  like is neither: a *tail that climbs*. The run also crossed a real midnight
+  and drew `00:00 Tuesday 25 August began`, and quit cleanly on `q` after
+  fifteen hours.
 - **Terminal focus reporting — answered, and the answer has two halves.**
   *mirador's handling is verified*: focus events are bytes on stdin, so
   `tmux send-keys -H 1b 5b 49` (gained) and `1b 5b 4f` (lost) inject them, and
