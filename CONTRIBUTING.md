@@ -32,9 +32,9 @@ a file the build needed, and a dependency `cargo deny` refused.
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --document-private-items
 cargo deny check
-cargo publish --dry-run
+cargo publish --locked --dry-run
 ```
 
 `--locked` matters and is not decoration: without it cargo will quietly rewrite
@@ -67,7 +67,7 @@ cargo run -- --config /tmp/mirador.toml
 ## Adding a built-in widget
 
 The `Panel` trait in `src/panel.rs` is mirador's private in-tree seam. A widget
-that belongs in every installation still means a pull request. Six places to
+that belongs in every installation still means a pull request. Seven places to
 touch:
 
 1. Create `src/widgets/<name>.rs` and implement `Panel`.
@@ -85,18 +85,29 @@ touch:
    fails if the registry disagrees, because a grid that is not listed is a grid
    the overflow sweep never checks — and an unchecked grid draws rows wider than
    its panel, which the terminal then cuts without saying so.
-5. Document the widget in `assets/default_config.toml` and in the README's
+5. Place it in the default dashboard — **twice, and the two must match**:
+   `Default for Layout` in `src/config/layout.rs` and the `[layout]` block in
+   `assets/default_config.toml` describe the same dashboard by different
+   routes, and two tests (`the_default_layout_places_every_widget` and the
+   shipped-layout comparison) fail until both know your widget.
+6. Document the widget in `assets/default_config.toml` and in the README's
    widget table.
-6. Add tests for the logic that is not drawing — parsing, formatting,
+7. Add tests for the logic that is not drawing — parsing, formatting,
    thresholds, state transitions.
 
-Steps 2 and 4 are the ones that bite. The calculator is the proof: the pull
-request that added the panel touched no `src/grid.rs` at all, and a later one
-had to add the registry entry when the panel gained a grid.
+Steps 2, 4 and 5 are the ones that bite. The calculator is the proof twice
+over: the pull request that added the panel touched `src/config/layout.rs`,
+which this list did not name at the time — and touched no `src/grid.rs` at
+all, so a later one had to add the registry entry when the panel gained a
+grid.
 
 Widgets must not block. If your widget needs network or disk I/O, do it on a
 background thread and poll the result in `tick`, as `weather.rs` does. A panel
-that blocks freezes the whole dashboard.
+that blocks freezes the whole dashboard. Make the HTTP request itself through
+`crate::fetch::get` — it carries the address-family fallback that keeps
+fetches working on IPv6-preferring hosts with no IPv6 route (#205) — and wait
+between polls with `crate::poll::wait`, so quitting does not sit out your
+sleep. A raw `ureq` call quietly loses both.
 
 Personal or experimental panels do not need to become core widgets. The
 [external panel protocol](docs/plugin-protocol.md) is a versioned process
@@ -113,7 +124,8 @@ If your widget needs a setting the user can change from the keyboard, two
 things already exist for it. A value that is free text — a path, a place, a
 name — gets a `Prompt` from `src/prompt.rs`: open it with the current value,
 validate the answer yourself, and call `reject` to keep the dialog open with
-the text still in it. Return the value from `Panel::remember` and it persists
+the text still in it. Report the value in `Panel::remember` — it writes into
+the `UiState` it is handed rather than returning anything — and it persists
 through `state.rs`, which records only what differs from the config so the
 setting can be un-set again.
 
@@ -160,7 +172,7 @@ palette. Someone choosing `nord` wants Nord.
 
 ## Code standards
 
-- `cargo clippy --all-targets -- -D warnings` must pass. The crate enables
+- `cargo clippy --locked --all-targets -- -D warnings` must pass. The crate enables
   `clippy::pedantic`; if a lint is genuinely wrong for a piece of code, add a
   targeted `#[allow]` with a comment explaining why, rather than widening the
   allow list in `Cargo.toml`.
