@@ -983,6 +983,18 @@ language SDKs remain separate—the experimental Python SDK and example widgets
 at [krflol/mirador-plugins](https://github.com/krflol/mirador-plugins) are not a
 Python dependency or a Mirador support commitment.
 
+**Finding and sharing plugins.** There is no registry, deliberately — a list
+in this README would be an endorsement this project cannot honestly make for
+code it has never run. Instead, a convention: plugin authors tag their
+repository with the GitHub topic
+[`mirador-plugin`](https://github.com/topics/mirador-plugin), so the search
+*is* the directory — decentralized, self-serve, and stale-proof. Announce
+what you build in the repository's
+[Show and tell](https://github.com/jchultarsky/mirador/discussions/categories/show-and-tell)
+discussions. Either way, the trust decision stays where it always was: a
+plugin is a program you choose to run, and the config line naming its
+executable is you making that choice.
+
 ### Market data
 
 The watchlist reads `query1.finance.yahoo.com`, the endpoint Yahoo's own charts
