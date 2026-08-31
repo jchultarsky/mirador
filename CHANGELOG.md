@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`quick-xml` 0.41 → 0.42**, which rebuilt its API around `str` instead of
+  byte slices. The feed parser is ported with identical behaviour — the
+  entity corpus and trim-once tests pass unchanged, and live feeds were
+  driven through it before merging. The dependency floor stays at Rust 1.95.
+
 ## [1.8.0] - 2026-08-25
 
 ### Added

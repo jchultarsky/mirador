@@ -71,21 +71,21 @@ pub fn parse(xml: &str) -> Result<Vec<Story>> {
         match reader.read_event().context("reading the feed as XML")? {
             XmlEvent::Start(tag) => {
                 match local_name(tag.name().as_ref()) {
-                    b"item" => {
+                    "item" => {
                         in_item = true;
                         current = Partial::default();
                     }
                     // Only inside an item: a feed's channel has a `<title>` and
                     // a `<link>` of its own, and reading those as a story is how
                     // the outlet's own name ends up as the first headline.
-                    b"title" if in_item => field = Some(Field::Title),
-                    b"link" if in_item => field = Some(Field::Link),
-                    b"pubDate" if in_item => field = Some(Field::Date),
+                    "title" if in_item => field = Some(Field::Title),
+                    "link" if in_item => field = Some(Field::Link),
+                    "pubDate" if in_item => field = Some(Field::Date),
                     _ => {}
                 }
             }
             XmlEvent::End(tag) => match local_name(tag.name().as_ref()) {
-                b"item" => {
+                "item" => {
                     in_item = false;
                     if let Some(story) = current.take() {
                         stories.push(story);
@@ -97,14 +97,15 @@ pub fn parse(xml: &str) -> Result<Vec<Story>> {
             // entities for us, which is most of why it is here at all.
             XmlEvent::Text(text) => {
                 if let Some(which) = field {
-                    let value = text.decode().unwrap_or_default().into_owned();
-                    current.set(which, &value);
+                    // 0.42 validates UTF-8 in the reader and hands events out
+                    // as `str`, so the old decode step has no failure left to
+                    // handle — the event *is* the text.
+                    current.set(which, text.as_ref());
                 }
             }
             XmlEvent::CData(data) => {
                 if let Some(which) = field {
-                    let value = String::from_utf8_lossy(&data).into_owned();
-                    current.set(which, &value);
+                    current.set(which, data.as_ref());
                 }
             }
             // `&amp;` and `&#8217;` arrive as their own events rather than as
@@ -213,9 +214,8 @@ fn resolve_entity(reference: &quick_xml::events::BytesRef<'_>) -> Option<String>
     if let Ok(Some(character)) = reference.resolve_char_ref() {
         return Some(character.to_string());
     }
-    let name = reference.decode().ok()?;
     Some(
-        match name.as_ref() {
+        match reference.as_ref() {
             "amp" => "&",
             "lt" => "<",
             "gt" => ">",
@@ -240,8 +240,8 @@ fn parse_date(raw: &str) -> Option<Zoned> {
 ///
 /// Feeds use `dc:date` and `media:content` freely, and matching on the whole
 /// qualified name would miss anything a feed chose to namespace.
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|byte| *byte == b':') {
+fn local_name(name: &str) -> &str {
+    match name.rfind(':') {
         Some(colon) => &name[colon + 1..],
         None => name,
     }
@@ -429,7 +429,7 @@ mod tests {
 
     #[test]
     fn a_namespaced_element_is_matched_by_its_local_name() {
-        assert_eq!(local_name(b"dc:creator"), b"creator");
-        assert_eq!(local_name(b"title"), b"title");
+        assert_eq!(local_name("dc:creator"), "creator");
+        assert_eq!(local_name("title"), "title");
     }
 }
