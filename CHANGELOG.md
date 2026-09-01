@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Cutting a release no longer needs the owner's machine.** Two dispatchable
+  workflows cover the two manual steps: `cut-release.yml` tags the head of
+  `main` with the manifest's version, starting the release build exactly as a
+  manual tag push would, and `publish-crates.yml` publishes a tag to crates.io
+  using Trusted Publishing, so no long-lived crates.io token exists anywhere.
+  Both steps remain runnable by hand from a machine with the right
+  credentials.
+
 ## [1.9.0] - 2026-09-01
 
 ### Added

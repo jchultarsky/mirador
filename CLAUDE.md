@@ -1779,9 +1779,12 @@ and had to be added back was the one that did not.
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
 - **`1.9.0` is released**, as a GitHub release with binaries for macOS
-  arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64 —
-  the crates.io publish is the manual step and had not yet been run when
-  this line was written; strike this clause when it has. It makes news
+  arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
+  and published on crates.io — though the tag went up hours after the
+  merge, because it could only be pushed from the owner's machine and
+  the session that cut the release was not on it; this line spent those
+  hours claiming a release that did not exist, which is what the
+  workflows below now prevent. It makes news
   headlines OSC 8 hyperlinks (#222), the feature 1.8.0's notes still
   called parked; 1.8.0 brought the bundled themes to sixteen (the
   light-first batch, owner-approved on rendered captures) and put NetBSD
@@ -1804,8 +1807,35 @@ and had to be added back was the one that did not.
 
   Cutting a release is a tag push and a `cargo publish`, in that order. Bump
   the manifest, commit, *then* tag: a tag that disagrees with `version` in
-  Cargo.toml is refused. The workflow does **not** publish to crates.io — that
-  step stays manual and comes after the tag.
+  Cargo.toml is refused. The release workflow does **not** publish to
+  crates.io — that step stays separate and deliberate, and comes after the
+  tag.
+
+  **Both steps are now workflows, so neither needs the owner's machine.**
+  They exist because 1.9.0 proved the failure mode: the bump merged, the
+  session that merged it could not push a tag (a remote session's git
+  credentials are scoped to its own work branch), and the release sat
+  half-cut until the owner got back to a laptop. Now:
+
+  - `.github/workflows/cut-release.yml` (dispatch on `main`) tags the head
+    of `main` with the version Cargo.toml carries and pushes the tag, which
+    starts `release.yml` exactly as a manual push would. It takes an
+    optional `summary` input for the tag annotation. The push uses the
+    `RELEASE_TAG_TOKEN` secret — a fine-grained PAT with contents
+    read/write on this repository — because a tag pushed with the
+    workflow's own `GITHUB_TOKEN` triggers nothing: GitHub suppresses
+    workflow runs for events that token creates, and the result would be a
+    tag with no release behind it.
+  - `.github/workflows/publish-crates.yml` (dispatch, takes the tag) checks
+    the tag out, re-checks it against `version`, and runs
+    `cargo publish --locked` with a token minted by crates.io Trusted
+    Publishing — an OIDC exchange scoped to this crate and this run, so no
+    long-lived crates.io token exists anywhere. The crate's Settings page
+    on crates.io must name this repository and `publish-crates.yml` for
+    the exchange to succeed.
+
+  Both remain runnable by hand from a machine with the right credentials —
+  the workflows add a path, they do not close one.
 
   **`main` is protected, so "commit" there means *merged*, not committed
   locally.** The version bump reaches `main` through a PR like anything else,

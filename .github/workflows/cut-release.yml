@@ -1,0 +1,75 @@
+name: Cut release
+
+# The tag-push half of cutting a release, behind workflow_dispatch so it can
+# be run through the API — the 1.9.0 release sat merged on main for hours with
+# no tag, because the only place a tag could be pushed from was the owner's
+# machine. This tags the head of main with the version Cargo.toml carries;
+# the tag push is what starts release.yml, exactly as a manual push would.
+#
+# The push authenticates with RELEASE_TAG_TOKEN, a fine-grained PAT with
+# contents read/write on this repository, not the workflow's own GITHUB_TOKEN.
+# That is load-bearing, not caution: GitHub suppresses workflow runs for
+# events created with GITHUB_TOKEN, so a tag pushed with it would be a
+# release that builds nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      summary:
+        description: "Tag annotation after the version, e.g. 'news headlines are OSC 8 hyperlinks'"
+        required: false
+        type: string
+
+# Read-only for the workflow token; the write happens through the PAT.
+permissions:
+  contents: read
+
+jobs:
+  tag:
+    name: tag the release
+    runs-on: ubuntu-latest
+    steps:
+      # Actions are pinned by commit, not by tag — same reasoning as ci.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Checkout wires this token into the remote, so the tag push below
+          # carries it.
+          token: ${{ secrets.RELEASE_TAG_TOKEN }}
+
+      - name: Tag the head of main with Cargo.toml's version
+        env:
+          SUMMARY: ${{ inputs.summary }}
+        run: |
+          set -euo pipefail
+
+          # A release tag belongs on main and nowhere else.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "refusing to tag $GITHUB_REF; dispatch this workflow on main" >&2
+            exit 1
+          fi
+
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ -z "$version" ]; then
+            echo "no version found in Cargo.toml" >&2
+            exit 1
+          fi
+
+          # Refuse a tag that exists (release.yml would refuse too, but this
+          # message says what to do about it) and a version the CHANGELOG has
+          # no section for — the release notes are cut from that section.
+          if git ls-remote --exit-code origin "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "v$version already exists; bump the version on main before cutting" >&2
+            exit 1
+          fi
+          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "CHANGELOG.md has no [$version] section" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Annotated, subject "<version>: <summary>", matching every tag
+          # since v1.0.0.
+          git tag -a "v$version" -m "$version${SUMMARY:+: $SUMMARY}"
+          git push origin "v$version"
