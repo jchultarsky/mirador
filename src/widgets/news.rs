@@ -177,6 +177,40 @@ impl NewsPanel {
         }
     }
 
+    /// Punch an OSC 8 link into each headline's cells, so a terminal that
+    /// renders hyperlinks makes the headline itself clickable — and one that
+    /// does not sees only the glyphs, because the sequences cost no columns.
+    /// This runs after the `List` has drawn, so the link wraps whatever
+    /// actually reached the screen, and the per-story id keeps a wrapped
+    /// headline one logical link across its rows. `linkify` is the door every
+    /// URL goes through: a link a feed laced with control bytes or an off-web
+    /// scheme gets no sequence at all. The `List` shifts every line right by
+    /// its two-cell highlight symbol once a selection exists, and the links
+    /// have to follow.
+    fn link_headlines(&self, frame: &mut Frame, body: Rect, headline_rows: &[(u16, u16, usize)]) {
+        let indent = if self.selected.selected().is_some() {
+            2
+        } else {
+            0
+        };
+        let buf = frame.buffer_mut();
+        for &(y, w, index) in headline_rows {
+            if y >= body.y + body.height {
+                continue;
+            }
+            let x0 = body.x + indent;
+            let x1 = (x0 + w).min(body.x + body.width);
+            crate::link::linkify(
+                buf,
+                y,
+                x0,
+                x1,
+                &self.shown[index].link,
+                &format!("news-{index}"),
+            );
+        }
+    }
+
     /// The link of the story the cursor is on, or the top one when it has not
     /// been placed — the same rule `o` follows, so all three keys act on the
     /// same story.
@@ -427,9 +461,19 @@ impl Panel for NewsPanel {
         }
 
         let mut items: Vec<ListItem> = Vec::with_capacity(keep);
+        // `(row, width, story)` for every title row that will reach the
+        // screen, recorded while the blocks are still lines: once they become
+        // `ListItem`s their geometry is the widget's business, and the links
+        // punched in after the draw need to know where each headline landed.
+        let mut headline_rows: Vec<(u16, u16, usize)> = Vec::new();
+        let mut row = body.y;
         for (index, mut lines) in blocks.into_iter().take(keep).enumerate() {
             if clipped {
                 lines.truncate(budget);
+            }
+            // Every line after the masthead is a wrapped title row.
+            for (offset, line) in lines.iter().enumerate().skip(1) {
+                headline_rows.push((row + offset as u16, line.width() as u16, index));
             }
             // The gap goes *between* stories, not after every one. A trailing
             // blank on the last item costs a whole row, and `List` draws only
@@ -438,6 +482,7 @@ impl Panel for NewsPanel {
             if index + 1 != keep {
                 lines.push(Line::from(""));
             }
+            row += lines.len() as u16;
             items.push(ListItem::new(lines));
         }
 
@@ -466,6 +511,8 @@ impl Panel for NewsPanel {
             body,
             &mut self.selected,
         );
+
+        self.link_headlines(frame, body, &headline_rows);
 
         // A `(text, style)` pair rather than a `Span`, because the link case is
         // multi-line and a `Span` holding newlines renders as one line with the
@@ -852,7 +899,11 @@ mod tests {
             (0..12)
                 .map(|y| {
                     (0..46)
-                        .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                        .filter_map(|x| {
+                            buffer
+                                .cell((x, y))
+                                .map(|c| crate::link::without_links(c.symbol()))
+                        })
                         .collect::<String>()
                 })
                 .collect::<Vec<_>>()
@@ -922,7 +973,11 @@ mod tests {
             let buffer = terminal.backend().buffer().clone();
             let screen: String = (0..height)
                 .flat_map(|y| (0..width).map(move |x| (x, y)))
-                .filter_map(|(x, y)| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                .filter_map(|(x, y)| {
+                    buffer
+                        .cell((x, y))
+                        .map(|c| crate::link::without_links(c.symbol()))
+                })
                 .collect();
             let squashed: String = screen.chars().filter(|c| !c.is_whitespace()).collect();
 
@@ -945,6 +1000,184 @@ mod tests {
             published: Zoned::now()
                 .checked_sub(jiff::Span::new().minutes(minutes_ago))
                 .ok(),
+        }
+    }
+
+    /// Renders `panel` at the given size and hands back the raw buffer, links
+    /// and all — the tests below are about the escape sequences themselves,
+    /// which `without_links` would hide.
+    fn raw_buffer(panel: &mut NewsPanel, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// The row whose visible text contains `needle`.
+    fn row_containing(buffer: &ratatui::buffer::Buffer, needle: &str) -> u16 {
+        let area = buffer.area;
+        (0..area.height)
+            .find(|y| {
+                let text: String = (0..area.width)
+                    .filter_map(|x| {
+                        buffer
+                            .cell((x, *y))
+                            .map(|c| crate::link::without_links(c.symbol()))
+                    })
+                    .collect();
+                text.contains(needle)
+            })
+            .unwrap_or_else(|| panic!("no row shows {needle:?}"))
+    }
+
+    /// The headline itself is now the link: every glyph cell of a title row
+    /// carries a self-contained OSC 8 sequence naming the story's URL, and
+    /// the masthead above it carries none. What the reader *sees* does not
+    /// change — the sequences cost no cells — which is what keeps this on the
+    /// right side of the calm-panel commitments.
+    #[test]
+    fn a_headline_is_a_link_to_its_story() {
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = vec![
+            Story {
+                link: "https://example.test/one".into(),
+                ..story("NASA", "Orbit story", 5)
+            },
+            Story {
+                link: "https://example.test/two".into(),
+                ..story("BBC", "Second story", 10)
+            },
+        ];
+        let buffer = raw_buffer(&mut panel, 46, 12);
+
+        let title_row = row_containing(&buffer, "Orbit story");
+        let first = buffer.cell((0, title_row)).unwrap();
+        assert!(
+            first
+                .symbol()
+                .starts_with("\x1b]8;id=news-0;https://example.test/one\x1b\\"),
+            "the first title cell must open its story's link, got {:?}",
+            first.symbol()
+        );
+        assert!(
+            first.symbol().ends_with("\x1b]8;;\x1b\\"),
+            "every linked cell closes its own sequence — OSC 8 is modal, and \
+             a cell that leaves it open leaks the link onto whatever the diff \
+             prints next"
+        );
+
+        let masthead_row = row_containing(&buffer, "NASA");
+        let masthead: String = (0..46)
+            .filter_map(|x| {
+                buffer
+                    .cell((x, masthead_row))
+                    .map(|c| c.symbol().to_string())
+            })
+            .collect();
+        assert!(
+            !masthead.contains('\x1b'),
+            "the masthead is not part of the link"
+        );
+
+        let second_row = row_containing(&buffer, "Second story");
+        assert!(
+            buffer
+                .cell((0, second_row))
+                .unwrap()
+                .symbol()
+                .contains("id=news-1;https://example.test/two"),
+            "each story links to its own URL under its own id"
+        );
+    }
+
+    /// A headline that wraps is one logical link: every row repeats the same
+    /// id and URL, which is what tells the terminal the rows belong together.
+    #[test]
+    fn a_wrapped_headline_is_one_logical_link_across_its_rows() {
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        panel.shown = vec![Story {
+            link: "https://example.test/long".into(),
+            ..story(
+                "NASA",
+                "A headline comfortably long enough to wrap onto a second row",
+                5,
+            )
+        }];
+        let buffer = raw_buffer(&mut panel, 30, 12);
+
+        let first_row = row_containing(&buffer, "A headline");
+        let mut linked_rows = 0;
+        for y in first_row..buffer.area.height {
+            let symbol = buffer.cell((0, y)).unwrap().symbol().to_string();
+            if symbol.contains("]8;") {
+                assert!(
+                    symbol.contains("id=news-0;https://example.test/long"),
+                    "row {y} of the wrapped headline must carry the same id \
+                     and URL as the first, got {symbol:?}"
+                );
+                linked_rows += 1;
+            }
+        }
+        assert!(
+            linked_rows >= 2,
+            "the title was meant to wrap; only {linked_rows} linked row(s) \
+             found — widen the fixture if wrapping changed"
+        );
+    }
+
+    /// A feed is the one input somebody else writes, and its link rides
+    /// *inside* an escape sequence — so a URL carrying control bytes (an
+    /// `&#27;` entity is all it takes) or an off-web scheme gets no sequence
+    /// at all. The headline still renders; only the shortcut is withheld.
+    #[test]
+    fn a_hostile_link_never_reaches_the_terminal() {
+        for link in [
+            "https://example.test/\x1b]8;;https://evil.test\x1b\\",
+            "https://example.test/\x07",
+            "file:///etc/passwd",
+        ] {
+            let mut panel = NewsPanel::new(&NewsConfig {
+                feeds: Vec::new(),
+                ..NewsConfig::default()
+            });
+            panel.shown = vec![Story {
+                link: link.into(),
+                ..story("NASA", "An ordinary headline", 5)
+            }];
+            let buffer = raw_buffer(&mut panel, 46, 12);
+
+            let title_row = row_containing(&buffer, "An ordinary headline");
+            for x in 0..46 {
+                let symbol = buffer.cell((x, title_row)).unwrap().symbol().to_string();
+                assert!(
+                    !symbol.contains('\x1b'),
+                    "link {link:?} must not reach the terminal; cell {x} \
+                     holds {symbol:?}"
+                );
+            }
         }
     }
 
@@ -1297,7 +1530,11 @@ mod tests {
         (0..height)
             .map(|y| {
                 (0..width)
-                    .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .filter_map(|x| {
+                        buffer
+                            .cell((x, y))
+                            .map(|c| crate::link::without_links(c.symbol()))
+                    })
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
