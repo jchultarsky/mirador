@@ -19,6 +19,7 @@ mod glyphs;
 mod grid;
 mod ical;
 mod layout_edit;
+mod link;
 mod migrate;
 mod note;
 mod panel;

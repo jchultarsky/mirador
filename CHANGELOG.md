@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Headlines are hyperlinks.** In a terminal that renders OSC 8 links —
+  iTerm2, WezTerm, kitty, recent GNOME Terminal among them — a news headline
+  is now clickable and opens the story the way the terminal opens any link
+  (usually a modifier plus a click, since mirador holds the mouse). Nothing
+  changes anywhere else: the sequences occupy no cells, so a terminal
+  without support shows exactly the panel it always did, and `o`, `y` and
+  `↵` are untouched. A feed's URL rides *inside* an escape sequence, so only
+  plain `http(s)` URLs made of RFC 3986 characters are linked — anything
+  else (a control byte smuggled through an entity, an off-web scheme) gets
+  no link rather than an escaped one.
+
 ### Changed
 
 - **`quick-xml` 0.41 → 0.42**, which rebuilt its API around `str` instead of

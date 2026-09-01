@@ -126,6 +126,9 @@ theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
 prompt.rs    the one-line question a panel asks for a path, place or zone,
              with an optional list to choose from
+link.rs      OSC 8 hyperlinks punched into rendered cells — one self-contained
+             sequence per glyph, and the strict allowlist a URL must pass to
+             ride inside an escape sequence at all
 zones.rs     world clocks as a data file, plus the city→zone table
 migrate.rs   textual in-place upgrade of configs written by older versions
 layout_edit.rs surgical `[layout]` rewrites, so panel changes reach the config
@@ -1675,11 +1678,48 @@ focus events still do not survive zellij.
 One thing is parked on its merits rather than forgotten. **OSC 8 hyperlinks**
 were the third mechanism in the news-link design; `y` and `[news].open_command`
 shipped and this did not. It would make a link genuinely clickable, which is
-better than either, and it fights ratatui's renderer: cells are written as cells,
-not as escape sequences, and a *wrapped* link has to carry the same target across
-several rows. It wants a prototype before it wants a promise. Note also that
-1.0.0 is out, so anything that changes a config key or a data file now costs a
-major version.
+better than either. The prototype it wanted now exists —
+`examples/osc8_probe.rs`, verified byte-for-byte under tmux by capturing the
+pane's raw stream with `pipe-pane` (method in the example's docs). What it
+established:
+
+- The "fights ratatui's renderer" objection this paragraph used to make is
+  dated: ratatui 0.30 grew the exact hook the feature needs.
+  `CellDiffOption::ForcedWidth` lets a cell's symbol carry zero-width escape
+  sequences around its glyph while declaring its real width, and the
+  crossterm backend prints symbols verbatim. No fork, no upstream work.
+- **Every linked cell must be self-contained** — open sequence, glyph, close
+  sequence, all sharing an `id=` parameter so the terminal reads the run as
+  one link. The obvious alternative, open on the first cell and close on the
+  last, is unsound against the diff, and the probe demonstrates it on the
+  wire (its case F): OSC 8 is modal, so a partial re-emission either strips
+  linkage from the rewritten cells or leaks the open state onto everything
+  printed after them. The shared id is also the whole wrapped-link answer —
+  one call per row, same id, one logical link across rows.
+- The diff stays minimal: over a 30-frame run with a ticker forcing a diff
+  every frame, a static link's cells hit the wire exactly once, and a label
+  flip re-emitted only its changed cells, each self-contained. Wide glyphs
+  cost one emission per glyph rather than per column, and the columns after
+  them do not drift.
+- tmux 3.4 stores the link per cell and re-emits it (`capture-pane -e` shows
+  it back), so links survive the multiplexer mirador expects to live inside.
+
+The product work that remained after the probe is done: `link.rs` carries the
+per-glyph `linkify` — walking by each glyph's measured width, which is the
+only way to skip the covered cell behind a wide character, since the buffer
+resets it to something indistinguishable from a real space — plus the
+allowlist a URL must pass to ride inside an escape sequence at all. A feed
+link with a control byte smuggled through an `&#27;` entity, or any scheme
+but `http(s)`, gets no link rather than an escaped one: there is no encoding
+a terminal is guaranteed to undo, and a headline without a link loses nothing
+but the shortcut. The news panel punches links in *after* the `List` draws,
+so the link wraps whatever actually reached the screen, shifted by the
+two-cell highlight gutter once a selection exists. No config key and no data
+file changed, so no major version is implied.
+
+What is left is the one thing a headless rig cannot prove: a real click in a
+hyperlink-capable terminal. `cargo run` in iTerm2 or WezTerm and
+modifier-click a headline; when that lands, this entry closes.
 
 When something goes back on this list, put the *reason* beside it. Every entry
 that was ever useful here said why it mattered; the one that got quietly dropped

@@ -579,6 +579,13 @@ panel holds the newest from *each* feed. Sorting by date alone hands the whole
 window to whichever outlet publishes most often, which is fresh but is not a
 window on the world.
 
+The headline itself is a hyperlink in terminals that render OSC 8 — iTerm2,
+WezTerm, kitty, recent GNOME Terminal among them — so clicking it the way your
+terminal opens links (usually a modifier plus a click, since mirador holds the
+mouse) goes straight to the story. No key, no configuration, and no cost
+anywhere else: where the terminal does not support it the link is invisible
+bytes and the panel reads identically. The three keys below work everywhere.
+
 `o` shows the selected story's link, in brass beneath a `↳`, wrapped whole so
 you can read all of it.
 
