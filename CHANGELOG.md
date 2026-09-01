@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-09-01
+
 ### Added
 
 - **Headlines are hyperlinks.** In a terminal that renders OSC 8 links —
@@ -1727,7 +1729,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/jchultarsky/mirador/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/jchultarsky/mirador/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/jchultarsky/mirador/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/jchultarsky/mirador/compare/v1.6.0...v1.6.1
