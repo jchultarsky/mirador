@@ -1778,14 +1778,18 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.8.0` is released**, on crates.io and as a GitHub release with binaries
-  for macOS arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows
-  x86-64. It brings the bundled themes to sixteen (the light-first batch,
-  owner-approved on rendered captures) and puts NetBSD in the README's badge;
-  1.7.0 wired the gain/loss ramps and the doc catch-up, 1.6.1 fixed the
-  address-family fallback confirmed on NetBSD (#205, now pkgsrc
-  `sysutils/mirador`), and 1.6.0 shipped the external panel protocol, so v1
-  of that protocol is a compatibility promise. The aarch64 Linux
+- **`1.9.0` is released**, as a GitHub release with binaries for macOS
+  arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64 —
+  the crates.io publish is the manual step and had not yet been run when
+  this line was written; strike this clause when it has. It makes news
+  headlines OSC 8 hyperlinks (#222), the feature 1.8.0's notes still
+  called parked; 1.8.0 brought the bundled themes to sixteen (the
+  light-first batch, owner-approved on rendered captures) and put NetBSD
+  in the README's badge, 1.7.0 wired the gain/loss ramps and the doc
+  catch-up, 1.6.1 fixed the address-family fallback confirmed on NetBSD
+  (#205, now pkgsrc `sysutils/mirador`), and 1.6.0 shipped the external
+  panel protocol, so v1 of that protocol is a compatibility promise. The
+  aarch64 Linux
   archive first shipped in 1.5.1 and was executed the same day by its
   contributor — "it starts and draws" on Fedora 44 Asahi
   ([#197](https://github.com/jchultarsky/mirador/pull/197)) — so every
