@@ -1675,10 +1675,13 @@ that did not reproduce. iTerm2 was checked on 2026-07-31 and matches. What
 remains is breadth rather than doubt: no non-Apple terminal has been tried, and
 focus events still do not survive zellij.
 
-One thing is parked on its merits rather than forgotten. **OSC 8 hyperlinks**
-were the third mechanism in the news-link design; `y` and `[news].open_command`
-shipped and this did not. It would make a link genuinely clickable, which is
-better than either. The prototype it wanted now exists —
+Nothing is parked any more. **OSC 8 hyperlinks** were the last entry, closed
+2026-09-01. They were the third mechanism in the news-link design; `y` and
+`[news].open_command` shipped first and this sat parked as "fights ratatui's
+renderer" — then the probe overturned that objection, the feature shipped in
+1.9.0 (#222), and the owner closed the loop with a real click. The reasoning
+is kept because it is what got a parked entry unparked. The prototype it
+wanted exists —
 `examples/osc8_probe.rs`, verified byte-for-byte under tmux by capturing the
 pane's raw stream with `pipe-pane` (method in the example's docs). What it
 established:
@@ -1717,9 +1720,12 @@ so the link wraps whatever actually reached the screen, shifted by the
 two-cell highlight gutter once a selection exists. No config key and no data
 file changed, so no major version is implied.
 
-What is left is the one thing a headless rig cannot prove: a real click in a
-hyperlink-capable terminal. `cargo run` in iTerm2 or WezTerm and
-modifier-click a headline; when that lands, this entry closes.
+The last step was the one thing a headless rig cannot prove: a real click in
+a hyperlink-capable terminal. It landed 2026-09-01 — a 1.9.0 release build on
+the owner's MacBook, Cmd-click on a headline in iTerm2, story opened in the
+browser. macOS Terminal.app does not support OSC 8, which is why the click
+had to wait for iTerm2; Enter through `[news].open_command` is the path that
+works everywhere. Nothing about this feature remains open.
 
 When something goes back on this list, put the *reason* beside it. Every entry
 that was ever useful here said why it mattered; the one that got quietly dropped
