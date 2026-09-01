@@ -1,10 +1,11 @@
 name: Cut release
 
 # The tag-push half of cutting a release, behind workflow_dispatch so it can
-# be run through the API — the 1.9.0 release sat merged on main for hours with
-# no tag, because the only place a tag could be pushed from was the owner's
-# machine. This tags the head of main with the version Cargo.toml carries;
-# the tag push is what starts release.yml, exactly as a manual push would.
+# be run through the API — the session that cut 1.9.0 merged the bump and
+# could not tag it, because the only place a tag could be pushed from was the
+# owner's machine. This tags the head of main with the version Cargo.toml
+# carries; the tag push is what starts release.yml, exactly as a manual push
+# would.
 #
 # The push authenticates with RELEASE_TAG_TOKEN, a fine-grained PAT with
 # contents read/write on this repository, not the workflow's own GITHUB_TOKEN.

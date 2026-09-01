@@ -1780,11 +1780,12 @@ and had to be added back was the one that did not.
   too — see the platform note below.
 - **`1.9.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io — though the tag went up hours after the
-  merge, because it could only be pushed from the owner's machine and
-  the session that cut the release was not on it; this line spent those
-  hours claiming a release that did not exist, which is what the
-  workflows below now prevent. It makes news
+  and published on crates.io — though the session that cut it could not
+  finish the job: a tag could only be pushed from the owner's machine,
+  so this line landed on `main` claiming a release that did not yet
+  exist. The gap was under seven minutes, because the owner happened to
+  be at that machine — the workflows below remove the happened-to, not
+  the seven minutes. It makes news
   headlines OSC 8 hyperlinks (#222), the feature 1.8.0's notes still
   called parked; 1.8.0 brought the bundled themes to sixteen (the
   light-first batch, owner-approved on rendered captures) and put NetBSD
@@ -1812,10 +1813,13 @@ and had to be added back was the one that did not.
   tag.
 
   **Both steps are now workflows, so neither needs the owner's machine.**
-  They exist because 1.9.0 proved the failure mode: the bump merged, the
-  session that merged it could not push a tag (a remote session's git
-  credentials are scoped to its own work branch), and the release sat
-  half-cut until the owner got back to a laptop. Now:
+  They exist because 1.9.0 proved the failure mode: the bump merged, and
+  the session that merged it could push neither the tag nor the crate — a
+  remote session's git credentials are scoped to its own work branch, and
+  it holds no crates.io token. The release stalled half-cut; it was over
+  in minutes only because the owner was at a laptop and finished both
+  steps by hand, and nothing about the failure caps the stall at that.
+  Now:
 
   - `.github/workflows/cut-release.yml` (dispatch on `main`) tags the head
     of `main` with the version Cargo.toml carries and pushes the tag, which
