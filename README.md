@@ -363,7 +363,7 @@ notes, filtering and full editing without leaving the dashboard.
 
 ```
 ╭┤4 Tasks├───────────────────────────────────────────────────────────┤3 open├╮
-│ 1 overdue   1 due today   3 open   by smart                                │
+│ 1 overdue   1 due today   by smart                                         │
 │   DONE PRI TASK                              TAGS                      DUE │
 │   [ ]  ▮▮▮ Renew the domain                  #admin            2 days late │
 │   [ ]  ▮▮  Reply to the design review        #work                   today │
