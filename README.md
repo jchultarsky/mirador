@@ -564,7 +564,7 @@ Headlines from RSS feeds you choose.
 │ ARS TECHNICA · 45m old                               │
 │ 5th Circuit blocks Texas law requiring websites to   │
 │ filter "harmful" speech                              │
-╰──── o show link · y copy · ↵ open · r refresh ────────╯
+╰───── o show link · y copy · ↵ open · r refresh ──────╯
 ```
 
 **A window, not a feed.** It shows however many stories fit and no more. There
