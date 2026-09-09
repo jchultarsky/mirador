@@ -36,6 +36,14 @@ fn notes() -> String {
         .replace("\r\n", "\n")
 }
 
+/// The README, with line endings normalised for the same reason as `notes`.
+fn readme() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 /// Every `.rs` file under `src/`, concatenated.
 fn sources() -> String {
     fn walk(dir: &Path, into: &mut String) {
@@ -362,6 +370,77 @@ mod tests {
              a module missing from it is a module they will not know exists — \
              which is exactly how three of them went unlisted at once.",
             missing.len()
+        );
+    }
+
+    /// The README draws eight panels in fenced code blocks, and a box whose
+    /// sides do not line up reads as a rendering fault in the program rather
+    /// than a typo in the documentation — it is the first thing a reader sees
+    /// of what mirador looks like.
+    ///
+    /// One had been wrong since #138: the news panel's footer gained
+    /// `o show link` and its trailing rule was padded one cell too far, so the
+    /// bottom-right corner sat a column outside the box on the project's front
+    /// page for weeks. Nobody re-reads a drawing they have already approved,
+    /// which is exactly the kind of claim worth pinning mechanically.
+    ///
+    /// Measured in display cells rather than `chars()`, the same rule the
+    /// program itself draws by — see invariant 9.
+    #[test]
+    fn every_panel_drawing_in_the_readme_is_a_rectangle() {
+        let text = readme();
+        let mut inside = false;
+        let mut block: Vec<&str> = Vec::new();
+        let mut start = 0usize;
+        let mut checked = 0usize;
+        let mut faults: Vec<String> = Vec::new();
+
+        for (number, line) in text.lines().enumerate() {
+            if line.starts_with("```") {
+                if inside {
+                    let art: Vec<&str> = block
+                        .iter()
+                        .copied()
+                        .filter(|l| !l.trim().is_empty() && l.chars().any(|c| "╭╰│┤├".contains(c)))
+                        .collect();
+                    // Two lines cannot disagree about a rectangle in any way
+                    // worth reporting; a real panel drawing has a top, a
+                    // bottom and something between them.
+                    if art.len() > 2 {
+                        checked += 1;
+                        let mut widths: Vec<usize> =
+                            art.iter().map(|l| crate::grid::display_width(l)).collect();
+                        widths.sort_unstable();
+                        widths.dedup();
+                        if widths.len() > 1 {
+                            faults.push(format!(
+                                "the block at README.md:{start} has lines of {widths:?} cells:\n{}",
+                                art.iter()
+                                    .map(|l| format!("  {:>3}  {l}", crate::grid::display_width(l)))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            ));
+                        }
+                    }
+                    inside = false;
+                    block.clear();
+                } else {
+                    inside = true;
+                    start = number + 2;
+                }
+            } else if inside {
+                block.push(line);
+            }
+        }
+
+        assert!(faults.is_empty(), "{}", faults.join("\n\n"));
+        // A filter that stops selecting anything passes for the wrong reason,
+        // which is the failure this whole module exists to prevent.
+        assert!(
+            checked >= 6,
+            "only {checked} panel drawing(s) found in README.md — the filter \
+             has probably stopped matching, and a check that inspects nothing \
+             passes every time"
         );
     }
 
