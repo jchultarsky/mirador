@@ -1872,13 +1872,15 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.10.0` is released**, as a GitHub release with binaries for macOS
+- **`1.10.1` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is the screen-tightening pass recorded
-  above — the silently-cut clock date being the one defect in it — and
-  the first release cut through `cut-release.yml` rather than from the
-  owner's machine, which is the step those workflows had never actually
-  performed. 1.9.0 made news
+  and published on crates.io. It carries one change — the notes panel
+  stopping repeating the count its border already shows, which is the
+  screen-tightening pass finding a panel it had missed. 1.10.0, hours
+  earlier, was that pass itself — the silently-cut clock date being the
+  one defect in it — and the first release cut through `cut-release.yml`
+  rather than from the owner's machine, which is the step those workflows
+  had never actually performed. 1.9.0 made news
   headlines OSC 8 hyperlinks (#222), the feature 1.8.0's notes still
   called parked, and could not finish the job from the session that cut
   it: a tag could only be pushed from the owner's machine, so its line
