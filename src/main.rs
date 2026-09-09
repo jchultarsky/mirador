@@ -85,7 +85,7 @@ KEYS:
     w                      Choose which panels are shown
     m                      Rearrange the panels
     t                      Choose a theme
-    Ctrl+arrows            Resize the focused panel
+    Ctrl+←→↑↓              Resize the focused panel
     ?                      Show all key bindings, and the version
     q / Ctrl+C             Quit
 

@@ -23,6 +23,19 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::state::UiState;
 use crate::theme::Gradients;
 
+/// The gap between two hints on the status bar and the arrange legend.
+///
+/// Three spaces once, which is what a hint list wants when it is not competing
+/// for the row — but this row is the one place on the dashboard where width is
+/// always short, and six of them were being spent to separate seven hints. Two
+/// is still twice the single space inside a hint, so `q quit` still reads as
+/// one thing rather than two.
+///
+/// Named rather than repeated, because the test that proves the bar never
+/// draws half a hint rebuilds the bar from this same table and would otherwise
+/// hold its own private copy of the gap.
+const HINT_GAP: &str = "  ";
+
 /// Global bindings, used for both the status bar and the help overlay.
 const GLOBAL: &[Binding] = &[
     Binding::primary("Tab", "focus"),
@@ -48,7 +61,20 @@ const GLOBAL: &[Binding] = &[
     // status bar and needs 120 columns before either appears, where the
     // collapsed form fits from 92. Which arrow does which axis is the one
     // thing nobody has to be told.
-    Binding::primary("Ctrl+arrows", "resize"),
+    //
+    // Drawn rather than spelled, because the arrange legend already draws
+    // `←→↑↓ move` two hints away and the pair now reads as one idea: the same
+    // arrows, plain to move and with Ctrl to resize. The word `arrows` was the
+    // only spelled-out arrow left in a program that draws them everywhere
+    // else. Two cells narrower as well, so the full bar fits from 90 rather
+    // than 92 — the smaller half of the reason.
+    //
+    // These four are East Asian Ambiguous: `unicode-width` calls them one cell
+    // and a terminal configured for wide ambiguous draws them as two, which is
+    // invariant 10's trap seen from the other side. The legend has shipped
+    // them since #100 with nothing reported, and the bar drops hints whole, so
+    // the worst such a terminal costs is a hint dropped one column early.
+    Binding::primary("Ctrl+←→↑↓", "resize"),
     Binding::extra("Shift+Tab", "focus back"),
     Binding::extra("1-9", "jump to panel"),
     Binding::extra("Ctrl+C", "quit"),
@@ -918,7 +944,7 @@ impl App {
         // the shifted key moves the thing it sits in. Claimed before the plain
         // arrows below, or `Shift+Down` would fall through and merge the panel.
         //
-        // Not `Ctrl+arrows`, which #100 proposed: those already resize inside
+        // Not `Ctrl+←→↑↓`, which #100 proposed: those already resize inside
         // this mode, advertised in the legend and pinned by
         // `ctrl_arrows_still_resize_inside_arrange_mode`.
         let shifted = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -1609,7 +1635,7 @@ impl App {
                 ("Enter", "keep"),
                 ("Esc", "cancel"),
                 ("Shift+↑↓", "move row"),
-                ("Ctrl+arrows", "resize"),
+                ("Ctrl+←→↑↓", "resize"),
                 ("↑↓ at edge", "new row"),
             ] {
                 // Dropped whole rather than clipped: half a hint reads as a
@@ -1617,7 +1643,7 @@ impl App {
                 // terminal. The gap leads the hint it introduces, so a dropped
                 // hint takes its gap with it.
                 parts.push(vec![
-                    Span::styled("   ", muted),
+                    Span::styled(HINT_GAP, muted),
                     Span::styled(key, key_style),
                     Span::styled(format!(" {action}"), muted),
                 ]);
@@ -1645,7 +1671,7 @@ impl App {
         let mut parts = vec![spans];
         for binding in GLOBAL.iter().filter(|b| b.primary) {
             parts.push(vec![
-                Span::styled("   ", muted),
+                Span::styled(HINT_GAP, muted),
                 Span::styled(binding.key.clone(), key_style),
                 Span::styled(format!(" {}", binding.action), muted),
             ]);
@@ -1757,9 +1783,16 @@ impl App {
         Some(format!("mirador {latest} is out   mirador --update "))
     }
 
-    fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        let theme = self.config.theme.clone();
-        let theme = &theme;
+    /// The overlay's text: the global keys, then the focused panel's own.
+    ///
+    /// Split out from `render_help` because that function reached clippy's
+    /// hundred-line limit — the same wall `run()` hit when #177 and #182 landed
+    /// together. The seam is a real one either way: this half decides what the
+    /// overlay *says*, the other half where it sits.
+    fn help_lines(
+        panel: Option<(&str, &[Binding])>,
+        theme: &crate::theme::Theme,
+    ) -> Vec<Line<'static>> {
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
 
@@ -1771,11 +1804,26 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             ))
         };
+
+        let panel_keys: &[Binding] = panel.map_or(&[], |(_, keys)| keys);
+        // Sized to the widest key on show rather than to a constant. The
+        // constant was 12, the width of the longest key the program has, so
+        // `q` was followed by eleven spaces in every overlay ever drawn and the
+        // actions began a third of the way across a 46-cell popup. Still capped
+        // at 12: a plugin names its own keys, and one long enough to push the
+        // actions off the edge would be a plugin deciding how this dialog is
+        // laid out.
+        let key_column = GLOBAL
+            .iter()
+            .chain(panel_keys)
+            .map(|binding| crate::grid::display_width(&binding.key).min(12))
+            .max()
+            .unwrap_or(1);
         let entry = |binding: &Binding| {
-            let key = crate::grid::truncate(&binding.key, 12);
-            let padding = " ".repeat(12usize.saturating_sub(crate::grid::display_width(&key)));
+            let key = crate::grid::truncate(&binding.key, key_column);
+            let padding = " ".repeat(key_column.saturating_sub(crate::grid::display_width(&key)));
             Line::from(vec![
-                Span::styled(format!("  {key}{padding}"), key_style),
+                Span::styled(format!("  {key}{padding}  "), key_style),
                 Span::styled(binding.action.to_string(), muted),
             ])
         };
@@ -1785,14 +1833,26 @@ impl App {
 
         // Bindings are grouped by the panel they belong to, so it is always
         // clear which panel a key acts on.
-        if let Some(slot) = self.slots.get(self.focus) {
-            let panel_keys = slot.panel.bindings();
-            if !panel_keys.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(section(&slot.panel.title()));
-                lines.extend(panel_keys.iter().map(entry));
-            }
+        if let Some((title, keys)) = panel.filter(|(_, keys)| !keys.is_empty()) {
+            lines.push(Line::from(""));
+            lines.push(section(title));
+            lines.extend(keys.iter().map(entry));
         }
+        lines
+    }
+
+    fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        let theme = self.config.theme.clone();
+        let theme = &theme;
+
+        let panel_title = self.slots.get(self.focus).map(|slot| slot.panel.title());
+        let lines = Self::help_lines(
+            self.slots
+                .get(self.focus)
+                .zip(panel_title.as_deref())
+                .map(|(slot, title)| (title, slot.panel.bindings())),
+            theme,
+        );
 
         // The footer is rendered separately and pinned to the last row, rather
         // than being the last line of the scrolling text. A hint saying how to
@@ -2117,14 +2177,14 @@ mod tests {
         let mut app = App::new(resizable()).expect("builds");
         let bar = status_bar_at(&mut app, 120);
         assert!(
-            bar.contains("Ctrl+arrows resize"),
+            bar.contains("Ctrl+←→↑↓ resize"),
             "resize must be advertised where someone looking for it will look: {bar}"
         );
     }
 
     /// The bar is built from one table, so a hint cannot be worded differently
     /// in two places — but it *can* be worded differently from the legend and
-    /// `--help`, which are separate strings. All three say `Ctrl+arrows`.
+    /// `--help`, which are separate strings. All three say `Ctrl+←→↑↓`.
     #[test]
     fn the_resize_hint_is_worded_the_way_arrange_mode_words_it() {
         let mut app = App::new(resizable()).expect("builds");
@@ -2132,7 +2192,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('m')));
         let legend = status_bar_at(&mut app, 120);
         assert!(
-            plain.contains("Ctrl+arrows resize") && legend.contains("Ctrl+arrows resize"),
+            plain.contains("Ctrl+←→↑↓ resize") && legend.contains("Ctrl+←→↑↓ resize"),
             "the same key must read the same in both bars:\n  {plain}\n  {legend}"
         );
     }
@@ -2140,7 +2200,10 @@ mod tests {
     /// Every width must show whole hints or none — never a fragment. This is
     /// the property the arrange legend has always had and this bar did not:
     /// while every primary was one character the shortfall never showed, and
-    /// promoting `Ctrl+arrows` made it show at 80 columns as `Ctrl+←`.
+    /// promoting the resize hint made it show at 80 columns as `Ctrl+←`.
+    /// Now that the hint is itself four arrows, a fragment of it would read as
+    /// a plausible narrower binding, which is the same fault wearing a
+    /// better disguise.
     ///
     /// Asserted by construction rather than by looking for a fragment: the
     /// drawn bar has to be one of the prefixes that end on a hint boundary,
@@ -2153,7 +2216,7 @@ mod tests {
         let mut acc = String::from(" mirador");
         whole.push(acc.clone());
         for binding in GLOBAL.iter().filter(|b| b.primary) {
-            acc.push_str("   ");
+            acc.push_str(HINT_GAP);
             acc.push_str(&binding.key);
             acc.push(' ');
             acc.push_str(&binding.action);
@@ -2618,6 +2681,59 @@ mod tests {
                 "the help overlay still nags about unused widgets: found `{banned}`"
             );
         }
+    }
+
+    /// The key column was a hardcoded 12 — the width of the longest key the
+    /// program has — so every overlay ever drawn put eleven spaces after `q`
+    /// and began its actions a third of the way across a 46-cell popup.
+    ///
+    /// Asserted against the widest key actually on show, not against a number:
+    /// a test that pinned 9 would have to be edited by whoever next renames a
+    /// binding, and would pass just as happily if the column went back to being
+    /// a constant that happened to equal 9.
+    #[test]
+    fn the_help_overlay_sizes_its_key_column_to_the_keys_it_shows() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..40)
+            .map(|y| {
+                (0..120)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+
+        let widest = GLOBAL
+            .iter()
+            .chain(app.slots[app.focus].panel.bindings())
+            .map(|binding| crate::grid::display_width(&binding.key))
+            .max()
+            .expect("there are bindings");
+        assert!(
+            widest < 12,
+            "no key is 12 cells wide any more, so a column of 12 is padding: {widest}"
+        );
+
+        // `q quit` is the shortest key in the overlay and so the one the old
+        // constant punished hardest. Its action must start where every other
+        // action starts.
+        let row = rows
+            .iter()
+            .find(|row| row.contains(" q ") && row.contains("quit"))
+            .expect("the overlay lists `q quit`");
+        let key_at = row.find('q').expect("the key is on the row");
+        let action_at = row.find("quit").expect("the action is on the row");
+        assert_eq!(
+            action_at - key_at,
+            widest + 2,
+            "the action starts one column past the widest key plus its gap: {row:?}"
+        );
     }
 
     #[test]

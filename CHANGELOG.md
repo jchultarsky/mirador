@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-09-09
+
+### Fixed
+
+- **The clock's date was cut without saying so.** On a narrow terminal
+  `WEDNESDAY 09 SEPTEMBER` came out as `WEDNESDAY 09 SEPT` — the line was
+  handed to a paragraph narrower than itself, so the *terminal* did the
+  cutting, and a terminal leaves no mark. It now ends in `…` like every other
+  abridged line on the dashboard, and its width is measured in terminal cells
+  rather than characters, so a `date_format` holding double-width text is
+  placed correctly too.
+
+### Changed
+
+- **The resize keys are drawn rather than spelled: `Ctrl+←→↑↓`.** They are the
+  same four arrows the arrange legend already draws two hints away, so the
+  status bar, the arrange legend, the help overlay and `--help` now show the
+  pair as one idea — plain arrows move a panel, the same arrows with `Ctrl`
+  resize it.
+
+- **The status bar fits in a narrower terminal.** With the drawn arrows and a
+  two-space gap between hints, the whole bar appears from 83 columns where it
+  previously needed 92. Hints still drop whole rather than being cut.
+
+- **The tasks panel no longer prints its open count twice.** The border
+  already carries `4 open`; the summary line now spends its width on what is
+  wrong and how the list is sorted. The count returns to the summary in the
+  one case where the border is saying `unsaved!` instead.
+
+- **The markets panel shows one more symbol.** `via yahoo` has moved into the
+  frame — `┤7 · yahoo├` — instead of holding an interior row open for ever in
+  the panel that has the fewest of them. The row underneath returns whenever
+  there is something to say there, which is where a failing fetch still
+  explains itself.
+
+- **The help overlay's key column is sized to the keys it shows** rather than
+  to a fixed width, so its actions start beside the keys instead of a third of
+  the way across the dialog.
+
+- **A panel too narrow for its own name draws no title** instead of a lone
+  `┤…├`, which spent three cells saying a title had been cut and nothing about
+  which panel it was. A jump key keeps its place: `┤4├` is still an answer.
+
 ### Added
 
 - **Cutting a release no longer needs the owner's machine.** Two dispatchable
@@ -1739,7 +1782,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/jchultarsky/mirador/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/jchultarsky/mirador/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/jchultarsky/mirador/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/jchultarsky/mirador/compare/v1.6.1...v1.7.0

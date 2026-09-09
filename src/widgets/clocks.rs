@@ -467,7 +467,7 @@ impl Panel for ClocksPanel {
                 self.status = Some(self.zones.path().display().to_string());
             }
             // Shift moves the clock rather than the cursor, which is the same
-            // shape as `Ctrl+arrows` resizing a panel rather than moving focus.
+            // shape as `Ctrl+←→↑↓` resizing a panel rather than moving focus.
             // `J`/`K` do it too, because this panel already offers arrows and
             // `j`/`k` as equals for the selection and it would be strange for
             // only one of the pair to gain the modifier.
@@ -618,9 +618,21 @@ impl Panel for ClocksPanel {
 
         // The date sits directly under the numerals in the utility face, so
         // the two read as one object rather than as two separate facts.
+        //
+        // Truncated here rather than left to the rect, and measured in cells
+        // rather than in `chars()`. Both halves were wrong and the pair of them
+        // produced the one silent cut on the dashboard: a `Paragraph` in a rect
+        // narrower than its text is clipped by the terminal, which cannot tell
+        // a value from a fragment, so `WEDNESDAY 09 SEPTEMBER` came out at 80
+        // columns as `WEDNESDAY 09 SEPT` — a complete-looking abbreviated month
+        // that is not what the day is called. Every other cut on the same
+        // screen says `…`; this one did not. `date_format` is the reader's, so
+        // it can hold any text at all, which is why `chars()` was the second
+        // fault rather than a theoretical one.
         if cursor < area.y + area.height && !self.config.date_format.is_empty() {
             let date = glyphs::utility(&local.strftime(&self.config.date_format).to_string());
-            let width = u16::try_from(date.chars().count()).unwrap_or(0);
+            let date = crate::grid::truncate(&date, usize::from(area.width));
+            let width = u16::try_from(crate::grid::display_width(&date)).unwrap_or(0);
             let x = area.x + (area.width.saturating_sub(width)) / 2;
             frame.render_widget(
                 Paragraph::new(Span::styled(
@@ -927,6 +939,123 @@ mod tests {
                 crate::grid::display_width(&widest) <= usize::from(width),
                 "`{widest}` needs {} cells and the column is {width}",
                 crate::grid::display_width(&widest)
+            );
+        }
+    }
+
+    /// The date line was the one thing on the dashboard that was cut without
+    /// saying so. It was handed to a `Paragraph` in a rect narrower than the
+    /// text, so the *terminal* did the cutting, and a terminal cannot tell a
+    /// value from a fragment: `WEDNESDAY 09 SEPTEMBER` arrived at 80 columns as
+    /// `WEDNESDAY 09 SEPT`, which reads as a whole abbreviated month.
+    ///
+    /// Two properties, because the old code got two things wrong. Anything cut
+    /// has to say `…`, and nothing may be drawn wider than the space it was
+    /// given — which the old `chars().count()` could not know, since
+    /// `date_format` is the reader's and may hold any text at all.
+    #[test]
+    fn the_date_line_says_when_it_has_been_cut() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+
+        // Literal text passes through `strftime` untouched, so the whole line
+        // is known without depending on what today happens to be. The second
+        // is double-width throughout: eight cells to six `chars()`, which is
+        // the gap the old measurement fell into.
+        for format in [
+            "MIDWEEK LONG DATE LINE",
+            "\u{6c34}\u{66dc}\u{65e5} \u{4e5d}\u{6708}",
+        ] {
+            let full = crate::glyphs::utility(format);
+            let mut ever_cut = false;
+
+            for width in 4..48u16 {
+                let (mut panel, _guard) = panel_from_named(
+                    "date-cut",
+                    ClocksConfig {
+                        date_format: format.to_string(),
+                        ..ClocksConfig::default()
+                    },
+                );
+                let mut terminal = Terminal::new(TestBackend::new(width, 20)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        panel.render(
+                            frame,
+                            frame.area(),
+                            RenderContext {
+                                theme: &config.theme,
+                                gradients: &gradients,
+                                focused: true,
+                                watch: &crate::watch::WatchLog::default(),
+                            },
+                        );
+                    })
+                    .unwrap();
+                // Read the buffer rather than `TestBackend`'s `Display`, which
+                // wraps every row in quotation marks — two cells that are not
+                // on anybody's screen, and enough to fail a width assertion
+                // that is doing its job.
+                let buffer = terminal.backend().buffer().clone();
+                let rows: Vec<String> = (0..buffer.area.height)
+                    .map(|y| {
+                        // Walk by each glyph's measured width, the way
+                        // `link::linkify` has to: the cell a double-width glyph
+                        // covers holds a space, indistinguishable from a real
+                        // one, so reading every cell turns `水曜` into `水 曜 `
+                        // and inflates the row by a cell per wide glyph.
+                        let mut row = String::new();
+                        let mut x = 0u16;
+                        while x < buffer.area.width {
+                            let Some(cell) = buffer.cell((x, y)) else {
+                                break;
+                            };
+                            let symbol = cell.symbol();
+                            row.push_str(symbol);
+                            x += u16::try_from(crate::grid::display_width(symbol).max(1))
+                                .unwrap_or(1);
+                        }
+                        row
+                    })
+                    .collect();
+
+                // The date row is the one carrying the *first* character of the
+                // format — one character, not two, because a cut short enough
+                // to lose the second is exactly the case being tested and a
+                // two-character head would quietly skip it. The zone rows are
+                // excluded by their colons, and the numerals above are block
+                // glyphs. A width too narrow to hold even the first character
+                // draws no date at all, which is a row not drawn rather than a
+                // row drawn wrong.
+                let head: String = full.chars().take(1).collect();
+                let Some(row) = rows
+                    .iter()
+                    .find(|line| line.contains(&head) && !line.contains(':'))
+                else {
+                    continue;
+                };
+                let drawn = row.trim();
+
+                assert!(
+                    crate::grid::display_width(drawn) <= usize::from(width),
+                    "the date overflowed {width} cells: {drawn:?}"
+                );
+                if drawn == full {
+                    continue;
+                }
+                ever_cut = true;
+                assert!(
+                    drawn.ends_with('\u{2026}'),
+                    "the date was cut at {width} without saying so: {drawn:?}"
+                );
+            }
+
+            assert!(
+                ever_cut,
+                "no width in the sweep actually cut `{full}`, so this proves nothing"
             );
         }
     }

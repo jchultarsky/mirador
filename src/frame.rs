@@ -193,6 +193,14 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
     // flush against each other.
     let title_budget = available.saturating_sub(counter_width + index_width + 3);
     let title = crate::grid::truncate(spec.title, title_budget);
+    // `truncate` at one cell has nothing to spend on the name and returns the
+    // ellipsis alone. `┤…├` is three cells that say a title was cut without
+    // saying anything about which panel this is — the reader learns less than
+    // from a plain border, and pays for it. The jump key beside it is a
+    // different matter and stays: `┤4├` is still an answer to a question
+    // somebody has.
+    let title_is_gone = title == "…";
+    let title = if title_is_gone { String::new() } else { title };
 
     // The jump key rides in the title, so panel switching is discoverable
     // without spending a legend row on it.
@@ -204,7 +212,9 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
                 .fg(if spec.focused { theme.key } else { theme.muted })
                 .add_modifier(Modifier::BOLD),
         ));
-        title_spans.push(Span::styled(" ", border_style));
+        if !title_is_gone {
+            title_spans.push(Span::styled(" ", border_style));
+        }
     }
     title_spans.push(Span::styled(
         title,
@@ -226,8 +236,10 @@ pub fn draw(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, spec: &FrameS
 
     // A panel too narrow for even one character of its name goes without one.
     // An empty `┤├` is not a smaller title, it is a mark on the border that
-    // means nothing.
-    if title_budget > 0 {
+    // means nothing — and neither is a lone `┤…├`, which is why a title cut
+    // down to nothing but its ellipsis leaves the segment to the jump key or
+    // drops it altogether.
+    if title_budget > 0 && !(title_is_gone && spec.index > 9) {
         block = block.title_top(Line::from(title_spans));
     }
 
@@ -305,6 +317,12 @@ mod tests {
 
     /// The top border of a panel, as drawn.
     fn top_border(width: u16, title: &str, counter: Option<&str>) -> String {
+        top_border_indexed(width, title, counter, 9)
+    }
+
+    /// The same, for a panel past the ninth — which has no jump key, so its
+    /// title segment has nothing else in it to fall back on.
+    fn top_border_indexed(width: u16, title: &str, counter: Option<&str>, index: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, 3)).expect("backend");
         terminal
             .draw(|frame| {
@@ -317,7 +335,7 @@ mod tests {
                         counter: counter.map(str::to_string),
                         focused: false,
                         bindings: &[],
-                        index: 9,
+                        index,
                     },
                 );
             })
@@ -343,6 +361,42 @@ mod tests {
                 "every segment opens and closes, at width {width}: {border}"
             );
         }
+    }
+
+    /// `╭┤…├─┤18 cores├╮` is what the CPU panel drew at 80 columns: three cells
+    /// spent saying a title was cut, and nothing at all about which panel this
+    /// is. A bare border says the same for free, and the counter beside it was
+    /// already doing the identifying.
+    ///
+    /// The jump key is the exception and keeps its segment, because `┤4├` still
+    /// answers a question somebody has.
+    #[test]
+    fn a_title_cut_down_to_its_ellipsis_is_not_drawn() {
+        let mut ever_tight = false;
+        for width in 6..40u16 {
+            let unnumbered = top_border_indexed(width, "CPU", Some("18 cores"), 11);
+            assert!(
+                !unnumbered.contains("┤…├"),
+                "a lone ellipsis is not a title, at width {width}: {unnumbered}"
+            );
+
+            let numbered = top_border_indexed(width, "CPU", Some("18 cores"), 4);
+            assert!(
+                !numbered.contains("┤…├"),
+                "nor when there is a jump key beside it, at width {width}: {numbered}"
+            );
+            if numbered.contains("┤4├") {
+                ever_tight = true;
+                assert!(
+                    !numbered.contains('…'),
+                    "the key is kept and the ellipsis dropped, at width {width}: {numbered}"
+                );
+            }
+        }
+        assert!(
+            ever_tight,
+            "no width in the sweep was tight enough to reach the case under test"
+        );
     }
 
     /// The whole border still has to fit, and a title long enough to push the

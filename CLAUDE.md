@@ -929,6 +929,77 @@ thing on screen exactly where the eye was. Attention runs *down* the panel:
 muted tape, body-weight last entry, brass live answer.
 
 
+**The screen-tightening pass of 2026-09-09, and the one real defect in it.**
+A review of what the dashboard spends its cells on, asked for as a cosmetic
+question and answered mostly that way — six changes, of which one was a bug.
+
+- **`Ctrl+arrows` is drawn rather than spelled: `Ctrl+←→↑↓`.** It was the only
+  spelled-out arrow in a program that draws them everywhere, and it sat *in the
+  same legend line* as `←→↑↓ move`, `Shift+↑↓ move row` and `↑↓ at edge new
+  row`. The pair now reads as one idea — the same arrows, plain to move and
+  with Ctrl to resize. Two cells narrower as a side effect. The four glyphs are
+  East Asian Ambiguous, so a terminal set to wide ambiguous draws them as two
+  where `unicode-width` says one; the legend has shipped them since #100 with
+  nothing reported, and hints drop whole, so the worst that costs is a hint
+  dropped one column early. Six literals had to move together — `GLOBAL`, the
+  arrange legend, `--help`, the README four times, the plugin protocol doc —
+  which is the drift the CHANGELOG already records once.
+
+- **The hint gap is two spaces, not three** (`HINT_GAP` in `app.rs`, named so
+  the bar, the legend and the test that rebuilds the bar cannot disagree).
+  With the arrows, the whole status bar now fits from **83 columns where it
+  needed 92**.
+
+- **The clock's date line was cut silently, and that was the defect.** It was
+  handed to a `Paragraph` in a rect narrower than its text, so the *terminal*
+  did the cutting: `WEDNESDAY 09 SEPTEMBER` arrived at 80 columns as
+  `WEDNESDAY 09 SEPT`, a complete-looking abbreviated month. Every other cut on
+  the same screen said `…`. Invariant 19's prose rule and invariant 9 both, in
+  one three-line block — the width was measured with `chars().count()`, and
+  `date_format` is the reader's, so it can hold any text at all.
+  `the_date_line_says_when_it_has_been_cut` sweeps widths against an ASCII and
+  a double-width format, and asserts that some width in the sweep actually cut
+  something, because the first version of it could not have failed.
+
+- **The tasks panel printed its open count twice** — `┤4 open├` in the border
+  and `4 open` in the summary row two lines below. The drop order made it
+  worse: at 80 columns the summary kept the duplicate and dropped the sort
+  mode, which is written down nowhere else. The count comes back only when a
+  failed save takes the border for `unsaved!`.
+  `the_open_count_is_shown_once_and_by_the_border`.
+
+- **A title cut down to nothing but its ellipsis is no longer drawn.** The CPU
+  panel at 80 columns rendered `╭┤…├─┤18 cores├╮`: three cells saying a title
+  was cut and nothing about which panel this is. The jump key keeps its
+  segment, because `┤4├` still answers a question.
+  `a_title_cut_down_to_its_ellipsis_is_not_drawn`. Note this does *not* reverse
+  the counter-before-title budgeting, which is a separate recorded decision.
+
+- **`via yahoo` moved into the frame** (`┤7 · yahoo├`) and the row under the
+  board is now reserved only when it has something to say. It was a constant
+  string holding a row open for ever in the panel with the fewest — at 80
+  columns, one row in three, above a symbol whose price had already been
+  dropped for want of width. The default 120-column dashboard gained a fourth
+  visible symbol. **The consequence is a footprint that changes**: a failing
+  fetch takes its row back from the board, so a panel sitting exactly at
+  `max_height` scrolls its last symbol out of view while the failure shows.
+  That is a departure from the always-paint-the-track rule the graphs follow,
+  taken deliberately — the alternative was a blank row under every healthy
+  watchlist, which is what invariant 15 refuses, and the list scrolls so
+  nothing becomes unreachable. `max_height` dropped from `rows + 2` to
+  `rows + 1` to match. `a_calm_panel_spends_no_row_on_saying_where_its_prices_came_from`.
+
+- **The help overlay's key column is sized to the keys on show**, not to a
+  hardcoded 12 — which was the width of the longest key in the program, so `q`
+  was followed by eleven spaces in every overlay ever drawn. Still capped at
+  12, because a plugin names its own keys.
+  `the_help_overlay_sizes_its_key_column_to_the_keys_it_shows` measures against
+  the widest key actually present rather than against the number 9, which would
+  pass just as happily if the column went back to being a constant.
+  `render_help` hit clippy's hundred-line limit doing this and was split at
+  `App::help_lines` — the same wall `run()` hit when #177 and #182 landed
+  together.
+
 **The layout grid stays two levels** — `rows: Vec<Row{height, panels}>` — rather
 than becoming recursive splits. Nested splits would make `[layout]` unreadable
 and un-hand-editable, and would break the textual-edit approach the whole
@@ -1784,16 +1855,20 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.9.0` is released**, as a GitHub release with binaries for macOS
+- **`1.10.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io — though the session that cut it could not
-  finish the job: a tag could only be pushed from the owner's machine,
-  so this line landed on `main` claiming a release that did not yet
-  exist. The gap was under seven minutes, because the owner happened to
-  be at that machine — the workflows below remove the happened-to, not
-  the seven minutes. It makes news
+  and published on crates.io. It is the screen-tightening pass recorded
+  above — the silently-cut clock date being the one defect in it — and
+  the first release cut through `cut-release.yml` rather than from the
+  owner's machine, which is the step those workflows had never actually
+  performed. 1.9.0 made news
   headlines OSC 8 hyperlinks (#222), the feature 1.8.0's notes still
-  called parked; 1.8.0 brought the bundled themes to sixteen (the
+  called parked, and could not finish the job from the session that cut
+  it: a tag could only be pushed from the owner's machine, so its line
+  landed on `main` claiming a release that did not yet exist. The gap was
+  under seven minutes, because the owner happened to be at that machine —
+  the workflows below remove the happened-to, not the seven minutes.
+  1.8.0 brought the bundled themes to sixteen (the
   light-first batch, owner-approved on rendered captures) and put NetBSD
   in the README's badge, 1.7.0 wired the gain/loss ramps and the doc
   catch-up, 1.6.1 fixed the address-family fallback confirmed on NetBSD
