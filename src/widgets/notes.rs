@@ -675,23 +675,43 @@ impl NotesPanel {
         frame.render_widget(body, rows[2]);
     }
 
-    /// The count line above the split, plus the active search if there is one.
-    fn summary_line(&self, theme: &Theme) -> Line<'static> {
-        let mut spans = vec![Span::styled(
-            match self.store.notes().len() {
-                0 => "no notes".to_string(),
-                1 => "1 note".to_string(),
-                n => format!("{n} notes"),
-            },
-            Style::default().fg(theme.muted),
-        )];
-        if !self.filter.is_empty() {
+    /// The active search, and the count when the border is not already showing
+    /// it — or `None` when neither has anything to say.
+    ///
+    /// The count used to be here unconditionally, which printed the same fact
+    /// twice: `┤1├` in the border and `1 note` on the first interior row, two
+    /// rows apart. Same shape as the tasks summary, found the same way and
+    /// fixed the same way — the border keeps it, and the row comes back for
+    /// the two cases where the border stops carrying it.
+    ///
+    /// Those two are worth naming, because they are the moments the line is
+    /// most useful. An empty panel has no counter at all, and `no notes` is
+    /// then the only thing telling the reader the panel is working rather than
+    /// broken; and a failed save takes the counter for `unsaved!`, which is
+    /// the worst possible moment to also stop saying how much is at stake.
+    fn summary_line(&self, theme: &Theme) -> Option<Line<'static>> {
+        let total = self.store.notes().len();
+        let mut spans = Vec::new();
+        if total == 0 || self.store.last_error.is_some() {
             spans.push(Span::styled(
-                format!("   search: {}", self.filter),
+                match total {
+                    0 => "no notes".to_string(),
+                    1 => "1 note".to_string(),
+                    n => format!("{n} notes"),
+                },
+                Style::default().fg(theme.muted),
+            ));
+        }
+        if !self.filter.is_empty() {
+            // The gap belongs to the item it introduces, so it is spent only
+            // when there is something in front of it to be separated from.
+            let gap = if spans.is_empty() { "" } else { "   " };
+            spans.push(Span::styled(
+                format!("{gap}search: {}", self.filter),
                 Style::default().fg(theme.label),
             ));
         }
-        Line::from(spans)
+        (!spans.is_empty()).then(|| Line::from(spans))
     }
 
     /// The bottom line: a delete confirmation, the search prompt, or the last
@@ -1027,14 +1047,22 @@ impl Panel for NotesPanel {
             return;
         }
 
+        // Computed before the split: whether the row exists is decided by
+        // whether it has anything to say, and on a calm unfiltered panel it
+        // does not — so the list and the note it is pointing at get the row.
+        // The footprint therefore changes when a search opens or a save fails,
+        // which are both moments the panel has visibly changed anyway.
+        let summary = self.summary_line(theme);
         let rows = Layout::vertical([
-            Constraint::Length(1), // summary
-            Constraint::Min(1),    // master + detail
-            Constraint::Length(1), // status
+            Constraint::Length(u16::from(summary.is_some())), // summary
+            Constraint::Min(1),                               // master + detail
+            Constraint::Length(1),                            // status
         ])
         .split(area);
 
-        frame.render_widget(Paragraph::new(self.summary_line(theme)), rows[0]);
+        if let Some(summary) = summary {
+            frame.render_widget(Paragraph::new(summary), rows[0]);
+        }
 
         // Master-detail split. Stacked by default: side by side divides a
         // finite width between a list that wants room for titles and a body
@@ -1217,6 +1245,59 @@ mod tests {
             }
         }
         p.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    }
+
+    /// `┤1├` in the border and `1 note` two rows below it is the same fact
+    /// twice, and it was costing a row in a panel whose whole job is showing a
+    /// list and the note it points at. Same finding as the tasks summary, one
+    /// panel over — spotted only because the README's drawing of this panel
+    /// was screenshotted beside the drawing of that one.
+    ///
+    /// Three states, because the row has to come back for two of them: an
+    /// empty panel, where there is no counter at all and `no notes` is the
+    /// only thing saying the panel works; a failed save, where the counter is
+    /// spent on `unsaved!`; and a search, which is a fact the border does not
+    /// carry in words.
+    #[test]
+    fn the_note_count_is_shown_once_and_by_the_border() {
+        let (mut p, _g) = panel("count-once");
+        let theme = Theme::default();
+        let text = |p: &NotesPanel| -> Option<String> {
+            p.summary_line(&theme)
+                .map(|line| line.spans.iter().map(|s| s.content.to_string()).collect())
+        };
+
+        // Empty: no counter in the border, so the line is what says so.
+        assert_eq!(p.counter(), None, "an empty panel has no counter");
+        assert_eq!(text(&p).as_deref(), Some("no notes"));
+
+        add_note(&mut p, "Release checklist", "Bump the version");
+        assert_eq!(
+            p.counter().as_deref(),
+            Some("1"),
+            "the border carries the count"
+        );
+        assert_eq!(
+            text(&p),
+            None,
+            "so the summary row is not drawn at all: {:?}",
+            text(&p)
+        );
+
+        // A search is not something the border says in words.
+        p.filter = "release".to_string();
+        let searching = text(&p).expect("a search shows");
+        assert!(searching.starts_with("search: "), "got {searching:?}");
+        assert!(
+            !searching.contains("1 note"),
+            "and still does not repeat the count: {searching:?}"
+        );
+        p.filter.clear();
+
+        // A failed save takes the counter, so the count comes back.
+        p.store.last_error = Some("read-only file system".to_string());
+        assert_eq!(p.counter().as_deref(), Some("unsaved!"));
+        assert_eq!(text(&p).as_deref(), Some("1 note"));
     }
 
     #[test]

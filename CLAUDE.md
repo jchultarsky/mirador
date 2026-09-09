@@ -989,6 +989,23 @@ question and answered mostly that way — six changes, of which one was a bug.
   nothing becomes unreachable. `max_height` dropped from `rows + 2` to
   `rows + 1` to match. `a_calm_panel_spends_no_row_on_saying_where_its_prices_came_from`.
 
+- **The notes panel had the same duplication and was fixed the day after**,
+  which is the part worth keeping: the review that found it in `todo` looked
+  at `todo` and stopped. What caught the second one was screenshotting the
+  *rendered README* and seeing the two drawings near each other — `┤4 open├`
+  over `4 open` in one and `┤1├` over `1 note` in the next. Its row is now
+  reserved only for an active search or the two cases where the border stops
+  carrying the count (an empty panel, and a failed save taking the counter for
+  `unsaved!`), so a calm panel gives the row to the list and the note it points
+  at. Same footprint trade as the markets row, taken for the same reason.
+  `the_note_count_is_shown_once_and_by_the_border`.
+
+  The general lesson is about the docs rather than the code: **a static drawing
+  in the README cannot be caught by any test that reads the program**, and the
+  width guard added with it only checks that a box is a rectangle, not what the
+  box says. After changing what a panel draws, grep the README samples for it.
+  Two of them were stale within an hour of 1.10.0 — the tasks summary and this.
+
 - **The help overlay's key column is sized to the keys on show**, not to a
   hardcoded 12 — which was the width of the longest key in the program, so `q`
   was followed by eleven spaces in every overlay ever drawn. Still capped at
