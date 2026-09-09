@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The notes panel no longer prints its count twice.** The border already
+  carries it, so the row above the list is spent on an active search or
+  nothing at all — and when it is nothing, the list and the note it is
+  pointing at get the row. The count returns for the two cases where the
+  border stops carrying it: an empty panel, where `no notes` is the only
+  thing saying the panel is working, and a failed save, where the counter is
+  spent on `unsaved!`.
+
 ## [1.10.0] - 2026-09-09
 
 ### Fixed
