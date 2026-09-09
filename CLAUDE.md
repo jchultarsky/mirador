@@ -156,7 +156,8 @@ dateinput.rs due-date entry
 ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 calc.rs      the calculator's parser: precedence, brackets, bounded depth
 docs.rs      the guard on *this file* — cited tests, version, paths, and that
-             every module below is listed
+             every module below is listed — and on the README's panel
+             drawings, which are the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, network, calculator
 ```
@@ -931,7 +932,16 @@ muted tape, body-weight last entry, brass live answer.
 
 **The screen-tightening pass of 2026-09-09, and the one real defect in it.**
 A review of what the dashboard spends its cells on, asked for as a cosmetic
-question and answered mostly that way — six changes, of which one was a bug.
+question and answered mostly that way — seven changes, of which one was a bug.
+
+**The method is the part to reuse: drive the build at 120, 100, 80, 74 and 68
+columns and read the captures.** Every finding below is invisible at the
+default width and obvious under pressure — a title collapsed to `┤…├`, a
+markets panel spending a third of its rows on a constant string above a symbol
+whose price had been dropped, a summary line that kept a duplicate and threw
+away the sort mode. The test suite was looking at none of it, because the
+suite renders at sizes chosen to make assertions pass rather than to make the
+layout hurt.
 
 - **`Ctrl+arrows` is drawn rather than spelled: `Ctrl+←→↑↓`.** It was the only
   spelled-out arrow in a program that draws them everywhere, and it sat *in the
@@ -1851,6 +1861,24 @@ and had to be added back was the one that did not.
     weather and stocks panels spent a fetch cycle showing "loading" afterwards.
     `rebuild_panels` carries panels across now, so neither happens.
 
+- **When you re-record the demo, compare the old and new first frames.** The
+  capture that ran from 2026-08-01 to 2026-09-09 had quietly stopped
+  describing the program in two ways, and *neither was visible without the
+  comparison*: its clock row was short enough to have dropped the block
+  numerals, under an alt text that opens "a block-numeral clock"; and its
+  watchlist showed three symbols where mirador has seeded seven since before
+  1.0. A GIF nobody re-examines drifts from its own caption in silence, and a
+  caption is the one part of it that ships frozen into each published version.
+
+  Extracting frames to look at is harder than it sounds and the workaround is
+  worth knowing: `sips` converts a GIF but gives you **frame 0 only**, and
+  `agg` writes *diff* frames — 2 full-size out of 102 in the current file — so
+  slicing one out of the middle by hand yields a mostly-transparent image
+  rather than a screen. There is no ImageMagick, ffmpeg or PIL on the owner's
+  Mac. So: check frame 0, check the file's shape (frame count, duration,
+  dimensions, size against the previous), drive the same key sequence
+  separately under tmux for the content, and let the owner judge the motion.
+
 - **The README's images float; its prose does not.** `docs/demo.gif` is
   referenced by absolute `raw.githubusercontent.com/.../main/...` URL, because
   `Cargo.toml` excludes `/docs`, `*.gif` and `*.png`, and a relative path would
@@ -1867,6 +1895,34 @@ and had to be added back was the one that did not.
   six published pages that nobody can edit. It costs nothing to keep — `/docs`
   never reaches the crate — so it stays as an asset the past still needs. The
   same will be true of `demo.gif` the day something replaces it.
+
+- **Verifying that the README *renders* is a different job from reading it, and
+  it has found real defects twice in one day.** Both surfaces matter: GitHub,
+  and crates.io, which stores a README **per published version** — the
+  authoritative copy there is
+  `curl -sL .../api/v1/crates/mirador/<version>/readme`, and **`-L` is
+  load-bearing**, because the endpoint 302s and without it you get zero bytes
+  and every content check passes against nothing.
+
+  The check is to *measure*, not to look: drive a browser to the page and
+  measure every line of each `<pre>` with a canvas in that block's own computed
+  font. A correctly drawn box has exactly **one** distinct pixel width. That is
+  how the news panel's sample was caught — one cell too wide since #138, its
+  bottom-right corner outside the box on the front page for weeks — and it is
+  now pinned by `every_panel_drawing_in_the_readme_is_a_rectangle`. Worth
+  measuring at the same time: images resolve (`naturalWidth`), in-page anchors
+  resolve, and relative links, which crates.io rewrites to `blob/HEAD/...` and
+  GitHub leaves alone. Prove any link check with a deliberately misspelled URL
+  that must 404, or a green result means nothing.
+
+  Three traps, each of which produced a confident wrong answer first. **GitHub
+  prefixes heading ids with `user-content-`**, so a naive anchor check reports
+  *every* internal link as dead — resolve against both forms. **A width-based
+  "is this glyph missing" test is meaningless in a monospace font**, where
+  notdef has the same advance as `M`; rasterise the glyph to a canvas and
+  compare its bitmap against notdef and against a space instead. And a page
+  saying a version was published "about 4 hours ago" is probably right — check
+  `date -u` against `created_at` before calling a timestamp stale.
 
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
@@ -1941,7 +1997,26 @@ and had to be added back was the one that did not.
   Both remain runnable by hand from a machine with the right credentials —
   the workflows add a path, they do not close one.
 
-  **`main` is protected, so "commit" there means *merged*, not committed
+  **Both have now cut real releases — 1.10.0 and 1.10.1, on 2026-09-09.**
+  Until then they had only been smoke-tested against an already-released tag,
+  where both correctly *refused*; a refusal proves the guard, not the path.
+  The tag push and the Trusted Publishing exchange are the two steps only a
+  real release can exercise, and they work. Treat the sequence as routine now:
+  merge the bump PR, dispatch **Cut release** on `main`, wait for
+  `release.yml`, verify the attestation, then dispatch **Publish to crates.io**
+  with the new tag.
+
+  **Waiting for CI before a merge needs care: `gh pr checks` prints "no checks
+  reported" *before* the workflows exist**, which is not the same as "no checks
+  pending". A loop that waits while the output contains `pending` therefore
+  falls straight through on a PR opened seconds earlier, and the merge that
+  follows is refused by branch protection with a bare `(mergePullRequest)`.
+  Wait on the *count* first — `gh pr view <n> --json statusCheckRollup --jq
+  '[.statusCheckRollup[]?] | length'` above zero — and only then on nothing
+  being pending. This is the same shape as every other vacuous check in these
+  notes: an empty set satisfies every condition asked of it.
+
+    **`main` is protected, so "commit" there means *merged*, not committed
   locally.** The version bump reaches `main` through a PR like anything else,
   and the tag belongs on the squashed commit that lands. Tagging the local
   commit first appears to work — the tag pushes, the workflow runs, the
