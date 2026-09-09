@@ -680,10 +680,13 @@ impl TodoPanel {
         Some(badge)
     }
 
-    /// The summary line: how much is open, and how it is sorted.
+    /// The summary line: what is wrong, and how the list is sorted.
     ///
     /// Assembled in priority order and cut at whole items, so a narrow panel
     /// loses the sort mode before the overdue count and never shows `4 op`.
+    ///
+    /// It does *not* carry the open count, which the border already shows two
+    /// rows above — see the note beside the one case that puts it back.
     fn header(&self, theme: &Theme, width: u16) -> Line<'static> {
         let Counts {
             open,
@@ -711,7 +714,17 @@ impl TodoPanel {
                 Style::default().fg(theme.warning),
             ));
         }
-        items.push((format!("{open} open"), Style::default().fg(theme.muted)));
+        // The border already says `N open`, and said it two rows above this
+        // one — so this line was printing the same fact twice, and under a
+        // narrow panel it printed the *duplicate* while dropping the sort mode,
+        // which appears nowhere else. It is kept only for the one case where
+        // the border is saying something more urgent instead: a failed save
+        // replaces the counter with `unsaved!`, and the count would otherwise
+        // vanish from the panel exactly when the reader is being told their
+        // work is not reaching the disk.
+        if self.store.last_error.is_some() {
+            items.push((format!("{open} open"), Style::default().fg(theme.muted)));
+        }
         items.push((
             format!("by {}", self.sort.label()),
             Style::default().fg(theme.muted),
@@ -1307,6 +1320,64 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let panel = TodoPanel::new(TodoConfig::default(), path).unwrap();
         (panel, TempDir(dir))
+    }
+
+    /// The border and this line were both saying `4 open`, and the drop order
+    /// made it worse rather than harmless: at 80 columns the summary kept the
+    /// duplicate and dropped the sort mode, which is written down nowhere else.
+    ///
+    /// The count comes back for the one case where the border stops carrying
+    /// it. A failed save takes the counter for `unsaved!`, and that is the
+    /// worst possible moment for the panel to also stop saying how much is on
+    /// the list.
+    #[test]
+    fn the_open_count_is_shown_once_and_by_the_border() {
+        let dir = std::env::temp_dir().join(format!("mirador-todo-{}-count", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDir(dir.clone());
+        // Seeded rather than empty: the examples are what a first run shows,
+        // and one of them is overdue, so the summary has something to lead with
+        // besides the count under test.
+        let mut panel = TodoPanel::new(TodoConfig::default(), dir.join("todos.toml")).unwrap();
+
+        let theme = Theme::default();
+        let text = |panel: &TodoPanel| -> String {
+            panel
+                .header(&theme, 120)
+                .spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect()
+        };
+
+        let counter = panel.counter().expect("the border carries a counter");
+        assert!(
+            counter.contains("open"),
+            "the border is where the count lives: {counter}"
+        );
+        assert!(
+            !text(&panel).contains("open"),
+            "and so the summary line must not repeat it: {}",
+            text(&panel)
+        );
+        assert!(
+            text(&panel).contains("by "),
+            "the sort mode is what the line keeps instead: {}",
+            text(&panel)
+        );
+
+        panel.store.last_error = Some("read-only file system".to_string());
+        assert_eq!(
+            panel.counter().as_deref(),
+            Some("unsaved!"),
+            "a failed save outranks the count in the border"
+        );
+        assert!(
+            text(&panel).contains("open"),
+            "so the summary line takes it back: {}",
+            text(&panel)
+        );
     }
 
     fn press(panel: &mut TodoPanel, code: KeyCode) {

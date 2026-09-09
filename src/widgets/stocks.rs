@@ -547,31 +547,45 @@ impl StocksPanel {
     /// access is refused in tests` look like the same complete sentence. One
     /// cell of `…` is the whole difference between a message the reader knows
     /// is abridged and one they do not.
-    fn status_line(&self, theme: &Theme, board: &Board, width: u16) -> Line<'static> {
-        let line = self.status_text(theme, board);
-        crate::grid::assemble(vec![line.spans], width)
+    fn status_line(&self, theme: &Theme, board: &Board, width: u16) -> Option<Line<'static>> {
+        let line = self.status_text(theme, board)?;
+        Some(crate::grid::assemble(vec![line.spans], width))
     }
 
-    fn status_text(&self, theme: &Theme, board: &Board) -> Line<'static> {
+    /// What the row under the board has to say, or `None` when it has nothing.
+    ///
+    /// `None` used to be `via yahoo`. The provenance is real and worth showing,
+    /// but it is constant, and it was holding a row open for ever in the one
+    /// panel on the dashboard that never has enough of them — at 80 columns it
+    /// was a third of the interior, above a symbol whose price had been dropped
+    /// for want of width. It rides in the border now, which costs no rows at
+    /// all, and the row it used to hold appears when something needs saying.
+    ///
+    /// The footprint therefore changes when a fetch starts failing. That is a
+    /// departure from the always-paint-the-track rule the graphs follow, and it
+    /// is deliberate: the alternative was a permanently blank row, and the
+    /// moment the row appears is a moment the panel's contents have changed
+    /// anyway.
+    fn status_text(&self, theme: &Theme, board: &Board) -> Option<Line<'static>> {
         match (&self.mode, &self.status) {
-            (Mode::ConfirmRemove { symbol }, _) => Line::from(Span::styled(
+            (Mode::ConfirmRemove { symbol }, _) => Some(Line::from(Span::styled(
                 format!("remove {symbol}?  y / n"),
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
-            )),
-            (Mode::Add(field), _) => Line::from(vec![
+            ))),
+            (Mode::Add(field), _) => Some(Line::from(vec![
                 Span::styled("symbol  ", Style::default().fg(theme.accent)),
                 Span::styled(
                     field.value().to_uppercase(),
                     Style::default().fg(theme.text),
                 ),
                 Span::styled("▏", Style::default().fg(theme.accent)),
-            ]),
-            (_, Some((message, is_error))) => Line::from(Span::styled(
+            ])),
+            (_, Some((message, is_error))) => Some(Line::from(Span::styled(
                 message.clone(),
                 Style::default().fg(if *is_error { theme.error } else { theme.muted }),
-            )),
+            ))),
             _ => {
                 // With nothing else to say, surface the first failure rather
                 // than leaving a row showing `–` with no explanation anywhere.
@@ -586,13 +600,7 @@ impl StocksPanel {
                         None => format!("{symbol}: {why}"),
                     })
                 });
-                match failure {
-                    Some(text) => Line::from(Span::styled(text, Style::default().fg(theme.error))),
-                    None => Line::from(Span::styled(
-                        format!("via {}", self.source_name),
-                        Style::default().fg(theme.muted),
-                    )),
-                }
+                failure.map(|text| Line::from(Span::styled(text, Style::default().fg(theme.error))))
             }
         }
     }
@@ -705,8 +713,12 @@ impl Panel for StocksPanel {
         if self.watchlist.last_error.is_some() {
             return Some("unsaved!".into());
         }
+        // The source rides here rather than in a row of its own: the frame is
+        // the widget bus, and `via yahoo` was spending an interior row on a
+        // string that never changes. Dropped whole if the border cannot hold
+        // it, which is the same rule every other counter follows.
         let n = self.watchlist.symbols().len();
-        (n > 0).then(|| n.to_string())
+        (n > 0).then(|| format!("{n} · {}", self.source_name))
     }
 
     fn tick(&mut self) -> bool {
@@ -727,11 +739,19 @@ impl Panel for StocksPanel {
     }
 
     fn max_height(&self) -> Option<u16> {
-        // Header, a row per symbol, and the status line. A watchlist is a
-        // handful of rows and does not scroll to fill a screen — measured
-        // rather than assumed: the panel is complete at exactly this height,
-        // and every row above it is blank space between the last symbol and
-        // the status line, which is what invariant 15 exists to refuse.
+        // Header and a row per symbol. A watchlist is a handful of rows and
+        // does not scroll to fill a screen — measured rather than assumed: the
+        // panel is complete at exactly this height, and every row above it is
+        // blank space under the last symbol, which is what invariant 15 exists
+        // to refuse.
+        //
+        // No row is reserved for the status line, because there no longer is
+        // one on a calm day. The consequence is deliberate: a fetch that starts
+        // failing takes its row from the board, so a panel sitting exactly at
+        // its cap scrolls its last symbol out of view while the failure is on
+        // screen. Reserving against that would put a blank row under every
+        // healthy watchlist for ever, which is the trade invariant 15 refuses —
+        // and the list scrolls, so nothing becomes unreachable.
         //
         // Saturating because the sum is not, and `u16::MAX` was already being
         // reached for on the line above. Nothing bounds a watchlist — it is a
@@ -740,7 +760,7 @@ impl Panel for StocksPanel {
         // Same shape as `glyphs::width_of` overflowing at ten thousand
         // characters: unreachable in practice, one line to close.
         let rows = u16::try_from(self.watchlist.symbols().len()).unwrap_or(u16::MAX);
-        Some(rows.saturating_add(2).saturating_add(FRAME_HEIGHT))
+        Some(rows.saturating_add(1).saturating_add(FRAME_HEIGHT))
     }
 
     fn bindings(&self) -> &'static [Binding] {
@@ -805,10 +825,14 @@ impl Panel for StocksPanel {
 
         let board = self.snapshot();
 
+        // Computed before the split, because whether the row exists is decided
+        // by whether it has anything to say. On a calm day it does not, and the
+        // board gets the row.
+        let status = self.status_line(theme, &board, area.width);
         let rows = Layout::vertical([
-            Constraint::Length(1), // header
-            Constraint::Min(1),    // board
-            Constraint::Length(1), // status
+            Constraint::Length(1),                           // header
+            Constraint::Min(1),                              // board
+            Constraint::Length(u16::from(status.is_some())), // status
         ])
         .split(area);
 
@@ -820,10 +844,9 @@ impl Panel for StocksPanel {
                 )),
                 rows[1],
             );
-            frame.render_widget(
-                Paragraph::new(self.status_line(theme, &board, rows[2].width)),
-                rows[2],
-            );
+            if let Some(status) = status {
+                frame.render_widget(Paragraph::new(status), rows[2]);
+            }
             return;
         }
 
@@ -872,10 +895,9 @@ impl Panel for StocksPanel {
             });
         frame.render_stateful_widget(list, rows[1], &mut self.list_state);
 
-        frame.render_widget(
-            Paragraph::new(self.status_line(theme, &board, rows[2].width)),
-            rows[2],
-        );
+        if let Some(status) = status {
+            frame.render_widget(Paragraph::new(status), rows[2]);
+        }
     }
 
     fn shutdown(&mut self) {
@@ -1133,11 +1155,11 @@ mod tests {
                     .join("\n")
             };
 
-            // Rows are counted, not matched on text. The status line reads
-            // `via yahoo` only until a fetch reports something — and these
-            // panels really do reach the network, so a Windows runner got far
-            // enough to render `SYM0: no such symbol` and failed an assertion
-            // looking for `via `. Rows are what the cap is about anyway.
+            // Rows are counted, not matched on text. These panels really do
+            // reach the network, so a runner can get far enough to render
+            // `SYM0: no such symbol` in a status row that is otherwise absent —
+            // which is why the counts below are lower bounds on a healthy panel
+            // rather than equalities. Rows are what the cap is about anyway.
             let filled = |text: &str| text.lines().filter(|line| !line.trim().is_empty()).count();
 
             let at_cap = draw(&mut p, interior);
@@ -1150,17 +1172,15 @@ mod tests {
             assert!(at_cap.contains("SYMBOL"), "no header at the cap:\n{at_cap}");
             assert_eq!(
                 filled(&at_cap),
-                n + 2,
-                "the cap should fill header + {n} symbols + status exactly:\n{at_cap}"
+                n + 1,
+                "the cap should fill header + {n} symbols exactly:\n{at_cap}"
             );
 
             // One row short must lose something, or the cap is too generous.
-            // "Something" is not only a symbol: with a single symbol it is the
-            // status line that goes, and a check that looked for a missing
-            // symbol alone called the cap too generous when it was exact.
+            // With no status row to give up first, what goes is a symbol.
             let under = draw(&mut p, interior - 1);
             assert!(
-                filled(&under) < n + 2,
+                filled(&under) < n + 1,
                 "the cap reserves a row the panel does not use at {n} symbols:\n{under}"
             );
         }
@@ -1515,6 +1535,46 @@ mod tests {
         assert_eq!(colour, Some(theme.muted));
     }
 
+    /// `via yahoo` is true, constant, and was holding an interior row open for
+    /// ever in the panel with the fewest of them. At 80 columns it was one row
+    /// in three, above a symbol whose price had already been dropped for want
+    /// of width. It belongs in the frame, which costs no rows at all.
+    ///
+    /// Both directions matter: the row must be gone on a calm day and back the
+    /// moment there is something to say, since that row is also where a failure
+    /// explains itself.
+    #[test]
+    fn a_calm_panel_spends_no_row_on_saying_where_its_prices_came_from() {
+        let (p, _g) = panel("provenance", &["AAPL"]);
+        let theme = Theme::default();
+        let quote = Quote {
+            symbol: "AAPL".into(),
+            price: 213.50,
+            previous_close: 211.00,
+            currency: Some("USD".into()),
+            series: vec![211.0, 213.5],
+            delayed: false,
+        };
+
+        let calm: Board = vec![("AAPL".into(), ready(quote))];
+        assert!(
+            p.status_line(&theme, &calm, 80).is_none(),
+            "a healthy board has nothing to say under it"
+        );
+
+        let counter = p.counter().expect("the border carries the count");
+        assert!(
+            counter.contains(&p.source_name),
+            "and now the source too: {counter}"
+        );
+
+        let failing: Board = vec![("AAPL".into(), failed("HTTP 429"))];
+        assert!(
+            p.status_line(&theme, &failing, 80).is_some(),
+            "a failure takes the row back, which is what it was reserved for"
+        );
+    }
+
     #[test]
     fn a_failure_is_surfaced_in_the_status_line_rather_than_only_as_a_dash() {
         let (p, _g) = panel("failure", &["AAPL"]);
@@ -1523,6 +1583,7 @@ mod tests {
 
         let text: String = p
             .status_line(&theme, &board, 80)
+            .expect("a failure has something to say")
             .spans
             .iter()
             .map(|s| s.content.as_ref())
@@ -1647,6 +1708,7 @@ mod tests {
         // is, and the row is muted rather than coloured by direction.
         let status: String = p
             .status_line(&theme, &snapshot, 80)
+            .expect("a stale price has something to say")
             .spans
             .iter()
             .map(|s| s.content.as_ref())

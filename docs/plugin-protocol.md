@@ -347,7 +347,7 @@ decide whether a global key is safe.
   `Ctrl+x` for its own cancel or interrupt action.
 
 A passive plugin cannot claim or advertise the shell's `q`, `Tab`, `BackTab`,
-`?`, `w`, `m`, `t`, `1` through `9`, `Ctrl+arrows`, or `Ctrl+C` bindings. The
+`?`, `w`, `m`, `t`, `1` through `9`, `Ctrl+←→↑↓`, or `Ctrl+C` bindings. The
 refusal matches on the key itself regardless of modifiers — `Alt+q` and
 `Shift+BackTab` are refused along with the bare chords — while uppercase `Q`
 is a different key and is not reserved. Binding declarations are validated as

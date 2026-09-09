@@ -249,7 +249,7 @@ Some settings you change with a keystroke are remembered across restarts:
 | Agenda file | `f` | Agenda |
 | Which panels are shown | `w` | — |
 | Where the panels are | `m` | — |
-| Panel sizes | `Ctrl+arrows` | — |
+| Panel sizes | `Ctrl+←→↑↓` | — |
 
 They go to three different places, and the split is deliberate.
 
@@ -317,7 +317,7 @@ widget mirador has and which of them your layout places:
 disappears the moment you toggle it, and the change is written to your config
 when you close the dialog — as a one-line edit, with your comments untouched.
 A new panel joins the row carrying the fewest panels; `m` moves it wherever you
-want it afterwards, and `Ctrl+arrows` move the
+want it afterwards, and `Ctrl+←→↑↓` move the
 space around, and that is written too.
 
 The last panel cannot be switched off, because a layout with nothing in it is
@@ -484,7 +484,7 @@ is not. Columns drop as the panel narrows, in the order that costs you least.
 A watchlist with the last price, the day's change, and an intraday sparkline.
 
 ```
-╭┤Markets├────────────────────────────────────────────────────────────────┤7├╮
+╭┤Markets├────────────────────────────────────────────────────────┤7 · yahoo├╮
 │   SYMBOL         LAST       CHG        % TODAY                             │
 │ ▸ ^GSPC       7413.18     +1.20   +0.02% ▇▄▃▃▂▃▂▁▂▂▃▃                      │
 │   ^DJI       52210.08   +262.83   +0.51% ▇▅▃▃▂▂▂▂▂▂▃▄                      │
@@ -493,7 +493,6 @@ A watchlist with the last price, the day's change, and an intraday sparkline.
 │   ^NDX       28039.21    -89.13   -0.32% ▇▄▃▃▂▃▂▂▃▂▄▄                      │
 │   AAPL         336.91     +3.89   +1.17% ▂▄▅▇▅▅▃▃▂▂▂▄                      │
 │   MSFT         389.10     +7.40   +1.94% ▃▄▂▆▃▃▄▅▇▇▆▂                      │
-│ via yahoo                                                                  │
 ╰─────────────────────── a add · d remove · r refresh ───────────────────────╯
 ```
 
@@ -816,7 +815,7 @@ about configuration, `--factory-reset` about everything mirador has written.
 | `w` | Choose which panels are shown |
 | `m` | Rearrange the panels — see below |
 | `t` | Choose a theme, previewing as you move — see below |
-| `Ctrl+arrows` | Resize the focused panel against its neighbour |
+| `Ctrl+←→↑↓` | Resize the focused panel against its neighbour |
 | `q` / `Ctrl+C` | Quit |
 
 ### Rearranging the dashboard
@@ -840,7 +839,7 @@ at the edge stops rather than spawning a row per keypress.
 
 The panels themselves move as you press, so what you see is what you will get.
 `Enter` keeps the arrangement and `Esc` puts everything back exactly as it was.
-`Tab` picks a different panel to move without leaving the mode, and `Ctrl+arrows`
+`Tab` picks a different panel to move without leaving the mode, and `Ctrl+←→↑↓`
 still resize while you are in there.
 
 A panel keeps the width you gave it when it moves, and the row weights always

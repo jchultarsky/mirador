@@ -436,7 +436,7 @@ impl Panel for CalculatorPanel {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        // Ctrl and Alt belong to the shell — Ctrl+arrows resize, Ctrl+C quits.
+        // Ctrl and Alt belong to the shell — Ctrl+←→↑↓ resize, Ctrl+C quits.
         if key.modifiers.contains(KeyModifiers::CONTROL)
             || key.modifiers.contains(KeyModifiers::ALT)
         {
