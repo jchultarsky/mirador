@@ -347,6 +347,38 @@ fn relative_offset(primary: jiff::tz::Offset, other: jiff::tz::Offset) -> String
     }
 }
 
+/// Which face the clock wears at this size: the text drawn in numerals, the
+/// small seconds beside them if any, and the scale — `None` meaning plain text.
+///
+/// The ladder is full numerals, then short numerals with small seconds, then
+/// plain text. The middle rung fits the short form against what is left after
+/// the suffix's cells, not against the whole width; and when that fails the
+/// ladder goes to plain text *with* the seconds rather than to numerals
+/// without them, because `s` is on and a clock that dropped its seconds by
+/// itself reads as the key not having worked.
+fn choose_face(
+    show_seconds: bool,
+    full: &str,
+    short: &str,
+    seconds: &str,
+    width: u16,
+    rows: u16,
+) -> (String, Option<String>, Option<u16>) {
+    let fits =
+        |text: &str, columns: u16| glyphs::fitting_scale(text, columns, rows, MAX_CLOCK_SCALE);
+    if !show_seconds {
+        return (short.to_string(), None, fits(short, width));
+    }
+    if let Some(scale) = fits(full, width) {
+        return (full.to_string(), None, Some(scale));
+    }
+    let suffix_cells = u16::try_from(seconds.chars().count()).unwrap_or(0) + 1;
+    if let Some(scale) = fits(short, width.saturating_sub(suffix_cells)) {
+        return (short.to_string(), Some(seconds.to_string()), Some(scale));
+    }
+    (full.to_string(), None, None)
+}
+
 impl Panel for ClocksPanel {
     fn title(&self) -> String {
         "Clock".to_string()
@@ -547,20 +579,28 @@ impl Panel for ClocksPanel {
         };
         let clock_budget = area.height.saturating_sub(date_rows + zone_rows).max(1);
 
-        // Width and height together: filtering a width-only answer by height
-        // rejects instead of stepping down a scale, and a *shorter* string earns
-        // a bigger one. That is how hiding the seconds used to make the clock
-        // smaller rather than larger.
-        let fits =
-            |text: &str| glyphs::fitting_scale(text, area.width, clock_budget, MAX_CLOCK_SCALE);
-
-        let (time_text, small_seconds) = match (self.show_seconds, fits(&full)) {
-            (true, Some(_)) => (full.clone(), None),
-            (true, None) => (short.clone(), Some(seconds.clone())),
-            (false, _) => (short.clone(), None),
-        };
-
-        let scale = fits(&time_text);
+        // Width and height together, inside `choose_face`: filtering a
+        // width-only answer by height rejects instead of stepping down a scale,
+        // and a *shorter* string earns a bigger one. That is how hiding the
+        // seconds used to make the clock smaller rather than larger.
+        // Small seconds ride beside the numerals and take cells of their own —
+        // a space and two digits — so the short form is fitted against what is
+        // left *after* them. It used to be fitted alone, and the pair was then
+        // centred as a unit: at 40 columns the numerals fitted, the suffix did
+        // not, and the terminal cut `26` down to `2`, a fragment of a value.
+        // Found by the silent-clip sweep in `widgets`, the day it was written.
+        // When even the pair does not fit, the ladder steps straight down to
+        // plain text with the seconds intact rather than to numerals without
+        // them: `s` is on, and a clock that dropped its seconds on its own
+        // would read as the key not having worked (#106, the other way round).
+        let (time_text, small_seconds, scale) = choose_face(
+            self.show_seconds,
+            &full,
+            &short,
+            &seconds,
+            area.width,
+            clock_budget,
+        );
         let mut cursor = area.y;
 
         if let Some(scale) = scale {
@@ -589,21 +629,28 @@ impl Panel for ClocksPanel {
                 // a subscript rather than as another number.
                 let y = area.y + big.height.saturating_sub(1);
                 let sx = x + big.width + 1;
-                if sx < area.x + area.width && y < area.y + area.height {
+                // The fit above guarantees the room; the clamp is what makes a
+                // future mistake there show as missing seconds rather than as
+                // a cut one, which is the failure a reader cannot see.
+                let room = (area.x + area.width).saturating_sub(sx);
+                if room >= suffix.saturating_sub(1) && y < area.y + area.height {
                     frame.render_widget(
                         Paragraph::new(Span::styled(
                             seconds.clone(),
                             Style::default().fg(theme.muted),
                         )),
-                        Rect::new(sx, y, suffix.min(area.width), 1),
+                        Rect::new(sx, y, suffix.saturating_sub(1).min(room), 1),
                     );
                 }
             }
             cursor += big.height;
         } else {
             // Too small for block digits at any scale: fall back to plain text
-            // rather than clipping.
+            // rather than clipping — and truncate the plain text too, since a
+            // rect the width of the panel cuts `15:54:33` to `15:54:3` at seven
+            // columns, which is a different time.
             let text = if self.show_seconds { full } else { short };
+            let text = crate::grid::truncate(&text, usize::from(area.width));
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     text,
@@ -1058,6 +1105,104 @@ mod tests {
                 "no width in the sweep actually cut `{full}`, so this proves nothing"
             );
         }
+    }
+
+    /// The small seconds beside the numerals are a value: `26`, not `2`. At
+    /// 40 columns the numerals fitted and the suffix did not, and the terminal
+    /// cut it — the fit was measured without the three cells the seconds take.
+    ///
+    /// Swept across widths and heights rather than pinned at 40, because 40 is
+    /// only where it was noticed. Whatever follows the last block glyph on the
+    /// numerals' baseline row is either nothing or both digits.
+    #[test]
+    fn the_small_seconds_are_drawn_whole_or_not_at_all() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut seen_small_seconds = false;
+
+        for width in 8..=100u16 {
+            for height in 6..=14u16 {
+                let (mut panel, _guard) = panel_from_named("small-secs", ClocksConfig::default());
+                panel.show_seconds = true;
+                let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        panel.render(
+                            frame,
+                            frame.area(),
+                            RenderContext {
+                                theme: &config.theme,
+                                gradients: &gradients,
+                                focused: true,
+                                watch: &crate::watch::WatchLog::default(),
+                            },
+                        );
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer().clone();
+                let rows: Vec<String> = (0..height)
+                    .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                    .collect();
+                // The baseline is the last row that holds a block glyph.
+                let Some(baseline) = rows.iter().rev().find(|r| r.contains('\u{2588}')) else {
+                    continue;
+                };
+                let after = baseline.rsplit('\u{2588}').next().unwrap_or("").trim();
+                if after.is_empty() {
+                    continue;
+                }
+                seen_small_seconds = true;
+                assert!(
+                    after.len() == 2 && after.bytes().all(|b| b.is_ascii_digit()),
+                    "at {width}x{height} the seconds beside the numerals read {after:?}: {baseline:?}"
+                );
+            }
+        }
+        assert!(
+            seen_small_seconds,
+            "no size in the sweep drew small seconds, so the property was never exercised"
+        );
+    }
+
+    /// The middle rung of the face ladder is measured with the seconds' cells
+    /// taken out. It used to fit the short form alone and then centre the pair,
+    /// so at a width that held the numerals but not the suffix the seconds were
+    /// cut by the terminal. The alternative — numerals without seconds while `s`
+    /// is on — is refused too: the ladder goes to plain text with them intact.
+    #[test]
+    fn the_short_face_is_only_chosen_when_its_seconds_fit_beside_it() {
+        let (full, short, seconds) = ("15:44:26", "15:44", "26");
+        let rows = 6;
+        let short_width = glyphs::width_of(short, 1);
+        let suffix = 3; // a space and two digits
+
+        // Room for the numerals and the seconds: the pair, at scale 1.
+        let (text, small, scale) =
+            choose_face(true, full, short, seconds, short_width + suffix, rows);
+        assert_eq!(
+            (text.as_str(), small.as_deref(), scale),
+            (short, Some(seconds), Some(1))
+        );
+
+        // Room for the numerals alone: not numerals alone. Plain text keeps
+        // every digit the reader asked for.
+        let (text, small, scale) =
+            choose_face(true, full, short, seconds, short_width + suffix - 1, rows);
+        assert_eq!(
+            (text.as_str(), small.as_deref(), scale),
+            (full, None, None),
+            "numerals that would cut or drop the seconds must give way to plain text"
+        );
+
+        // Seconds off: the short form fits the whole width, no suffix reserved.
+        let (text, small, scale) = choose_face(false, full, short, seconds, short_width, rows);
+        assert_eq!(
+            (text.as_str(), small.as_deref(), scale),
+            (short, None, Some(1))
+        );
     }
 
     /// A panel seeded from `config`, with a zone file of its very own.

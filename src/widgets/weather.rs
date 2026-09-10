@@ -259,6 +259,33 @@ impl WeatherPanel {
         }
     }
 
+    /// A panel showing a canned reading, with no fetch thread behind it, for
+    /// tests in other modules. `new` spawns the thread unconditionally and its
+    /// first act is a network call; this builds the same panel around a
+    /// `State` already holding `tests::sample_data`, so the forecast table and
+    /// the readout render with content rather than as a placeholder.
+    #[cfg(test)]
+    pub(crate) fn offline(config: WeatherConfig) -> Self {
+        let imperial = config.units != "metric";
+        let state = State {
+            data: Some(Box::new(tests::sample_data(imperial))),
+            fetched: Some(Instant::now()),
+            error: None,
+        };
+        Self {
+            state: Arc::new(Mutex::new(state)),
+            refresh: Arc::new(Mutex::new(false)),
+            forecast_hours: config.forecast_hours,
+            stale_after: Duration::from_hours(1),
+            config: Arc::new(Mutex::new(config)),
+            asking: None,
+            imperial,
+            stop: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            seen: 0,
+        }
+    }
+
     /// Deal with a keypress while the location prompt is open.
     ///
     /// Unlike the agenda's file, a place name cannot be checked here — finding
@@ -1111,7 +1138,7 @@ fn render_forecast(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, d
 mod tests {
     use super::*;
 
-    fn sample_data(imperial: bool) -> WeatherData {
+    pub(super) fn sample_data(imperial: bool) -> WeatherData {
         WeatherData {
             place: "Cincinnati".into(),
             temperature: if imperial { 82.0 } else { 27.777_78 },

@@ -217,7 +217,10 @@ impl Panel for CpuPanel {
         if show_cores && rows[2].height >= 2 {
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    crate::glyphs::utility("per core"),
+                    crate::grid::truncate(
+                        &crate::glyphs::utility("per core"),
+                        usize::from(rows[2].width),
+                    ),
                     Style::default()
                         .fg(theme.label)
                         .add_modifier(Modifier::BOLD),
@@ -225,38 +228,64 @@ impl Panel for CpuPanel {
                 Rect::new(rows[2].x, rows[2].y, rows[2].width, 1),
             );
 
-            // One meter per core, sharing the row. Below three columns each a
-            // meter is unreadable, so fall back to a single-cell level mark.
-            let cores = u16::try_from(self.per_core.len()).unwrap_or(1).max(1);
-            let per = rows[2].width / cores;
-            let y = rows[2].y + 1;
-            let mut x = rows[2].x;
-            for pct in &self.per_core {
-                if x >= rows[2].x + rows[2].width {
+            draw_core_strip(frame, rows[2], &self.per_core, gradient, track, theme);
+        }
+    }
+}
+
+/// The per-core strip under the graph: one meter per core when the row can
+/// hold them, one cell per core when it cannot, and an ellipsis in the last
+/// cell when it cannot even hold one cell per core.
+///
+/// Its own function because `render` reached clippy's hundred-line limit the
+/// day the ellipsis arrived — the same wall `run()` and `render_help` hit.
+fn draw_core_strip(
+    frame: &mut Frame,
+    row: Rect,
+    per_core: &[f32],
+    gradient: &crate::chart::Gradient,
+    track: Style,
+    theme: &crate::theme::Theme,
+) {
+    // One meter per core, sharing the row. Below three columns each a
+    // meter is unreadable, so fall back to a single-cell level mark.
+    let cores = u16::try_from(per_core.len()).unwrap_or(1).max(1);
+    let per = row.width / cores;
+    let y = row.y + 1;
+    let right = row.x + row.width;
+    let mut x = row.x;
+    for (index, pct) in per_core.iter().enumerate() {
+        if x >= right {
+            break;
+        }
+        let value = pct.clamp(0.0, 100.0).round() as u64;
+        if per >= 3 {
+            let cells = meter_spans(value, 100, per.saturating_sub(1), gradient, track);
+            for (index, (glyph, style)) in cells.iter().enumerate() {
+                let cx = x + u16::try_from(index).unwrap_or(0);
+                if cx >= row.x + row.width {
                     break;
                 }
-                let value = pct.clamp(0.0, 100.0).round() as u64;
-                if per >= 3 {
-                    let cells = meter_spans(value, 100, per.saturating_sub(1), gradient, track);
-                    for (index, (glyph, style)) in cells.iter().enumerate() {
-                        let cx = x + u16::try_from(index).unwrap_or(0);
-                        if cx >= rows[2].x + rows[2].width {
-                            break;
-                        }
-                        frame.buffer_mut()[(cx, y)]
-                            .set_char(*glyph)
-                            .set_style(*style);
-                    }
-                    x += per;
-                } else {
-                    frame.buffer_mut()[(x, y)]
-                        .set_char(level_mark(*pct))
-                        .set_style(
-                            Style::default().fg(gradient.at(i64::try_from(value).unwrap_or(100))),
-                        );
-                    x += 1;
-                }
+                frame.buffer_mut()[(cx, y)]
+                    .set_char(*glyph)
+                    .set_style(*style);
             }
+            x += per;
+        } else {
+            // Fewer columns than cores: the last cell says the strip
+            // goes on, rather than a row of marks that reads as a
+            // machine with exactly as many cores as the panel has
+            // cells. Each mark is a value, and values are not cut.
+            if x + 1 == right && index + 1 < per_core.len() {
+                frame.buffer_mut()[(x, y)]
+                    .set_char('\u{2026}')
+                    .set_style(Style::default().fg(theme.muted));
+                break;
+            }
+            frame.buffer_mut()[(x, y)]
+                .set_char(level_mark(*pct))
+                .set_style(Style::default().fg(gradient.at(i64::try_from(value).unwrap_or(100))));
+            x += 1;
         }
     }
 }

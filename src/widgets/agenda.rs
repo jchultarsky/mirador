@@ -811,7 +811,10 @@ impl AgendaPanel {
             .iter()
             .map(|row| match row {
                 Row::Day(day) => ListItem::new(Line::from(TextSpan::styled(
-                    crate::glyphs::utility(&day_label(*day, today)),
+                    crate::grid::truncate(
+                        &crate::glyphs::utility(&day_label(*day, today)),
+                        usize::from(area.width),
+                    ),
                     Style::default()
                         .fg(theme.label)
                         .add_modifier(Modifier::BOLD),
@@ -907,11 +910,22 @@ fn event_line(
         }
     }
 
-    Line::from(vec![
-        TextSpan::styled(marker.to_string(), time_style),
-        TextSpan::styled(format!("{time:<TIME_WIDTH$} "), time_style),
-        TextSpan::styled(crate::grid::truncate(&text, room), summary_style),
-    ])
+    // The summary is already cut to the room left beside the time; the time
+    // and its marker are a value of their own, and below nine columns they
+    // drop whole rather than leaving `09:1` for the terminal to finish.
+    crate::grid::assemble(
+        vec![
+            vec![
+                TextSpan::styled(marker.to_string(), time_style),
+                TextSpan::styled(format!("{time:<TIME_WIDTH$} "), time_style),
+            ],
+            vec![TextSpan::styled(
+                crate::grid::truncate(&text, room),
+                summary_style,
+            )],
+        ],
+        width,
+    )
 }
 
 /// One styled `Line` per row of `text` wrapped to `width`.
