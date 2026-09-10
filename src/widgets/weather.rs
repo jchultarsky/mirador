@@ -1175,6 +1175,39 @@ mod tests {
         }
     }
 
+    /// `L` asks for a place. An empty answer is refused in the prompt — there
+    /// is nothing to fetch for — and a real one is written into the shared
+    /// config and the fetch thread is asked to go now. Neither
+    /// `handle_prompt_key` nor `set_location` had been executed by a test.
+    #[test]
+    fn l_asks_for_a_place_and_an_empty_answer_is_refused() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = WeatherPanel::offline(WeatherConfig {
+            location: "Boston".into(),
+            ..WeatherConfig::default()
+        });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        panel.handle_key(key(KeyCode::Char('L')));
+        assert!(panel.asking.is_some(), "`L` opens the prompt");
+        for _ in 0.."Boston".len() {
+            panel.handle_key(key(KeyCode::Backspace));
+        }
+        panel.handle_key(key(KeyCode::Enter));
+        assert!(panel.asking.is_some(), "an empty place is refused in place");
+
+        for c in "Lisbon".chars() {
+            panel.handle_key(key(KeyCode::Char(c)));
+        }
+        panel.handle_key(key(KeyCode::Enter));
+        assert!(panel.asking.is_none(), "a place is taken");
+        assert_eq!(settings(&panel.config).location, "Lisbon");
+        assert!(
+            *panel.refresh.lock().unwrap(),
+            "and the thread is asked to fetch it now"
+        );
+    }
+
     #[test]
     fn every_optional_column_appears_as_soon_as_it_fits() {
         // The rule: a column appears at the first width that seats it while

@@ -1380,6 +1380,90 @@ mod tests {
         );
     }
 
+    /// The panel as drawn at `width`x`height`, joined into one string.
+    fn screen_of(panel: &mut TodoPanel, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    crate::panel::RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The form and the delete prompt had key-handling tests and no drawing
+    /// tests: `render_form` and `render_confirm` were never executed. What the
+    /// reader sees is the contract — every field labelled, the active one
+    /// marked, and a title too long for the box abridged with `…` rather than
+    /// cut by the terminal.
+    #[test]
+    fn the_task_form_and_the_delete_prompt_draw_what_they_say() {
+        let (mut panel, _guard) = panel("form-draw");
+        add_task(&mut panel, "Renew the domain");
+
+        press(&mut panel, KeyCode::Char('a'));
+        let form = screen_of(&mut panel, 80, 24);
+        for label in ["New task", "Title", "Notes", "Due", "Priority", "Tags"] {
+            assert!(form.contains(label), "the form shows `{label}`:\n{form}");
+        }
+        for _ in 0..3 {
+            press(&mut panel, KeyCode::Tab);
+        }
+        let on_priority = screen_of(&mut panel, 80, 24);
+        assert!(
+            on_priority.contains("‹ low ›"),
+            "the active priority field shows its arrows:\n{on_priority}"
+        );
+        press(&mut panel, KeyCode::Esc);
+
+        press(&mut panel, KeyCode::Enter);
+        assert!(
+            screen_of(&mut panel, 80, 24).contains("Edit task"),
+            "editing an existing task says so"
+        );
+        press(&mut panel, KeyCode::Esc);
+
+        let long = "A".repeat(70);
+        add_task(&mut panel, &long);
+        press(&mut panel, KeyCode::Char('G'));
+        press(&mut panel, KeyCode::Char('d'));
+        let confirm = screen_of(&mut panel, 40, 12);
+        assert!(
+            confirm.contains("Delete task"),
+            "the prompt names itself:\n{confirm}"
+        );
+        assert!(confirm.contains("y delete"), "and its keys:\n{confirm}");
+        assert!(
+            confirm.contains('…'),
+            "a title wider than the box is abridged, not cut:\n{confirm}"
+        );
+        assert!(
+            !confirm.contains(&long),
+            "the whole title cannot fit and does not:\n{confirm}"
+        );
+    }
+
     fn press(panel: &mut TodoPanel, code: KeyCode) {
         panel.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }

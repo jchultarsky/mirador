@@ -591,6 +591,81 @@ mod tests {
 
     /// A list is chosen from, not completed into — `Tab` would be a second
     /// way to do what the arrows already do, and a worse one.
+    /// Path completion, against a real directory: Tab extends what was typed
+    /// to the longest start every match shares, a directory completes with
+    /// its slash so the next Tab goes into it, and no match leaves the text
+    /// alone. `candidates`, `common_prefix` and `expand_tilde` were all
+    /// unexecuted by the suite.
+    #[test]
+    fn tab_completes_a_path_to_the_shared_prefix_and_marks_directories() {
+        let dir = std::env::temp_dir().join(format!("mirador-complete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("alps")).unwrap();
+        std::fs::write(dir.join("alpha.ics"), "").unwrap();
+        std::fs::write(dir.join("alphabet.ics"), "").unwrap();
+        let base = format!("{}/", dir.display());
+
+        let mut p = Prompt::new("FILE", "help", &format!("{base}al"), Completion::Paths);
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(
+            p.value(),
+            format!("{base}alp"),
+            "the three matches share `alp`"
+        );
+
+        let mut p = Prompt::new("FILE", "help", &format!("{base}alph"), Completion::Paths);
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(p.value(), format!("{base}alpha"), "two files share `alpha`");
+
+        let mut p = Prompt::new("FILE", "help", &format!("{base}alps"), Completion::Paths);
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(
+            p.value(),
+            format!("{base}alps/"),
+            "a directory completes into itself"
+        );
+
+        let mut p = Prompt::new("FILE", "help", &format!("{base}zzz"), Completion::Paths);
+        press(&mut p, KeyCode::Tab);
+        assert_eq!(
+            p.value(),
+            format!("{base}zzz"),
+            "nothing matching changes nothing"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tilde_means_home_and_nothing_else_is_touched() {
+        let home = dirs::home_dir().expect("a home directory");
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/cal.ics"), home.join("cal.ics"));
+        assert_eq!(
+            expand_tilde("/abs/cal.ics"),
+            std::path::PathBuf::from("/abs/cal.ics")
+        );
+        assert_eq!(
+            expand_tilde("rel/cal.ics"),
+            std::path::PathBuf::from("rel/cal.ics")
+        );
+        assert_eq!(expand_tilde(""), std::path::PathBuf::from(""));
+    }
+
+    #[test]
+    fn the_common_prefix_is_measured_in_characters_not_bytes() {
+        let s = |items: &[&str]| items.iter().map(|i| (*i).to_string()).collect::<Vec<_>>();
+        assert_eq!(common_prefix(&s(&[])), None);
+        assert_eq!(common_prefix(&s(&["alpha"])).as_deref(), Some("alpha"));
+        assert_eq!(
+            common_prefix(&s(&["alpha", "alphabet"])).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(common_prefix(&s(&["a", "b"])).as_deref(), Some(""));
+        // A cut inside `ü` would be a byte offset that is not a char boundary,
+        // and slicing there panics.
+        assert_eq!(common_prefix(&s(&["über", "übel"])).as_deref(), Some("übe"));
+    }
+
     #[test]
     fn tab_does_nothing_when_the_prompt_offers_a_list() {
         let mut p = prompt("Lis");

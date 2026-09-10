@@ -2736,6 +2736,252 @@ mod tests {
         );
     }
 
+    /// Two list panels with their files in a scratch directory, so nothing a
+    /// test does can reach the user's own tasks or notes.
+    fn two_lists(name: &str) -> (Config, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mirador-app-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = config_with(&["notes", "todo"]);
+        config.notes.file = Some(dir.join("notes.toml"));
+        config.todo.file = Some(dir.join("todos.toml"));
+        (config, dir)
+    }
+
+    /// The rows of the dashboard as drawn, so a test can read where things are.
+    fn drawn(app: &mut App, width: u16, height: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The screen row carrying the selection marker inside `area`, if any.
+    fn marker_row(rows: &[String], area: Rect) -> Option<u16> {
+        (area.y..area.y + area.height).find(|&y| {
+            let row = &rows[usize::from(y)];
+            row.chars()
+                .skip(usize::from(area.x))
+                .take(usize::from(area.width))
+                .any(|c| c == '▸')
+        })
+    }
+
+    fn at(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// `handle_mouse` goes to the panel under the *pointer*, and a scroll must
+    /// move the list it is aimed at without yanking the keyboard away from
+    /// what the user was typing in. Nothing exercised that seam: every mouse
+    /// path in the panels was unexecuted by the suite.
+    ///
+    /// Observed from the outside, since the panel's selection is its own: the
+    /// tasks panel draws its marker only while focused, so focus is moved
+    /// there *afterwards* with Tab and the marker is read from the second row,
+    /// where the scroll left it — against a control that never scrolled and
+    /// finds it on the first.
+    #[test]
+    fn a_scroll_acts_on_the_panel_under_the_pointer_and_leaves_focus_where_it_was() {
+        let (config, _dir) = two_lists("scroll");
+        let mut app = App::new(config.clone()).unwrap();
+        let rows = drawn(&mut app, 120, 30);
+        let todo = app.slots[1].area.expect("the tasks panel was drawn");
+        assert_eq!(app.focus, 0, "notes start focused");
+        assert!(
+            marker_row(&rows, todo).is_none(),
+            "unfocused, the tasks panel draws no marker"
+        );
+
+        let redraw = app.handle_mouse(at(MouseEventKind::ScrollDown, todo.x + 3, todo.y + 3));
+        assert!(redraw, "the wheel over a list is consumed by it");
+        assert_eq!(app.focus, 0, "and focus did not move");
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        let after = drawn(&mut app, 120, 30);
+        let scrolled = marker_row(&after, todo).expect("focused, the marker shows");
+
+        let mut control = App::new(config).unwrap();
+        drawn(&mut control, 120, 30);
+        control.handle_key(KeyEvent::from(KeyCode::Tab));
+        let untouched = marker_row(&drawn(&mut control, 120, 30), todo).unwrap();
+        assert_eq!(
+            scrolled,
+            untouched + 1,
+            "the scroll moved the selection one row while the panel was not focused"
+        );
+    }
+
+    /// A click focuses the panel it lands in and selects the row it hit.
+    #[test]
+    fn a_click_focuses_the_panel_under_the_pointer_and_selects_the_row_it_hit() {
+        let (config, _dir) = two_lists("click");
+        let mut app = App::new(config).unwrap();
+        let rows = drawn(&mut app, 120, 30);
+        let todo = app.slots[1].area.unwrap();
+        // The third task row: header line, column headings, then tasks.
+        // Columns, not bytes: the frame's `│` is three bytes wide and one
+        // cell, which is invariant 9 reaching into a test.
+        let target = (todo.y..todo.y + todo.height)
+            .filter(|&y| {
+                rows[usize::from(y)]
+                    .chars()
+                    .skip(usize::from(todo.x))
+                    .collect::<String>()
+                    .contains("[ ]")
+            })
+            .nth(2)
+            .expect("three task rows on screen");
+
+        app.handle_mouse(at(
+            MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+            todo.x + 6,
+            target,
+        ));
+        assert_eq!(app.focus, 1, "the click moved focus to the tasks panel");
+        let after = drawn(&mut app, 120, 30);
+        assert_eq!(
+            marker_row(&after, todo),
+            Some(target),
+            "and selected the row it hit"
+        );
+    }
+
+    /// A panel in a text-entry state has the same absolute veto over the mouse
+    /// that it has over global keys: a stray click must not pull focus out of
+    /// a half-typed task and strand the form.
+    #[test]
+    fn an_open_form_vetoes_a_click_landing_in_another_panel() {
+        let (config, _dir) = two_lists("veto");
+        let mut app = App::new(config).unwrap();
+        drawn(&mut app, 120, 30);
+        let notes = app.slots[0].area.unwrap();
+
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.focus, 1);
+        app.handle_key(KeyEvent::from(KeyCode::Char('a')));
+        assert!(app.focus_captures_input(), "the task form is open");
+
+        app.handle_mouse(at(
+            MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+            notes.x + 2,
+            notes.y + 2,
+        ));
+        assert_eq!(app.focus, 1, "focus stayed with the form");
+        assert!(app.focus_captures_input(), "and the form is still open");
+    }
+
+    /// Invariant 17, at the seam that shipped wrong twice: the *App* gathers
+    /// what every panel reports, compares it against the config once, and
+    /// writes only the difference — so a preference toggled back to what the
+    /// config says leaves the file rather than asserting itself for ever.
+    /// `UiState` has unit tests for the comparison; nothing had ever driven
+    /// the plumbing that calls it.
+    #[test]
+    fn a_preference_moved_off_the_config_is_written_and_moved_back_is_retracted() {
+        let dir = std::env::temp_dir().join(format!("mirador-prefs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        let config = config_with(&["clocks"]);
+        let baseline = crate::state::UiState::from_config(&config);
+        let mut app = App::new(config).unwrap();
+        app.remember_preferences_at(path.clone(), crate::state::UiState::default(), baseline);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        app.persist_preferences();
+        let written = std::fs::read_to_string(&path).expect("a change was written");
+        assert!(
+            written.contains("clocks_show_seconds = false"),
+            "the toggle is recorded as a difference from the config: {written}"
+        );
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        app.persist_preferences();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("clocks_show_seconds"),
+            "toggled back to the config's value, the entry is gone: {written:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The picker's edit reaches the config file as a textual edit that keeps
+    /// the comments, and a file the editor cannot work on is refused and
+    /// reported rather than rewritten. Both halves through the keys, not by
+    /// calling `layout_edit` directly.
+    #[test]
+    fn a_picker_change_is_written_to_the_config_and_an_uneditable_file_is_reported() {
+        let dir = std::env::temp_dir().join(format!("mirador-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // One panel per line, the way the shipped config is written: the
+        // editor rebuilds a row from captured panel *lines*, and a comment
+        // above a panel travels with it.
+        let editable = "[layout]\nrows = [\n  { height = 1, panels = [\n    # keep me\n    { widget = \"clocks\",   width = 1 },\n    { widget = \"calendar\", width = 1 },\n  ] },\n]\n";
+        let path = dir.join("config.toml");
+        std::fs::write(&path, editable).unwrap();
+        let config: Config = toml::from_str(editable).expect("a minimal config parses");
+
+        let mut app = App::new(config.clone()).unwrap();
+        app.write_layout_to(path.clone());
+        app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+        assert!(app.picker.is_some(), "`w` opens the picker");
+        // Down to `calendar` — sixth in `widget_names` — and switch it off.
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Down));
+        }
+        assert_eq!(
+            app.picker.as_ref().map(crate::picker::Picker::selected),
+            Some(5)
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+        assert_eq!(app.layout_error, None, "the edit was accepted");
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !after.contains("calendar"),
+            "calendar left the layout: {after}"
+        );
+        assert!(after.contains("# keep me"), "the comment survived: {after}");
+        assert!(after.contains("\"clocks\""), "clocks stayed: {after}");
+
+        // The other spelling loads but cannot be edited; the file is left
+        // exactly as it was and the failure is on the bar, not swallowed.
+        let sections = "# keep me\n[[layout.rows]]\nheight = 1\n[[layout.rows.panels]]\nwidget = \"clocks\"\nwidth = 1\n[[layout.rows.panels]]\nwidget = \"calendar\"\nwidth = 1\n";
+        let other = dir.join("sections.toml");
+        std::fs::write(&other, sections).unwrap();
+        let mut app = App::new(config).unwrap();
+        app.write_layout_to(other.clone());
+        app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Down));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(
+            app.layout_error.is_some(),
+            "a file it cannot edit is reported"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            sections,
+            "and left untouched"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_click_retires_the_hint_but_the_pointer_merely_passing_over_does_not() {
         use ratatui::crossterm::event::MouseButton;
