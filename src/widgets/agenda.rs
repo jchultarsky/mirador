@@ -951,6 +951,85 @@ mod tests {
     use super::*;
     use jiff::civil::date;
 
+    /// `f` asks for a path in place. A path that does not exist is refused
+    /// *inside the prompt*, keeping what was typed; Esc backs out; a path
+    /// that exists is taken and a reload is asked for. None of
+    /// `handle_prompt_key`, `set_path` or `ask_for_reload` had been executed
+    /// by a test.
+    #[test]
+    fn f_asks_for_a_path_and_a_missing_file_is_refused_where_it_was_typed() {
+        let dir =
+            std::env::temp_dir().join(format!("mirador-agenda-prompt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ics = dir.join("cal.ics");
+        let mut panel = AgendaPanel::new(&AgendaConfig::default(), ics.clone());
+        let key = |code| KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
+
+        panel.handle_key(key(KeyCode::Char('f')));
+        assert!(panel.asking.is_some(), "`f` opens the prompt");
+        panel.handle_key(key(KeyCode::Enter));
+        let prompt = panel
+            .asking
+            .as_ref()
+            .expect("a missing file keeps the prompt open");
+        assert_eq!(
+            prompt.value(),
+            ics.display().to_string(),
+            "and keeps what was typed"
+        );
+        panel.handle_key(key(KeyCode::Esc));
+        assert!(panel.asking.is_none(), "Esc backs out");
+
+        std::fs::write(&ics, "BEGIN:VCALENDAR\nEND:VCALENDAR\n").unwrap();
+        panel.handle_key(key(KeyCode::Char('f')));
+        panel.handle_key(key(KeyCode::Enter));
+        assert!(panel.asking.is_none(), "a file that exists is taken");
+        assert_eq!(
+            panel.status.as_deref(),
+            Some(RELOADING),
+            "and a reload is under way"
+        );
+        assert_eq!(current_path(&panel.path), ics);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The wheel scrolls the agenda one row at a time and stops at the ends.
+    /// `handle_mouse` here had never been executed by a test.
+    #[test]
+    fn the_wheel_scrolls_the_agenda_and_stops_at_the_last_event() {
+        let mut panel =
+            AgendaPanel::new(&AgendaConfig::default(), PathBuf::from("/nonexistent.ics"));
+        let now = Zoned::now();
+        panel.shown.events = (0..3)
+            .map(|i| ical::Event {
+                summary: format!("event {i}"),
+                location: None,
+                start: now.checked_add(Span::new().hours(i + 1)).unwrap(),
+                end: Some(now.checked_add(Span::new().hours(i + 2)).unwrap()),
+                all_day: false,
+            })
+            .collect();
+        let wheel = |kind| MouseEvent {
+            kind,
+            column: 1,
+            row: 1,
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        };
+        for _ in 0..10 {
+            panel.handle_mouse(wheel(MouseEventKind::ScrollDown), Rect::new(0, 0, 40, 10));
+        }
+        assert_eq!(
+            panel.scroll.selected(),
+            Some(2),
+            "down stops at the last event"
+        );
+        for _ in 0..10 {
+            panel.handle_mouse(wheel(MouseEventKind::ScrollUp), Rect::new(0, 0, 40, 10));
+        }
+        assert_eq!(panel.scroll.selected(), Some(0), "up stops at the first");
+    }
+
     fn tz() -> TimeZone {
         TimeZone::get("America/New_York").unwrap()
     }

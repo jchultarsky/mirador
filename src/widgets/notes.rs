@@ -1188,6 +1188,70 @@ mod tests {
         (p, TempDir(dir))
     }
 
+    /// The panel as drawn, one row per line.
+    fn rows_of(p: &mut NotesPanel, width: u16, height: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                p.render(
+                    frame,
+                    frame.area(),
+                    crate::panel::RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// `render_form` was never executed by a test. The caret is the whole
+    /// point of the form's drawing: it is what tells the writer which field
+    /// the next key lands in, and it has to follow Tab.
+    #[test]
+    fn the_note_form_draws_its_heading_and_puts_the_caret_in_the_active_field() {
+        let (mut p, _g) = panel("form-draw");
+        press(&mut p, KeyCode::Char('a'));
+        let rows = rows_of(&mut p, 60, 12);
+        assert!(rows[0].contains("NEW NOTE"), "{rows:?}");
+        assert!(rows[1].starts_with("title"), "{rows:?}");
+        assert!(
+            rows[1].contains('▏'),
+            "the caret starts in the title: {rows:?}"
+        );
+        assert!(rows[2].starts_with("body"), "{rows:?}");
+
+        press(&mut p, KeyCode::Tab);
+        let rows = rows_of(&mut p, 60, 12);
+        assert!(
+            !rows[1].contains('▏'),
+            "after Tab the title has no caret: {rows:?}"
+        );
+        press(&mut p, KeyCode::Esc);
+
+        add_note(&mut p, "Release checklist", "");
+        press(&mut p, KeyCode::Enter);
+        let rows = rows_of(&mut p, 60, 12);
+        assert!(
+            rows[0].contains("EDIT NOTE"),
+            "opening an existing note says so: {rows:?}"
+        );
+        assert!(
+            rows[1].contains("Release checklist"),
+            "and shows its title: {rows:?}"
+        );
+    }
+
     fn press(p: &mut NotesPanel, code: KeyCode) {
         p.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }

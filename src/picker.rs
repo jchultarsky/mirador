@@ -193,6 +193,58 @@ mod tests {
         )
     }
 
+    /// The dialog as drawn. `render` was never executed by a test, and it is
+    /// the whole of what `w` shows: a mark per widget saying whether it is on,
+    /// the cursor, and a line saying where the change goes — or, in place of
+    /// that line, why it did not.
+    #[test]
+    fn the_picker_shows_a_mark_per_widget_and_says_where_the_change_goes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::default();
+        let draw = |picker: &Picker, error: Option<&str>, w: u16, h: u16| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|frame| picker.render(frame, frame.area(), &theme, |n| n == "clocks", error))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..h)
+                .map(|y| (0..w).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let picker = Picker::new(vec!["clocks".into(), "weather".into(), "cpu".into()]);
+
+        let calm = draw(&picker, None, 80, 24);
+        assert!(
+            calm.contains("▸ ■ clocks"),
+            "the placed widget is marked and under the cursor:\n{calm}"
+        );
+        assert!(
+            calm.contains("  □ weather"),
+            "an unplaced one is hollow:\n{calm}"
+        );
+        assert!(calm.contains("written to your config on close"), "{calm}");
+        assert!(
+            calm.contains("space") && calm.contains("toggle") && calm.contains("esc"),
+            "{calm}"
+        );
+
+        let failing = draw(&picker, Some("no `[layout]` rows found"), 80, 24);
+        assert!(
+            failing.contains("no `[layout]` rows found"),
+            "the error takes the line:\n{failing}"
+        );
+        assert!(
+            !failing.contains("written to your config"),
+            "and the promise is withdrawn:\n{failing}"
+        );
+
+        // Too small for the dialog: drawn as far as it can be, never a panic.
+        let _ = draw(&picker, None, 12, 4);
+        let _ = draw(&picker, None, 1, 1);
+    }
+
     #[test]
     fn the_cursor_clamps_at_both_ends() {
         let last = crate::widgets::WIDGET_NAMES.len() - 1;
