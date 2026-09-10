@@ -79,6 +79,18 @@ The crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a
 targeted `#[allow]` *with a comment saying why* — do not widen the allow list
 in `Cargo.toml`.
 
+**To find out whether an `#[allow]` is still earning its place, delete the
+line and run clippy — do not blank it.** A blank line left between a doc
+comment and its item trips `empty_line_after_doc_comments`, so a sweep that
+blanks reports every such allow as "needed" for the wrong reason; the first
+pass of the 2026-09-10 housekeeping called twelve allows necessary that way,
+and seven of them were allowing nothing. Two further things the sweep cannot
+see: an allow that exists for the *Windows* build (`carry_permissions_across`
+keeps its parameters unused there) looks unneeded on macOS, so scope it with
+`cfg_attr(not(unix), …)` rather than removing it; and a `dead_code` allow on
+something only tests call is the wrong tool — `#[cfg(test)]` says what is
+actually true.
+
 **`assets/default_config.toml` is `include_str!`-baked into the binary.**
 Editing it does nothing until you rebuild. This has twice looked like a change
 that did not land when it simply had not been compiled.
