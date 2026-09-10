@@ -911,6 +911,23 @@ external, because mirador promises it does not phone home and a plugin can; the
 host never sees, stores, forwards or logs a plugin's credentials; and **no
 PTY**.
 
+**The protocol document is the corpus.** Protocol v1 is a compatibility
+promise, and until 2026-09-10 the only frozen wire bytes in the tests were
+`{"type":"ready","protocol":1}`.
+`every_documented_wire_example_is_exactly_what_the_code_speaks` now reads
+every JSON example out of `docs/plugin-protocol.md` at test time — the way
+`docs.rs` reads this file — and holds the code to it in both directions: each
+host-to-plugin example must equal, as a whole value, what `HostMessage`
+serialises when built through the real encoders (`canonical_key`,
+`mouse_kind`), and each plugin-to-host example must decode under
+`deny_unknown_fields`, with every `PluginMessage` variant appearing in the
+document at least once. A variant added to `HostMessage` without a sample
+does not compile, because the sample list is checked by an exhaustive match.
+Checked both ways by editing the document: renaming `columns` in the resize
+example fails it, and adding a `code` field to the error example fails it.
+Which means **the document is now load-bearing**: change the wire format and
+the document in the same commit, or the build says so.
+
 **The boundary is *a view with controls* versus *a host for another program*,**
 and the audiobook client is what settled it. Off-axis-ness is not the test —
 that plugin is as far from the four questions as anything could be and is

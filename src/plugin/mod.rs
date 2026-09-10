@@ -1168,6 +1168,245 @@ mod tests {
         assert_eq!(panel.title, "negotiated");
     }
 
+    /// Every JSON object inside a fenced `json` block of
+    /// `docs/plugin-protocol.md`, in document order.
+    ///
+    /// Read at test time from the repository, the way `docs.rs` reads
+    /// `CLAUDE.md`: `/docs` never reaches the published crate, and a test is
+    /// the only thing that needs it.
+    fn documented_messages() -> Vec<serde_json::Value> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/plugin-protocol.md");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+            .replace("\r\n", "\n");
+        let mut objects = Vec::new();
+        let mut in_json = false;
+        let mut buffer = String::new();
+        let mut depth = 0usize;
+        for line in text.lines() {
+            if line.starts_with("```") {
+                in_json = line.starts_with("```json");
+                continue;
+            }
+            if !in_json {
+                continue;
+            }
+            // Top-level objects, which may span lines; none of the documented
+            // strings contains a brace, and the parse below would catch it if
+            // one did.
+            for c in line.chars() {
+                if depth == 0 && c != '{' {
+                    continue;
+                }
+                buffer.push(c);
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            objects.push(
+                                serde_json::from_str::<serde_json::Value>(&buffer).unwrap_or_else(
+                                    |e| panic!("documented example is not JSON: {e}\n{buffer}"),
+                                ),
+                            );
+                            buffer.clear();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if depth > 0 {
+                buffer.push('\n');
+            }
+        }
+        objects
+    }
+
+    fn type_of(value: &serde_json::Value) -> &str {
+        value["type"]
+            .as_str()
+            .expect("every documented message has a type")
+    }
+
+    /// The exhaustive list of host-to-plugin messages, with the values the
+    /// document uses. The match in `host_variant_name` is what makes this
+    /// exhaustive: a variant added to `HostMessage` without a sample here does
+    /// not compile, and a sample whose type the document never shows fails
+    /// the test below.
+    fn host_samples() -> Vec<HostMessage> {
+        let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        let (kind, button) = mouse_kind(MouseEventKind::Down(MouseButton::Left)).unwrap();
+        vec![
+            HostMessage::Hello {
+                protocol: PROTOCOL_VERSION,
+                host_version: "1.6.0",
+                plugin: "example".into(),
+                config: serde_json::json!({"answer": 42}),
+                cwd: "/current/working/directory".into(),
+            },
+            HostMessage::Resize {
+                columns: 80,
+                rows: 24,
+            },
+            HostMessage::Focus { focused: true },
+            HostMessage::Key {
+                key: canonical_key(ctrl_x),
+                code: key_code(ctrl_x.code),
+                text: Some("x".into()),
+                modifiers: key_modifiers(ctrl_x.modifiers),
+            },
+            HostMessage::Paste {
+                text: "one\ntwo".into(),
+            },
+            HostMessage::Mouse {
+                kind,
+                button,
+                column: 4,
+                row: 2,
+                modifiers: key_modifiers(KeyModifiers::NONE),
+            },
+            HostMessage::Tick,
+            HostMessage::Shutdown,
+        ]
+    }
+
+    fn host_variant_name(message: &HostMessage) -> &'static str {
+        match message {
+            HostMessage::Hello { .. } => "hello",
+            HostMessage::Resize { .. } => "resize",
+            HostMessage::Focus { .. } => "focus",
+            HostMessage::Key { .. } => "key",
+            HostMessage::Paste { .. } => "paste",
+            HostMessage::Mouse { .. } => "mouse",
+            HostMessage::Tick => "tick",
+            HostMessage::Shutdown => "shutdown",
+        }
+    }
+
+    /// Protocol v1 is a compatibility promise, and until now the only frozen
+    /// bytes in the tests were `{"type":"ready","protocol":1}`. The document
+    /// is the promise, so the document is the corpus: every example it shows
+    /// has to be exactly what the code speaks.
+    ///
+    /// Host-to-plugin: each documented example is compared as a whole value
+    /// against a `HostMessage` built through the real encoders — the key from
+    /// `canonical_key`, the mouse kind from `mouse_kind` — so a renamed field,
+    /// a changed tag spelling or a different vocabulary for a key fails here.
+    /// Plugin-to-host: each documented example must decode under
+    /// `deny_unknown_fields`, and every variant of `PluginMessage` must appear
+    /// in the document at least once, so a message the code accepts and the
+    /// document never mentions fails too.
+    #[test]
+    fn every_documented_wire_example_is_exactly_what_the_code_speaks() {
+        let documented = documented_messages();
+        assert!(
+            documented.len() >= 12,
+            "only {} examples found in docs/plugin-protocol.md — the fence parser has \
+             probably stopped matching, and a corpus of nothing checks nothing",
+            documented.len()
+        );
+
+        // --- host → plugin ---------------------------------------------------
+        let mut host_types_documented = std::collections::BTreeSet::new();
+        for sample in host_samples() {
+            let name = host_variant_name(&sample);
+            let encoded = serde_json::to_value(&sample).unwrap();
+            let example = documented
+                .iter()
+                .find(|value| type_of(value) == name)
+                .unwrap_or_else(|| panic!("the document shows no `{name}` message"));
+            assert_eq!(
+                &encoded, example,
+                "`{name}` as the code sends it differs from the document's example"
+            );
+            host_types_documented.insert(name);
+        }
+        for value in &documented {
+            let name = type_of(value);
+            if !matches!(name, "ready" | "frame" | "error" | "watch") {
+                assert!(
+                    host_types_documented.contains(name),
+                    "the document shows a `{name}` message the code never sends"
+                );
+            }
+        }
+
+        // --- plugin → host ---------------------------------------------------
+        let mut plugin_types_seen = std::collections::BTreeSet::new();
+        for value in &documented {
+            let name = type_of(value);
+            if !matches!(name, "ready" | "frame" | "error" | "watch") {
+                continue;
+            }
+            let line = serde_json::to_string(value).unwrap();
+            let decoded: PluginMessage = serde_json::from_str(&line)
+                .unwrap_or_else(|e| panic!("the documented `{name}` does not decode: {e}\n{line}"));
+            plugin_types_seen.insert(match decoded {
+                PluginMessage::Ready { protocol, .. } => {
+                    assert_eq!(
+                        protocol, PROTOCOL_VERSION,
+                        "the document's `ready` names the current protocol"
+                    );
+                    "ready"
+                }
+                PluginMessage::Frame {
+                    revision,
+                    ref lines,
+                    ref bindings,
+                    ref cursor,
+                    ..
+                } => {
+                    assert_eq!(revision, 7);
+                    assert_eq!(lines.len(), 1, "the documented frame has one line");
+                    assert_eq!(lines[0].spans.len(), 2, "of two spans");
+                    assert_eq!(bindings.len(), 1);
+                    assert!(cursor.is_some_and(|c| c.visible && c.column == 3));
+                    "frame"
+                }
+                PluginMessage::Error { ref message, fatal } => {
+                    assert_eq!((message.as_str(), fatal), ("connection lost", false));
+                    "error"
+                }
+                PluginMessage::Watch { .. } => "watch",
+            });
+        }
+        assert_eq!(
+            plugin_types_seen.into_iter().collect::<Vec<_>>(),
+            ["error", "frame", "ready", "watch"],
+            "every plugin-to-host message type appears in the document"
+        );
+
+        // The `hello` the host sends names the same protocol the document does.
+        let hello = documented.iter().find(|v| type_of(v) == "hello").unwrap();
+        assert_eq!(hello["protocol"], serde_json::json!(PROTOCOL_VERSION));
+    }
+
+    /// One JSON object per line, and the reader strips the line ending before
+    /// decoding — including a `\r\n` from a plugin written on Windows. The
+    /// documented examples are the lines.
+    #[test]
+    fn a_documented_example_decodes_with_either_line_ending() {
+        for value in documented_messages() {
+            if !matches!(type_of(&value), "ready" | "frame" | "error" | "watch") {
+                continue;
+            }
+            for ending in ["\n", "\r\n"] {
+                let mut bytes = serde_json::to_vec(&value).unwrap();
+                bytes.extend_from_slice(ending.as_bytes());
+                while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+                    bytes.pop();
+                }
+                let decoded: Result<PluginMessage, _> = serde_json::from_slice(&bytes);
+                assert!(
+                    decoded.is_ok(),
+                    "{:?} with {ending:?}: {:?}",
+                    type_of(&value),
+                    decoded.err()
+                );
+            }
+        }
+    }
+
     #[test]
     fn canonical_keys_are_stable_across_platforms() {
         assert_eq!(
