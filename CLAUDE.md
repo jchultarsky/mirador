@@ -81,7 +81,8 @@ in `Cargo.toml`.
 
 **To find out whether an `#[allow]` is still earning its place, delete the
 line and run clippy — do not blank it.** A blank line left between a doc
-comment and its item trips `empty_line_after_doc_comments`, so a sweep that
+comment and its item trips clippy's empty-line-after-doc-comment lint, so a
+sweep that
 blanks reports every such allow as "needed" for the wrong reason; the first
 pass of the 2026-09-10 housekeeping called twelve allows necessary that way,
 and seven of them were allowing nothing. Two further things the sweep cannot
