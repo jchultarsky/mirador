@@ -1947,6 +1947,18 @@ and had to be added back was the one that did not.
   saying a version was published "about 4 hours ago" is probably right — check
   `date -u` against `created_at` before calling a timestamp stale.
 
+- **`docs/clock-seconds-before.gif` and `-after.gif` look orphaned and are
+  not.** Nothing in the tree references them and no shipped README ever did;
+  they were added by #104 and sat unexplained until the 2026-09-10
+  housekeeping went looking for things to delete. What they are is the
+  rendered before/after evidence for #103, embedded in that issue's comments by
+  absolute `raw.githubusercontent.com/.../main/...` URL — so deleting them
+  would blank two images in a closed issue's history. Same rule as
+  `screenshot.png`: an asset the past still needs, costing nothing, since
+  `/docs` never reaches the crate. Before deleting anything under `docs/`,
+  search the *issue and PR comments* for its name, not only the tree — a
+  `git grep` across every tag came back clean here and was the wrong question.
+
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
