@@ -2046,10 +2046,16 @@ and had to be added back was the one that did not.
   pending". A loop that waits while the output contains `pending` therefore
   falls straight through on a PR opened seconds earlier, and the merge that
   follows is refused by branch protection with a bare `(mergePullRequest)`.
-  Wait on the *count* first — `gh pr view <n> --json statusCheckRollup --jq
-  '[.statusCheckRollup[]?] | length'` above zero — and only then on nothing
-  being pending. This is the same shape as every other vacuous check in these
-  notes: an empty set satisfies every condition asked of it.
+  Waiting on the *count* being above zero is not enough either, and that was
+  the second version of this loop to fall through: `release.yml` runs a
+  `dist plan` job on every pull request, and it reports in about fifteen
+  seconds — before `ci.yml` has created a single job — so a count of one is
+  satisfied by the wrong workflow. Wait for a *named* required check to appear
+  in `gh pr checks` (`test (windows-latest)` is the slowest and the one that
+  vouches for anything `cfg`-gated), and only then for nothing to be pending.
+  Both failures are the same shape as every other vacuous check in these
+  notes: a set that is empty, or merely not the set you meant, satisfies every
+  condition asked of it.
 
     **`main` is protected, so "commit" there means *merged*, not committed
   locally.** The version bump reaches `main` through a PR like anything else,
