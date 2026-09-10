@@ -43,16 +43,17 @@ const GLOBAL: &[Binding] = &[
     Binding::primary("q", "quit"),
     // After `quit` deliberately. The status bar shows as many primary bindings
     // as fit, in order, and on a narrow terminal knowing how to get out beats
-    // knowing how to add a panel. The unused-widget notice names this key
-    // anyway, which is where someone actually needs to be told about it.
+    // knowing how to add a panel. A notice naming this key for anyone with
+    // unplaced widgets used to sit on the bar as well; it was retired, and `w`
+    // being a primary is all that remains of it.
     Binding::primary("w", "panels"),
     // Last of the primaries, so it is the first to go when the terminal is too
     // narrow for all of them — but a primary, because the alternative is what
     // happened to the resize keys below: shipped, useful, and undiscoverable.
     Binding::primary("m", "arrange"),
     // Behind `m` for the same reason `m` is behind `w`, and a primary for the
-    // same reason too: six themes ship, and a theme nobody can find is six
-    // files of decoration.
+    // same reason too: sixteen themes ship, and a theme nobody can find is
+    // sixteen files of decoration.
     Binding::primary("t", "theme"),
     // Promoted from `extra` at the owner's request, and the comment on `m`
     // above had already named the reason: shipped, useful, and undiscoverable.
@@ -1768,10 +1769,9 @@ impl App {
 
     /// The update notice, if there is one and it has not been dismissed.
     ///
-    /// Takes precedence over the unused-widget hint when both apply: this one
-    /// is rarer, is actionable now, and stops being true the moment you act on
-    /// it, where the widget hint is the same every launch until you change your
-    /// layout.
+    /// Rare, actionable now, and it stops being true the moment you act on it —
+    /// which is what earned it a place on the bar when the unused-widget hint,
+    /// the same every launch until you changed your layout, lost its own.
     fn update_hint(&self) -> Option<String> {
         if !self.show_update_hint {
             return None;
@@ -2778,13 +2778,14 @@ mod tests {
     }
 
     #[test]
-    fn the_help_overlay_renders_at_any_size_with_widgets_to_report() {
+    fn the_help_overlay_renders_at_any_size() {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        // The unused-widget section grows the overlay, and the overlay clips
-        // silently rather than erroring — so a size that cannot fit it must
-        // still draw something rather than panic on the arithmetic.
+        // The overlay clips silently rather than erroring, so a size that
+        // cannot fit its text must still draw something rather than panic on
+        // the arithmetic. It once carried an unused-widget section that made
+        // it taller still; the section is gone and the sizes stay.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
         assert!(app.show_help);

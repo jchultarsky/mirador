@@ -166,7 +166,6 @@ struct WireBinding {
 #[serde(default, deny_unknown_fields)]
 // Each flag grants a distinct input class. A bitset would leak a Rust encoding
 // into a language-neutral JSON protocol.
-#[allow(clippy::struct_excessive_bools)]
 struct InputPolicy {
     /// Consume every key while focused.
     capture: bool,

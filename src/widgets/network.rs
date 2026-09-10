@@ -415,11 +415,4 @@ mod tests {
         panel.tx_history.extend([5, 99]);
         assert_eq!(panel.scale(), 99);
     }
-
-    #[test]
-    #[ignore = "superseded: the graph now takes the whole history"]
-    fn recent_never_over_reads() {
-        let history = VecDeque::from(vec![1, 2, 3]);
-        let _ = history;
-    }
 }

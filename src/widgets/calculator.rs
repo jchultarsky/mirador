@@ -158,8 +158,6 @@ struct Entry {
 }
 
 pub struct CalculatorPanel {
-    #[allow(dead_code)]
-    config: CalculatorConfig,
     /// What is being typed.
     typing: String,
     /// What `typing` currently works out to, recomputed on every keystroke.
@@ -194,9 +192,10 @@ impl std::fmt::Debug for CalculatorPanel {
 }
 
 impl CalculatorPanel {
-    pub fn new(config: CalculatorConfig) -> Self {
+    /// `CalculatorConfig` has no fields yet; it is taken so `build()` treats
+    /// every widget alike and so `[calculator]` is a section the config accepts.
+    pub fn new(_config: CalculatorConfig) -> Self {
         Self {
-            config,
             typing: String::new(),
             preview: Err(CalcError::Empty),
             tape: Vec::new(),
@@ -701,12 +700,8 @@ impl CalculatorPanel {
 }
 
 /// Rows the frame costs, named so `max_height`'s reasoning is checkable.
-#[allow(dead_code)]
 const _: u16 = FRAME_HEIGHT;
 
-// Exact comparison is the point: these are answers a calculator must get
-// exactly right, not measurements to be compared within a tolerance.
-#[allow(clippy::float_cmp)]
 #[cfg(test)]
 mod tests {
     use super::*;

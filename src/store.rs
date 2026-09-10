@@ -68,7 +68,7 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 ///
 /// Unix only. Windows inherits an ACL from the containing directory rather than
 /// carrying a mode on the file, so there is nothing of the same shape to copy.
-#[allow(unused_variables)]
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn carry_permissions_across(from: &Path, to: &Path) {
     #[cfg(unix)]
     {

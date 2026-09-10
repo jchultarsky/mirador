@@ -733,7 +733,6 @@ fn masthead(story: &Story, theme: &crate::theme::Theme) -> Vec<Span<'static>> {
 }
 
 /// Read every feed, newest first, then wait.
-#[allow(clippy::too_many_arguments)]
 fn fetch_loop(
     feeds: &[(String, String)],
     per_feed: usize,
