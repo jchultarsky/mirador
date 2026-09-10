@@ -1995,11 +1995,15 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.10.1` is released**, as a GitHub release with binaries for macOS
+- **`1.10.2` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It carries one change — the notes panel
-  stopping repeating the count its border already shows, which is the
-  screen-tightening pass finding a panel it had missed. 1.10.0, hours
+  and published on crates.io. It carries what the silent-clip sweep found
+  the day it was written — the clock's small seconds cut to one digit at
+  40 columns, and four narrower cuts — and nothing else user-visible; the
+  test-quality pass behind it (the sweep, fourteen input and form tests,
+  the protocol document as wire corpus) rides along. 1.10.1 carried one
+  change — the notes panel stopping repeating the count its border already
+  shows, which is the screen-tightening pass finding a panel it had missed. 1.10.0, hours
   earlier, was that pass itself — the silently-cut clock date being the
   one defect in it — and the first release cut through `cut-release.yml`
   rather than from the owner's machine, which is the step those workflows
