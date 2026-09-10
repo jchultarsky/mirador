@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-09-10
+
 ### Fixed
 
 - **The clock's small seconds could be cut to one digit.** When the panel is
@@ -16,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   down to `2`. The pair is now sized together, and where even that does not
   fit the clock steps straight down to plain text with every digit intact
   rather than to numerals with the seconds silently missing.
+
+- **Four more places were cut by the terminal at narrow widths**, found by
+  the same sweep: the clock's plain-text fallback, the notes' `written …
+  edited …` line, the agenda's day headings and event rows, and the cpu
+  panel's `PER CORE` label. Each now abridges with `…` or drops a whole value
+  rather than leaving a fragment. The cpu panel's per-core strip, which drew
+  one mark per column and stopped at the edge, ends in `…` when there are
+  more cores than columns.
 
 ## [1.10.1] - 2026-09-09
 
@@ -1804,7 +1814,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.10.2...HEAD
+[1.10.2]: https://github.com/jchultarsky/mirador/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/jchultarsky/mirador/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/jchultarsky/mirador/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/jchultarsky/mirador/compare/v1.8.0...v1.9.0
