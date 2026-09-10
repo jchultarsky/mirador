@@ -1726,11 +1726,17 @@ answers AAAA-first on a host with no IPv6 route killed every fetch, because
 `ureq` walks its address list only on *connection refused* and an unroutable
 connect bailed with the IPv4 address untried. `fetch.rs` now retries pinned to
 one family at a time, the reporter confirmed it from pkgsrc infrastructure
-before the tag, and the same broadening is offered upstream as
-[ureq#1195](https://github.com/algesten/ureq/pull/1195) — **the one piece of
-this still in flight.** If it merges and ships, a `ureq` bump makes the
-fallback redundant; keep the fallback anyway, as defence for whatever `ureq`
-a distro builds against.
+before the tag, and the same broadening went upstream as
+[ureq#1195](https://github.com/algesten/ureq/pull/1195) — **merged 2026-09-10**,
+sixteen days after it was opened, with no review and without CI ever running on
+the branch.
+
+It is **unreleased upstream** at the time of writing: ureq's crates.io maximum
+is 3.4.1 and the entry sits under `# Unreleased`. The owner's standing
+instruction is to bump when it ships, and dependabot's weekly cargo schedule
+will open that PR without anyone watching for it. **Keep `fetch.rs`'s
+address-family fallback regardless** — a distro can build mirador against
+whatever `ureq` it likes, so upstream merging is not a reason to drop ours.
 
 The external-panel work that was live here is settled:
 [#191](https://github.com/jchultarsky/mirador/discussions/191)'s contract was
@@ -1746,14 +1752,18 @@ holds and is now part of the plugin contract rather than a one-off refusal: no
 PTY, in-tree or out. See "Contributions from outside" for what was committed to
 and why.
 
-This heading has now described the wrong issue as the last one four times —
-#132, then #153, #153 again after #178 closed, then #178 for a day after #205
-closed, alongside a #191 status that had been settled and shipped for a day.
-The entry is written when work starts and nothing makes anybody revisit it
-when the work lands. The fourth occurrence was caught only because someone
-asked "is there anything else?" and the answer was checked against the
-tracker instead of against this file — which is the right order, and the
-reason this paragraph keeps its count.
+This heading has now gone stale **five** times — #132, then #153, #153 again
+after #178 closed, then #178 for a day after #205 closed alongside a #191
+status that had been settled and shipped for a day, and now ureq#1195 called
+"still in flight" on the day it merged. The entry is written when work starts
+and nothing makes anybody revisit it when the work lands.
+
+**The fourth and fifth were both caught the same way**, and it is the only
+method that has ever worked here: the owner asked what was left, and the answer
+was checked against `gh issue list` and the upstream PR *before* this file was
+read. Answering from these notes is how the previous four survived. The count
+is kept because it is the only thing that makes the next reader distrust the
+paragraph above it.
 
 This heading has twice described an issue as open for a day after it was closed
 — #132 before #153. That is the failure it is most prone to, and it is the same
