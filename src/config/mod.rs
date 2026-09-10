@@ -38,11 +38,12 @@ mod widgets;
 // that `[layout]` and `[weather]` are different concepts. Everything a reader
 // or a widget names lives at `crate::config::`.
 //
-// `LayoutPanel`, `LayoutRow` and `ClockZone` are named only by tests today —
-// production code builds them through serde and reaches them through their
-// parents — so the non-test build sees the re-export as unused. That is a fact
-// about who *names* the type, not about whether it is part of the surface.
-#[allow(unused_imports)]
+// `ClockZone` and `NewsFeed` are named only by tests today — production code
+// builds them through serde and reaches them through their parents — so the
+// non-test build sees the re-export as unused. That is a fact about who
+// *names* the type, not about whether it is part of the surface. The layout
+// types used to be in the same position and no longer are, so their re-export
+// carries no allow.
 pub use layout::{Layout, LayoutPanel, LayoutRow};
 pub use plugins::PluginConfig;
 #[allow(unused_imports)]

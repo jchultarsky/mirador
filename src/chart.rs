@@ -66,8 +66,10 @@ impl Gradient {
         Self { colors }
     }
 
-    /// A flat ramp; every level is the same colour.
-    #[allow(dead_code)] // Used by tests and by themes that disable a gradient.
+    /// A flat ramp; every level is the same colour. Tests use it to make a
+    /// graph's shape checkable without a gradient in the way — nothing else
+    /// does, which is why it is compiled only for them.
+    #[cfg(test)]
     pub fn flat(color: Color) -> Self {
         Self {
             colors: Box::new([color; STEPS]),
@@ -350,6 +352,10 @@ mod tests {
         ] {
             let mut buf = Buffer::empty(Rect::new(0, 0, 20, 4));
             BrailleGraph::new(&data, max, &gradient).render(Rect::new(0, 0, 20, 4), &mut buf);
+            // "Still draw" has to mean something: a track is always painted,
+            // so an all-blank buffer would be the graph giving up quietly.
+            let painted = buf.content.iter().any(|cell| cell.symbol() != " ");
+            assert!(painted, "nothing drawn for data={:?} max={max}", &data[..1]);
         }
     }
 
@@ -459,8 +465,20 @@ mod tests {
 
     #[test]
     fn level_handles_a_degenerate_band() {
-        // low == high would divide by zero without the epsilon guard.
-        let _ = level(5.0, 10.0, 10.0, 0.1, 0);
+        // A band with no height has no inside: everything is either at the top
+        // or on the floor. The old version of this test called `level` once and
+        // discarded the result, on the theory that low == high would divide by
+        // zero — it cannot, because both early returns fire before the
+        // division, and a float division would not panic anyway. So it passed
+        // whatever the function did.
+        assert_eq!(level(10.0, 10.0, 10.0, 0.1, 0), 4, "at the band is the top");
+        assert_eq!(level(11.0, 10.0, 10.0, 0.1, 0), 4, "above it is the top");
+        assert_eq!(level(9.0, 10.0, 10.0, 0.1, 0), 0, "below it is the floor");
+        assert_eq!(
+            level(9.0, 10.0, 10.0, 0.1, 1),
+            1,
+            "and the floor is honoured"
+        );
     }
 
     #[test]

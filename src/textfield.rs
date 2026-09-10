@@ -44,9 +44,8 @@ impl TextField {
     /// Cursor position in characters.
     ///
     /// Rendering uses [`TextField::visible`], which returns a scroll-adjusted
-    /// column; this raw accessor exists for tests and for callers that lay the
-    /// field out themselves.
-    #[allow(dead_code)]
+    /// column; this raw accessor exists for tests, which are its only callers.
+    #[cfg(test)]
     pub fn cursor(&self) -> usize {
         self.cursor
     }

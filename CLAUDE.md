@@ -79,6 +79,19 @@ The crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a
 targeted `#[allow]` *with a comment saying why* — do not widen the allow list
 in `Cargo.toml`.
 
+**To find out whether an `#[allow]` is still earning its place, delete the
+line and run clippy — do not blank it.** A blank line left between a doc
+comment and its item trips clippy's empty-line-after-doc-comment lint, so a
+sweep that
+blanks reports every such allow as "needed" for the wrong reason; the first
+pass of the 2026-09-10 housekeeping called twelve allows necessary that way,
+and seven of them were allowing nothing. Two further things the sweep cannot
+see: an allow that exists for the *Windows* build (`carry_permissions_across`
+keeps its parameters unused there) looks unneeded on macOS, so scope it with
+`cfg_attr(not(unix), …)` rather than removing it; and a `dead_code` allow on
+something only tests call is the wrong tool — `#[cfg(test)]` says what is
+actually true.
+
 **`assets/default_config.toml` is `include_str!`-baked into the binary.**
 Editing it does nothing until you rebuild. This has twice looked like a change
 that did not land when it simply had not been compiled.
@@ -1933,6 +1946,18 @@ and had to be added back was the one that did not.
   compare its bitmap against notdef and against a space instead. And a page
   saying a version was published "about 4 hours ago" is probably right — check
   `date -u` against `created_at` before calling a timestamp stale.
+
+- **`docs/clock-seconds-before.gif` and `-after.gif` look orphaned and are
+  not.** Nothing in the tree references them and no shipped README ever did;
+  they were added by #104 and sat unexplained until the 2026-09-10
+  housekeeping went looking for things to delete. What they are is the
+  rendered before/after evidence for #103, embedded in that issue's comments by
+  absolute `raw.githubusercontent.com/.../main/...` URL — so deleting them
+  would blank two images in a closed issue's history. Same rule as
+  `screenshot.png`: an asset the past still needs, costing nothing, since
+  `/docs` never reaches the crate. Before deleting anything under `docs/`,
+  search the *issue and PR comments* for its name, not only the tree — a
+  `git grep` across every tag came back clean here and was the wrong question.
 
 - Originally built in a Linux container, where `sysinfo`'s macOS CPU and network
   paths went unexercised. Both have since been run on macOS against a real

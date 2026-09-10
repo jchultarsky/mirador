@@ -327,11 +327,4 @@ mod tests {
         assert_eq!(panel.history.len(), 5);
         assert_eq!(panel.history.front(), Some(&45));
     }
-
-    #[test]
-    #[ignore = "superseded: the graph now takes the whole history"]
-    fn recent_never_over_reads_the_buffer() {
-        let mut panel = CpuPanel::new(CpuConfig::default());
-        panel.history.clear();
-    }
 }

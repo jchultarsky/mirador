@@ -930,7 +930,6 @@ fn wrapped_lines(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
 
 /// Rows the frame costs, re-exported so `max_height` reads the same as the
 /// other panels even though this one does not declare a maximum.
-#[allow(dead_code)]
 const _: u16 = FRAME_HEIGHT;
 
 #[cfg(test)]
