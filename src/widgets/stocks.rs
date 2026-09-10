@@ -224,6 +224,35 @@ impl StocksPanel {
     /// It surfaced when a Windows runner got a real 404 back for a made-up
     /// symbol and rendered it (#147).
     ///
+    /// A panel whose quotes come from nowhere, for tests in other modules.
+    ///
+    /// `new` resolves the real source and its first poll is immediate, so a
+    /// test that builds a panel through it has made an HTTP request before its
+    /// first assertion (#147). This takes the same path as `new` up to the
+    /// source and then hands the loop a fixed answer, so the board fills with
+    /// deterministic numbers and nothing leaves the process.
+    #[cfg(test)]
+    pub(crate) fn offline(config: StocksConfig, path: std::path::PathBuf) -> anyhow::Result<Self> {
+        struct Canned;
+        impl QuoteSource for Canned {
+            fn name(&self) -> &'static str {
+                "canned"
+            }
+            fn fetch(&self, symbol: &str) -> anyhow::Result<Quote> {
+                Ok(Quote {
+                    symbol: symbol.to_string(),
+                    price: 1234.56,
+                    previous_close: 1200.00,
+                    currency: Some("USD".into()),
+                    series: vec![1200.0, 1210.0, 1190.0, 1234.56],
+                    delayed: false,
+                })
+            }
+        }
+        let watchlist = Watchlist::load(path, &config.symbols)?;
+        Ok(Self::with_source(config, watchlist, Box::new(Canned)))
+    }
+
     /// The watchlist is loaded by the caller so that a bad file is still
     /// reported before an unknown source name, which is the order `new`
     /// always had.

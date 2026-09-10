@@ -187,6 +187,244 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Every panel, built with nothing behind it that leaves the process, and
+    /// with enough on screen to be worth measuring: seeded tasks and notes, a
+    /// canned watchlist and reading, three headlines, a calendar with events
+    /// tomorrow.
+    ///
+    /// Named alongside `WIDGET_NAMES` and checked against it, so a new widget
+    /// cannot be left out of the sweep without this failing to compile the
+    /// list it expects.
+    fn offline_panels(
+        dir: &std::path::Path,
+        config: &Config,
+    ) -> Vec<(&'static str, Box<dyn Panel>)> {
+        let today = jiff::Zoned::now().date();
+        let tomorrow = today.tomorrow().unwrap_or(today);
+        let ics = dir.join("sample.ics");
+        std::fs::write(
+            &ics,
+            format!(
+                "BEGIN:VCALENDAR\nVERSION:2.0\nBEGIN:VEVENT\nDTSTART:{d}T091500\nDTEND:{d}T093000\n\
+                 SUMMARY:Standup\nLOCATION:Zoom\nEND:VEVENT\nBEGIN:VEVENT\nDTSTART;VALUE=DATE:{d}\n\
+                 SUMMARY:Quarterly planning day\nEND:VEVENT\nEND:VCALENDAR\n",
+                d = tomorrow.strftime("%Y%m%d")
+            ),
+        )
+        .unwrap();
+        let story = |source: &str, title: &str| crate::feed::Story {
+            source: source.to_string(),
+            title: title.to_string(),
+            link: "https://example.test/story".to_string(),
+            published: None,
+        };
+        let stories = vec![
+            story(
+                "NASA",
+                "Anak Krakatau rumbles again as satellites watch the plume",
+            ),
+            story(
+                "PHYS.ORG",
+                "Some black holes grow much faster than their galaxies",
+            ),
+            story(
+                "ARS TECHNICA",
+                "A very long headline that has to wrap on any panel narrower than it",
+            ),
+        ];
+
+        let panels: Vec<(&'static str, Box<dyn Panel>)> = vec![
+            (
+                "clocks",
+                Box::new(
+                    clocks::ClocksPanel::new(config.clocks.clone(), dir.join("zones.toml"))
+                        .unwrap(),
+                ),
+            ),
+            (
+                "weather",
+                Box::new(weather::WeatherPanel::offline(config.weather.clone())),
+            ),
+            (
+                "todo",
+                Box::new(
+                    todo::TodoPanel::new(config.todo.clone(), dir.join("todos.toml")).unwrap(),
+                ),
+            ),
+            (
+                "notes",
+                Box::new(
+                    notes::NotesPanel::new(config.notes.clone(), dir.join("notes.toml")).unwrap(),
+                ),
+            ),
+            (
+                "stocks",
+                Box::new(
+                    stocks::StocksPanel::offline(config.stocks.clone(), dir.join("watchlist.toml"))
+                        .unwrap(),
+                ),
+            ),
+            (
+                "calendar",
+                Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
+            ),
+            (
+                "agenda",
+                Box::new(agenda::AgendaPanel::new(&config.agenda, ics)),
+            ),
+            (
+                "pomodoro",
+                Box::new(pomodoro::PomodoroPanel::new(config.pomodoro.clone())),
+            ),
+            ("watchlog", Box::new(watchlog::WatchLogPanel::new())),
+            (
+                "news",
+                Box::new(news::NewsPanel::offline(&config.news, stories)),
+            ),
+            ("cpu", Box::new(cpu::CpuPanel::new(config.cpu.clone()))),
+            (
+                "network",
+                Box::new(network::NetworkPanel::new(config.network.clone())),
+            ),
+            (
+                "calculator",
+                Box::new(calculator::CalculatorPanel::new(config.calculator)),
+            ),
+        ];
+        let listed: Vec<&str> = panels.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            listed, WIDGET_NAMES,
+            "the offline sweep must build every widget, in the same order"
+        );
+        panels
+    }
+
+    /// The one rendering fault a single-width render cannot see, found by
+    /// rendering two.
+    ///
+    /// A `Paragraph` handed a rect narrower than its text is cut by the
+    /// terminal, which leaves no mark — invariant 19's failure, and the clock's
+    /// date line had it for months at any width under 22. A buffer records
+    /// what the terminal kept, so the cut is invisible at that width alone.
+    /// It is not invisible across two: if a row at width W is exactly the first
+    /// W cells of the same row at W+1, and W+1 has something in cell W, then
+    /// content that would have extended past the edge was dropped without an
+    /// ellipsis. Two things that look the same are not cuts and are excused —
+    /// a whole value dropped at a space, which the grid does on purpose, and a
+    /// word that reappears at the head of the next row, which was wrapped.
+    ///
+    /// Pointed at the clock before its date was fixed, this reported
+    /// `THURSDAY 10 SEPTEMBE` at width 20; the day it was written it found the
+    /// small seconds cut to one digit at 40. Widths start where a panel can
+    /// hold a word at all.
+    #[test]
+    fn no_panel_cuts_a_value_silently_at_any_width() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let dir = std::env::temp_dir().join(format!("mirador-clip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config::default();
+        let gradients = config.theme.gradients();
+        let height = 14u16;
+
+        let cells = |panel: &mut Box<dyn Panel>, width: u16| -> Vec<Vec<String>> {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    panel.render(
+                        frame,
+                        area,
+                        crate::panel::RenderContext {
+                            theme: &config.theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .collect()
+                })
+                .collect()
+        };
+
+        let mut findings = Vec::new();
+        for (name, mut panel) in offline_panels(&dir, &config) {
+            // The canned quote source and the calendar read both answer on a
+            // thread; give them a moment and let `tick` collect the result.
+            for _ in 0..4 {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                panel.tick();
+            }
+            let mut prev = cells(&mut panel, 6);
+            for width in 7..=100u16 {
+                let cur = cells(&mut panel, width);
+                let w = usize::from(width) - 1;
+                for (y, (narrow, wide)) in prev.iter().zip(cur.iter()).enumerate() {
+                    let narrow_text: String = narrow.concat();
+                    if narrow_text.trim().is_empty() {
+                        continue;
+                    }
+                    let overflowed = wide[w].trim() != "";
+                    let same_prefix = narrow[..] == wide[..w];
+                    let marked = narrow_text.trim_end().ends_with('\u{2026}');
+                    // A rule, a track or a meter fills whatever width it gets;
+                    // being a prefix of itself is not a cut.
+                    let distinct = narrow
+                        .iter()
+                        .filter(|c| c.trim() != "")
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len();
+                    // A cut through a word or a number, as opposed to a whole
+                    // value dropped at a space.
+                    let mid_token = narrow[w - 1].trim() != "";
+                    // A labelled rule — `NEXT HOURS ────` — grows by one more
+                    // of the same glyph at each width. The same glyph carrying
+                    // on past the edge is a fill, not a lost character; a
+                    // letter or digit repeating (`SEPTEMBE` into `M`) is not.
+                    let fill_run =
+                        wide[w] == narrow[w - 1] && !wide[w].chars().all(char::is_alphanumeric);
+                    // The cut character turning up at the head of the next row
+                    // is a wrap, not a loss.
+                    let wrapped = prev.get(y + 1).is_some_and(|next| {
+                        next.concat().trim_start().starts_with(wide[w].as_str())
+                    });
+                    if overflowed
+                        && same_prefix
+                        && !marked
+                        && distinct > 1
+                        && mid_token
+                        && !wrapped
+                        && !fill_run
+                    {
+                        findings.push(format!(
+                            "{name} at width {w} row {y}: {:?} continues as {:?}",
+                            narrow_text.trim_end(),
+                            wide[w]
+                        ));
+                    }
+                }
+                prev = cur;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            findings.is_empty(),
+            "{} silent cut(s) — text lost past the edge with no ellipsis:\n  {}",
+            findings.len(),
+            findings.join("\n  ")
+        );
+    }
+
     /// Not a test: renders every panel across a width sweep so clipping can be
     /// seen rather than reasoned about.
     /// Run with `cargo test dump_width_sweep -- --ignored --nocapture`.

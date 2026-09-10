@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The clock's small seconds could be cut to one digit.** When the panel is
+  too narrow for the full block-numeral time, it draws `HH:MM` in numerals with
+  the seconds small beside them — and the numerals were sized without counting
+  the three cells the seconds take, so at some widths the terminal cut `26`
+  down to `2`. The pair is now sized together, and where even that does not
+  fit the clock steps straight down to plain text with every digit intact
+  rather than to numerals with the seconds silently missing.
+
 ## [1.10.1] - 2026-09-09
 
 ### Changed

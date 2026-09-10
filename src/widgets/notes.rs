@@ -627,17 +627,23 @@ impl NotesPanel {
             rows[0],
         );
 
-        let mut dates = vec![Span::styled(
+        // Two labelled values, assembled so each drops whole: `written 10 Sep
+        // 202` is a year nobody wrote. The gap rides with the part it
+        // introduces, as everywhere else.
+        let mut dates = vec![vec![Span::styled(
             format!("written {}", note.created.strftime("%d %b %Y")),
             Style::default().fg(theme.muted),
-        )];
+        )]];
         if let Some(updated) = note.updated {
-            dates.push(Span::styled(
+            dates.push(vec![Span::styled(
                 format!("   edited {}", updated.strftime("%d %b %Y")),
                 Style::default().fg(theme.muted),
-            ));
+            )]);
         }
-        frame.render_widget(Paragraph::new(Line::from(dates)), rows[1]);
+        frame.render_widget(
+            Paragraph::new(crate::grid::assemble(dates, rows[1].width)),
+            rows[1],
+        );
 
         if rows[2].height == 0 {
             return;

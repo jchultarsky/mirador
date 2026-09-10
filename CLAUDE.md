@@ -346,10 +346,25 @@ map, that one is the procedure.
     `every_hand_built_composite_line_in_a_widget_is_accounted_for` counts what
     is left and makes a new one justify itself.
 
-    **A render-level sweep cannot check this, and it was tried first.** A
-    buffer records what the terminal *kept*, so an overflowing line and a line
-    that happens to end there are the same bytes. Overflow has to be caught
-    where the line is built.
+    **A render-level sweep at one width cannot check this, and it was tried
+    first.** A buffer records what the terminal *kept*, so an overflowing line
+    and a line that happens to end there are the same bytes. Overflow has to be
+    caught where the line is built — or, since 2026-09-10, **by rendering at two
+    adjacent widths and differencing them.** If a row at width W is exactly the
+    first W cells of the same row at W+1, and W+1 has something in cell W, the
+    terminal cut it and nothing marked the cut. That is
+    `no_panel_cuts_a_value_silently_at_any_width` in `widgets/mod.rs`: every
+    panel built offline, rendered from 6 to 100 columns, with four things
+    excused because they look like cuts and are not — a whole value dropped at
+    a space (the grid, by design), a word reappearing at the head of the next
+    row (a wrap), a rule or track growing by one more of the same glyph (a
+    fill), and anything ending in `…`. Pointed at the clock before its date was
+    fixed it reports `THURSDAY 10 SEPTEMBE` at width 20; the day it was written
+    it found the small seconds cut to one digit at 40 columns, which the review
+    that found the date had looked straight past. The sweep runs in under a
+    second, and every panel it builds is offline — `WeatherPanel::offline`,
+    `StocksPanel::offline` and `NewsPanel::offline` exist for it, because
+    `build()` reaches the network and reads the user's own zone file.
 
 ## Visual system
 

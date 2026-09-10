@@ -119,6 +119,34 @@ impl Drop for NewsPanel {
 }
 
 impl NewsPanel {
+    /// A panel already holding `stories`, with no fetch thread behind it, for
+    /// tests in other modules. `new` spawns the thread and its first act is to
+    /// read every feed; this builds the same panel around a finished state, so
+    /// mastheads, headlines and the age line render with nothing leaving the
+    /// process.
+    #[cfg(test)]
+    pub(crate) fn offline(config: &NewsConfig, stories: Vec<Story>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(State {
+                stories: stories.clone(),
+                fetched: Some(Instant::now()),
+                error: None,
+            })),
+            refresh: Arc::new(Mutex::new(false)),
+            stop: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(1)),
+            seen: 1,
+            selected: ListState::default(),
+            showing_link: None,
+            open_command: config.open_command.clone(),
+            action: None,
+            drawn: 0,
+            shown: stories,
+            fetched: Some(Instant::now()),
+            failing: None,
+        }
+    }
+
     pub fn new(config: &NewsConfig) -> Self {
         let state = Arc::new(Mutex::new(State::default()));
         let refresh = Arc::new(Mutex::new(false));
