@@ -5,6 +5,7 @@
 //! Mirador and are started only when the layout actually places them.
 
 pub mod agenda;
+pub mod battery;
 pub mod calculator;
 pub mod calendar;
 pub mod clocks;
@@ -39,6 +40,7 @@ pub const WIDGET_NAMES: &[&str] = &[
     "cpu",
     "memory",
     "network",
+    "battery",
     "calculator",
 ];
 
@@ -81,6 +83,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "memory" => Box::new(memory::MemoryPanel::new(config.memory.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
+        "battery" => Box::new(battery::BatteryPanel::new(config.battery.clone())),
         "calculator" => Box::new(calculator::CalculatorPanel::new(config.calculator)),
         _ => {
             let Some(plugin) = config.plugin(name) else {
@@ -304,6 +307,20 @@ mod tests {
             (
                 "network",
                 Box::new(network::NetworkPanel::new(config.network.clone())),
+            ),
+            (
+                "battery",
+                Box::new(battery::BatteryPanel::with_reading(
+                    config.battery.clone(),
+                    Some(battery::Reading {
+                        charge_pct: 80,
+                        flow: battery::Flow::Discharging,
+                        remaining: Some(std::time::Duration::from_mins(192)),
+                        health_pct: Some(100),
+                        cycles: Some(3),
+                        watts: 12.4,
+                    }),
+                )),
             ),
             (
                 "calculator",

@@ -18,7 +18,7 @@ A *mirador* is a lookout — the tower you climb to see everything at once.
 
 ![All fourteen mirador panels on a wide terminal, in use: a block-numeral clock, two months of calendar, weather with an hourly forecast, the task list, an agenda of upcoming events, notes, a news panel of headlines, a watch log, a calculator, a pomodoro timer, and a market watchlist beside live CPU, memory and network graphs. Focus moves between panels, a task is typed in and added to the list, the panel picker switches a panel off and the grid reflows around it, arrange mode moves the task panel along its row and up into the row above until it takes a row of its own, the help overlay opens and scrolls, three sums are typed into the calculator and feed up its tape, and the pomodoro timer starts counting down](https://raw.githubusercontent.com/jchultarsky/mirador/main/docs/demo.gif)
 
-*All fourteen panels on a first run, at 200x50 — wide enough that nothing has to fall
+*The fourteen default panels on a first run, at 200x50 — wide enough that nothing has to fall
 back. The lit frame is the focused panel, with its own keys in its bottom
 border; every other panel is dimmed, so exactly one thing is at full brightness.*
 
@@ -781,6 +781,20 @@ changes, not merely because time passed.
 Every buffer grows to fill its panel, so `history` is a floor on what is kept
 rather than a cap on what a wider panel can draw.
 
+### Battery
+
+For laptops. The charge in block numerals with the meter drawn beneath it, a
+label saying which way things are going — `ON BATTERY`, `CHARGING`, `PLUGGED
+IN`, `FULL` — the time left, or to full, in the border, and a line of detail:
+health, cycle count, power draw. Nothing is said twice. Brass while there is
+plenty; amber below 20% and red below 10% only while running on the battery,
+since a low battery on mains is nothing to be told about. Below 10% and
+discharging it is the one battery fact that gets worse if nobody acts, so the
+status bar says so.
+
+It is **not in the default layout**: a desktop would open on `No battery`, and
+the default is a dashboard for any machine. Press `w` and switch it on.
+
 ## Command line
 
 Every flag is optional; with none of them mirador opens the dashboard.
@@ -961,6 +975,7 @@ rather than failing quietly.
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `memory` | Memory in use, a moving chart, and a swap meter |
 | `network` | Receive and transmit rates as moving charts |
+| `battery` | Charge, which way it is going, and how long that gives you — laptops; not placed by default |
 
 ### External panels (optional)
 

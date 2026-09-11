@@ -392,6 +392,29 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Battery panel settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BatteryConfig {
+    /// Seconds between readings. A battery moves slowly; thirty is plenty.
+    pub sample_secs: u64,
+    /// Below this charge, running on the battery, the figure turns amber.
+    pub warn_below_pct: u16,
+    /// Below this charge, running on the battery, the figure turns red and the
+    /// status bar carries an alert.
+    pub alert_below_pct: u16,
+}
+
+impl Default for BatteryConfig {
+    fn default() -> Self {
+        Self {
+            sample_secs: 30,
+            warn_below_pct: 20,
+            alert_below_pct: 10,
+        }
+    }
+}
+
 /// Network chart settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

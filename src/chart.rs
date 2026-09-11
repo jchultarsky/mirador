@@ -20,6 +20,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 /// Number of entries in a baked gradient: one per percentage point.
 const STEPS: usize = 101;
@@ -283,6 +284,22 @@ impl<'a> BrailleGraph<'a> {
 /// bar at 40% shows the cool end of the ramp and a bar at 95% runs the whole
 /// way to hot. The unfilled tail keeps the same glyph in the track colour, so
 /// the meter's footprint never changes as the value moves.
+/// A flat meter: `percent` of `width` cells filled in one colour, the rest in
+/// the track colour. The pomodoro's progress bar and the battery's charge bar
+/// are both this; the graded version, coloured by level, is [`meter_spans`].
+pub fn meter_line(percent: u16, width: u16, fill: Color, track: Color) -> Vec<Span<'static>> {
+    let width = usize::from(width);
+    let filled = usize::from(percent.min(100)) * width / 100;
+    (0..width)
+        .map(|i| {
+            Span::styled(
+                "■",
+                Style::default().fg(if i < filled { fill } else { track }),
+            )
+        })
+        .collect()
+}
+
 pub fn meter_spans(
     value: u64,
     max: u64,

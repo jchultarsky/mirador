@@ -48,9 +48,9 @@ pub use layout::{Layout, LayoutPanel, LayoutRow};
 pub use plugins::PluginConfig;
 #[allow(unused_imports)]
 pub use widgets::{
-    AgendaConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig,
-    MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig,
-    TodoConfig, WeatherConfig,
+    AgendaConfig, BatteryConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig,
+    CpuConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig,
+    StocksConfig, TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -83,6 +83,7 @@ pub struct Config {
     pub cpu: CpuConfig,
     pub memory: MemoryConfig,
     pub network: NetworkConfig,
+    pub battery: BatteryConfig,
 }
 
 /// Global behaviour.
@@ -827,6 +828,14 @@ mod tests {
         // A widget nobody can see is a widget nobody knows exists. The startup
         // hint names what is missing, but the default should have nothing to
         // name: shipping a dashboard that hides a third of itself is a poor
+        // Widgets deliberately left out of the default, each with its reason.
+        // The default is a dashboard for any machine; a panel that is empty on
+        // most of them would be a poor first run for everyone to save a
+        // discovery step for some. `w` places them, and the README names them.
+        const UNPLACED_BY_DEFAULT: &[(&str, &str)] = &[(
+            "battery",
+            "laptops only — a desktop would open on `No battery`",
+        )];
         // first run, and this is exactly how notes and stocks went unseen.
         let layout = Layout::default();
         let placed: Vec<&str> = layout
@@ -835,7 +844,20 @@ mod tests {
             .flat_map(|r| r.panels.iter().map(|p| p.widget.as_str()))
             .collect();
 
+        for (widget, _) in UNPLACED_BY_DEFAULT {
+            assert!(
+                crate::widgets::WIDGET_NAMES.contains(widget),
+                "`{widget}` is excused from the default layout but is not a widget"
+            );
+            assert!(
+                !placed.contains(widget),
+                "`{widget}` is placed after all; drop it from the excused list"
+            );
+        }
         for widget in crate::widgets::WIDGET_NAMES {
+            if UNPLACED_BY_DEFAULT.iter().any(|(name, _)| name == widget) {
+                continue;
+            }
             assert!(
                 placed.contains(widget),
                 "the default layout does not place `{widget}`"

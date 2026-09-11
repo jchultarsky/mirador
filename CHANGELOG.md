@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A battery panel, for laptops.** The charge in block numerals with the
+  meter beneath it, a label for which way things are going, the time left or
+  to full in the border, and a line of detail — health, cycles, power draw.
+  Amber below 20%
+  and red below 10% only while running on the battery, and below 10% the
+  status bar carries an alert. Not placed in the default layout, since a
+  desktop would open on `No battery`; `w` switches it on. `[battery]` in the
+  config sets the two thresholds and the sample interval.
+
 ## [1.11.0] - 2026-09-11
 
 ### Added
