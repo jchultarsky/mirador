@@ -88,8 +88,11 @@ macro_rules! calculator_bindings {
     ($($tape:expr),* $(,)?) => {
         &[
             $($tape,)*
-            Binding::primary("0-9 + - * /", "type"),
-            Binding::primary("Enter", "keep"),
+            // The point and the equals sign have always worked; the labels
+            // left them out, so `?` and the README disagreed about what the
+            // panel takes. The README was right.
+            Binding::primary("0-9 . + - * /", "type"),
+            Binding::primary("Enter / =", "keep"),
             Binding::primary("c", "clear"),
             Binding::extra("( )", "group"),
             Binding::extra("x", "multiply"),
@@ -107,7 +110,7 @@ const ENTRY_BINDINGS: &[Binding] = calculator_bindings!();
 /// Once there is a tape, its result actions outrank another reminder that the
 /// number keys type. At the default width this puts `y copy \u{00b7} p paste` in
 /// the border together instead of leaving both behind `?`.
-const TAPE_BINDINGS: &[Binding] = calculator_bindings!(
+pub(crate) const TAPE_BINDINGS: &[Binding] = calculator_bindings!(
     Binding::primary("y", "copy"),
     Binding::primary("p", "paste"),
 );

@@ -69,7 +69,7 @@ impl Counts {
 /// once, so a key missing here is a key nobody can discover.
 /// `every_documented_key_works_and_every_working_key_is_documented` holds the
 /// two halves together.
-const BINDINGS: &[Binding] = &[
+pub(crate) const BINDINGS: &[Binding] = &[
     Binding::primary("a", "add"),
     Binding::primary("↵", "edit"),
     Binding::primary("space", "done"),

@@ -170,7 +170,7 @@ ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 calc.rs      the calculator's parser: precedence, brackets, bounded depth
 docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
-             drawings, which are the other documentation nothing compiles
+             drawings and key tables, the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, network, calculator
 ```
@@ -1060,6 +1060,18 @@ layout hurt.
   width guard added with it only checks that a box is a rectangle, not what the
   box says. After changing what a panel draws, grep the README samples for it.
   Two of them were stale within an hour of 1.10.0 — the tasks summary and this.
+
+  The README's *key tables* are a different matter and are now checked:
+  `every_key_table_in_the_readme_matches_the_bindings_it_describes` compares
+  each table — global, tasks, pomodoro, calculator; the other panels document
+  keys in prose — against the `Binding` labels in both directions. A key the
+  README names must be one the panel declares, and every *primary* key must be
+  in the table; extras may be left out, being aliases. Both sides spell keys as
+  prose (`j / k`, `+/-`, `` `1` – `9` ``, `` `Enter` or `=` ``), so the
+  comparison is between tokens, and only an en dash joins a range — the minus
+  key is spelled with the ASCII one. On its first run it found the calculator
+  taking `.` and `=`, documented in the README, with neither in the labels `?`
+  shows; the labels were wrong, not the README.
 
 - **The help overlay's key column is sized to the keys on show**, not to a
   hardcoded 12 — which was the width of the longest key in the program, so `q`
