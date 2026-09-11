@@ -1139,8 +1139,9 @@ narrower paragraph is still the whole paragraph, where a dropped column is a
 fact the reader no longer has.
 
 The knock-on is worth knowing rather than fixing: jump keys only go up to `9`,
-and slots are numbered in row-major order, so the last **four** — `pomodoro`,
-`stocks`, `cpu` and `network` — have none.
+and slots are numbered in row-major order, so the last **five** — `pomodoro`,
+`stocks`, `cpu`, `memory` and `network` — have none (four, until `memory`
+joined the row on 2026-09-11).
 
 This paragraph first said `pomodoro` joined `cpu` and `network`. That undercounts
 by one and names the wrong set: adding the calculator pushed `stocks` past the

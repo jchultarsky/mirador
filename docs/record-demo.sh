@@ -22,7 +22,7 @@ OUT="${1:-$ROOT/docs/demo.gif}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mirador-demo.XXXXXX")"
 SESSION="mirador-demo-$$"
 
-# Wide enough for thirteen panels to be themselves rather than to survive. mirador
+# Wide enough for fourteen panels to be themselves rather than to survive. mirador
 # degrades gracefully — the clock drops its block numerals in a short row, the
 # forecast sheds columns, the watchlist drops its sparkline — and a recording
 # made in a cramped terminal shows every one of those fallbacks instead of the
@@ -187,7 +187,9 @@ key a 0.7                                        # add a task
 type_text "Renew the domain"
 key Enter 1.8                                    # and it is in the list
 
-# `End` selects the last widget, `network`. A re-added widget goes to the
+# `End` selects the last widget, `calculator` (it said `network` here from the
+# day the calculator joined until 2026-09-11; the key was right, the comment
+# was not). A re-added widget goes to the
 # emptiest row, so removing the *last* one is the case where it comes back
 # exactly where it was; any other choice reshuffles the row, which reads as a
 # glitch rather than as a feature. The panels that stay put are carried across
@@ -237,8 +239,8 @@ hold 0.6
 key Enter 1.2
 
 # Started last so the recording ends on something moving. Reached with Tab
-# rather than by number: there are thirteen panels and only nine jump keys, and
-# the pomodoro is one of the four past the end. It sits immediately after the
+# rather than by number: there are fourteen panels and only nine jump keys, and
+# the pomodoro is one of the five past the end. It sits immediately after the
 # calculator in layout order, so one Tab lands on it — and if that ever stops
 # being true, this ends on the wrong panel silently, which is exactly how `6`
 # came to mean notes.
