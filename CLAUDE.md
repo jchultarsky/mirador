@@ -2040,13 +2040,18 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.10.2` is released**, as a GitHub release with binaries for macOS
+- **`1.11.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It carries what the silent-clip sweep found
-  the day it was written — the clock's small seconds cut to one digit at
-  40 columns, and four narrower cuts — and nothing else user-visible; the
-  test-quality pass behind it (the sweep, fourteen input and form tests,
-  the protocol document as wire corpus) rides along. 1.10.1 carried one
+  and published on crates.io. It is the first feature release since 1.9.0:
+  the `memory` panel — the fourteenth widget, and the missing quarter of
+  "what compute is available" — three bundled themes completing two pairs
+  (`everforest`, `rose-pine`, `rose-pine-moon`; nineteen ship), the
+  `grid::assemble` boundary fix the memory panel's tests found, and a demo
+  re-recorded to show fourteen panels. 1.10.2 carried what the silent-clip
+  sweep found the day it was written — the clock's small seconds cut to one
+  digit at 40 columns, and four narrower cuts — and nothing else
+  user-visible; the test-quality pass behind it (the sweep, fourteen input
+  and form tests, the protocol document as wire corpus) rode along. 1.10.1 carried one
   change — the notes panel stopping repeating the count its border already
   shows, which is the screen-tightening pass finding a panel it had missed. 1.10.0, hours
   earlier, was that pass itself — the silently-cut clock date being the
