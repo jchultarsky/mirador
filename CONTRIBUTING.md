@@ -89,7 +89,11 @@ touch:
    `Default for Layout` in `src/config/layout.rs` and the `[layout]` block in
    `assets/default_config.toml` describe the same dashboard by different
    routes, and two tests (`the_default_layout_places_every_widget` and the
-   shipped-layout comparison) fail until both know your widget.
+   shipped-layout comparison) fail until both know your widget. The one
+   alternative is to leave it out *on purpose*: if the panel would be empty on
+   most machines — the battery is the case — add it to the excused list in
+   that test with the reason beside it, and say so in the README. An excuse
+   without a reason is the thing the test refuses.
 6. Document the widget in `assets/default_config.toml` and in the README's
    widget table.
 7. Add tests for the logic that is not drawing — parsing, formatting,
