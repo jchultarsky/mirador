@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Three more bundled themes, completing two pairs.** `everforest` is the
+  dark half of `everforest-light`; `rose-pine` and `rose-pine-moon` are the two
+  dark modes of the palette `rose-pine-dawn` is the daylight of. Each mirrors
+  its sibling role for role and cites the upstream values it took. Nineteen
+  themes ship.
+
 - **A memory panel.** Memory in use as a percentage, a moving braille chart
   of it, and — on a machine that has swap — a swap meter that `s` hides and
   shows. It is `cpu`'s sibling in every respect and sits beside it on the

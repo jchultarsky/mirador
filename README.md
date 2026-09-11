@@ -1083,7 +1083,7 @@ Four are mirador's own:
 | `high-contrast` | Bright rooms, projectors, low vision. `muted` is deliberately *not* dim — faint grey is the first thing to vanish on a washed-out screen, so de-emphasis is carried by hue instead |
 | `ansi` | The sixteen ANSI colours and nothing else, so it follows whatever palette your terminal already uses and works with no true-colour support |
 
-Twelve more are ports of palettes you may already be running in your editor,
+Fifteen more are ports of palettes you may already be running in your editor,
 terminal or multiplexer, so mirador can match the rest of your screen — seven
 dark, five light:
 
@@ -1100,7 +1100,10 @@ dark, five light:
 | `solarized-dark` | [Solarized](https://ethanschoonover.com/solarized/) dark — designed against measured contrast rather than by eye, and the calmest of the ports |
 | `solarized-light` | The daylight half of the same design — Solarized shares its accents across both modes and swaps only the greys |
 | `everforest-light` | [Everforest](https://github.com/sainnhe/everforest) light — a green-based comfort palette; even its greys lean toward the forest |
+| `everforest` | The same forest after dark — Everforest's medium dark variant, the palette `everforest-light` is the daylight of |
 | `rose-pine-dawn` | [Rosé Pine](https://rosepinetheme.com/) Dawn — soho vibes at first light; rose for the instruments, pine standing in for green |
+| `rose-pine` | [Rosé Pine](https://rosepinetheme.com/) main — the darkest of the three; rose for the instruments, pine standing in for green |
+| `rose-pine-moon` | Rosé Pine's middle variant — dark but lifted, the rose warmed toward coral, for a terminal that is not quite black |
 
 These are ports, not reinterpretations: the hex values come from each palette's
 own specification, and the theme file cites its source. Body text stays `reset`

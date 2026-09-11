@@ -529,15 +529,20 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
 
 ## Named themes — built
 
-`theme = "name"` resolves through `themes.rs`. Sixteen themes are `include_str!`-
+`theme = "name"` resolves through `themes.rs`. Nineteen themes are `include_str!`-
 baked and anything in `<config>/mirador/themes/<name>.toml` is found first, so a
 bundled theme can be replaced without renaming it.
 
 Four are mirador's own (`default`, `default-light`, `high-contrast`, `ansi`).
-Twelve are **ports** of palettes from elsewhere — `nord`, `gruvbox`,
+Fifteen are **ports** of palettes from elsewhere — `nord`, `gruvbox`,
 `gruvbox-light`, `dracula`, `catppuccin-mocha`, `catppuccin-latte`,
 `tokyo-night`, `kanagawa`, `solarized-dark`, `solarized-light`,
-`everforest-light`, `rose-pine-dawn`. The 2026-08-25 batch of six was chosen
+`everforest`, `everforest-light`, `rose-pine`, `rose-pine-moon`,
+`rose-pine-dawn`. The 2026-09-11 batch of three completed two pairs that had
+shipped light-first: `everforest-light` and `rose-pine-dawn` were the daylight
+halves of palettes whose dark modes are the ones people actually run, and a
+port that mirrors its sibling role for role is cheap to add and easy to
+check. The 2026-08-25 batch of six was chosen
 deliberately light-heavy (five light, one dark) because the first six ports
 were all dark and the owner asked for variety. The `t` picker sorts names
 alphabetically — verified by opening it, not assumed from `BUNDLED`'s order —
@@ -548,7 +553,7 @@ if a palette reads badly; never adjust the palette. A light port mirrors its
 dark sibling's mapping role for role, using the palette's own light-mode
 answers (gruvbox's "faded" set, Latte's darker renderings), and its gradients
 *start light* so an idle graph recedes into a pale background — the
-`default-light` rule. All twelve keep `text = "reset"`, so body text still
+`default-light` rule. All fifteen keep `text = "reset"`, so body text still
 follows the terminal's own foreground — invariant 8 is not suspended because
 a theme has a name.
 

@@ -52,8 +52,8 @@ pub(crate) const GLOBAL: &[Binding] = &[
     // happened to the resize keys below: shipped, useful, and undiscoverable.
     Binding::primary("m", "arrange"),
     // Behind `m` for the same reason `m` is behind `w`, and a primary for the
-    // same reason too: sixteen themes ship, and a theme nobody can find is
-    // sixteen files of decoration.
+    // same reason too: nineteen themes ship, and a theme nobody can find is
+    // nineteen files of decoration.
     Binding::primary("t", "theme"),
     // Promoted from `extra` at the owner's request, and the comment on `m`
     // above had already named the reason: shipped, useful, and undiscoverable.

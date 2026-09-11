@@ -89,8 +89,17 @@ const BUNDLED: &[(&str, &str)] = &[
         include_str!("../assets/themes/solarized-light.toml"),
     ),
     (
+        "everforest",
+        include_str!("../assets/themes/everforest.toml"),
+    ),
+    (
         "everforest-light",
         include_str!("../assets/themes/everforest-light.toml"),
+    ),
+    ("rose-pine", include_str!("../assets/themes/rose-pine.toml")),
+    (
+        "rose-pine-moon",
+        include_str!("../assets/themes/rose-pine-moon.toml"),
     ),
     (
         "rose-pine-dawn",

@@ -1,0 +1,61 @@
+# Rosé Pine Moon — the palette's middle variant: dark, a little lifted, the
+# rose warmed toward coral and the pine brightened, for a terminal that is not
+# quite black.
+#
+# The same role-for-role mapping as `rose-pine` and `rose-pine-dawn`; only the
+# values change, as Moon itself only changes values. See `rose-pine.toml` for
+# the reasoning behind the mapping and the one judgement call, `success`.
+#
+# Values from rose-pine/neovim's palette.lua (the canonical role table), moon.
+
+border         = "highlight-high"
+border_focused = "rose"
+rule           = "overlay"
+title          = "rose"
+text           = "reset"
+muted          = "subtle"
+label          = "foam"
+accent         = "rose"
+key            = "iris"
+success        = "pine"
+warning        = "gold"
+error          = "love"
+track          = "highlight-med"
+
+[palette]
+overlay        = "#393552"
+highlight-low  = "#2a283e"
+highlight-med  = "#44415a"
+highlight-high = "#56526e"
+subtle         = "#908caa"
+love           = "#eb6f92"
+gold           = "#f6c177"
+rose           = "#ea9a97"
+pine           = "#3e8fb0"
+foam           = "#9ccfd8"
+iris           = "#c4a7e7"
+
+[cpu_gradient]
+start = "#393552"
+mid   = "#f6c177"
+end   = "#eb6f92"
+
+[rx_gradient]
+start = "#393552"
+mid   = "#9ccfd8"
+end   = "#3e8fb0"
+
+[tx_gradient]
+start = "#393552"
+mid   = "#ea9a97"
+end   = "#c4a7e7"
+
+[gain_gradient]
+start = "#393552"
+mid   = "#3e8fb0"
+end   = "#3e8fb0"
+
+[loss_gradient]
+start = "#393552"
+mid   = "#eb6f92"
+end   = "#eb6f92"
