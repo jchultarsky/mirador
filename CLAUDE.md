@@ -109,13 +109,30 @@ bottom, because nothing errors. `-e` keeps the escape sequences, which is the
 only way to prove a colour bug; a capture of black-on-black shows nothing
 either way.
 
+**Showing the owner a state this machine cannot be in** — a battery at 7%
+on a MacBook that is plugged in, a die at 97°C on an idle one — is done with a
+*temporary* environment hook patched into the panel's constructor on the
+working branch (`MIRADOR_FAKE_BATTERY`, `MIRADOR_FAKE_TEMP`), a release
+build, `-e` captures, and the patch removed before the commit; `grep -c` the
+hook's name and expect zero, the same discipline as the allocation counter's
+relaxed `unsafe_code` lint. Convert the captures to HTML with the escape
+sequences turned into spans so the colours survive the trip, because the
+owner judges on sight and a plain-text capture shows a full meter and an
+empty one as the same row of `■`. The battery's first capture is why: it read
+fine as text and, coloured, said `PLUGGED IN` twice.
+
 **A test that cannot fail is documentation with a `#[test]` on it.** The id
 reuse bug shipped with `ids_are_unique_and_survive_deletion` sitting directly
 on top of it: the test compared the new id against the *surviving* task rather
 than the *removed* one, so it passed throughout. When you fix a bug that had a
 test nearby, check that the test would have caught it — break the fix on
 purpose and watch it go red. Twice now that check was the difference between a
-real test and a reassuring one.
+real test and a reassuring one. A third instance arrived with the battery
+panel: an assertion that *some* row ended in `%` was meant to check the small
+percent beside the numerals, and was satisfied by the detail row's
+`health 100%` — it passed with the `%` blanked. The fix is always the same:
+assert about the thing the change actually moves (the row that also contains
+a numeral), and prove it by breaking the code.
 
 ## Architecture
 
@@ -183,7 +200,13 @@ yanking the keyboard away from what the user was typing in.
 
 Adding a widget: implement `Panel`, add a config struct to `config/widgets.rs`,
 add the name to `WIDGET_NAMES` and an arm to `build()` in `widgets/mod.rs`,
-document it in `assets/default_config.toml` and the README. Nothing else needs
+give it a `#[cfg(test)]` constructor that reads nothing and add that to
+`offline_panels` beside it (the silent-clip sweep builds every panel from that
+list, and the list asserts it matches `WIDGET_NAMES`, so it fails loudly until
+it knows the widget), place it in the default layout *or* excuse it by name
+with a reason in `the_default_layout_places_every_widget`, document it in
+`assets/default_config.toml` and the README, and bump the comment count that
+invariant 16 and `layout_edit`'s `CITED` both quote. Nothing else needs
 to know. `CONTRIBUTING.md` has the same list with more detail — this one is the
 map, that one is the procedure.
 
@@ -376,7 +399,10 @@ map, that one is the procedure.
     that found the date had looked straight past. The sweep runs in under a
     second, and every panel it builds is offline — `WeatherPanel::offline`,
     `StocksPanel::offline` and `NewsPanel::offline` exist for it, because
-    `build()` reaches the network and reads the user's own zone file.
+    `build()` reaches the network and reads the user's own zone file, and
+    `BatteryPanel::canned` and `TemperaturePanel::canned` exist for it because
+    a desktop or a CI runner has no battery and reports no sensors, and a
+    sweep over an empty panel checks nothing.
 
 ## Visual system
 
@@ -1199,7 +1225,11 @@ This paragraph said "three rows … all ten panels" until that re-check. It was
 true when written and quietly stopped being true when the agenda and news panels
 joined the default layout — nothing in the build notices, because no test asserts
 the shipped `[layout]` has any particular size. If you add a panel to
-`assets/default_config.toml`, this is the sentence that goes stale.
+`assets/default_config.toml`, this is the sentence that goes stale. It goes
+stale the other way too: the README's caption said "All fourteen panels" until
+the battery and temperature panels made sixteen widgets of which fourteen are
+placed, and "all" stopped being true without a number changing. It now says
+"the fourteen default panels".
 
 **`layout_edit` has two paths and the split matters.** Numbers-only changes are
 still one-line edits, because rebuilding a row would reflow a hand-aligned
@@ -2166,7 +2196,8 @@ and had to be added back was the one that did not.
   Both remain runnable by hand from a machine with the right credentials —
   the workflows add a path, they do not close one.
 
-  **Both have now cut real releases — 1.10.0 and 1.10.1, on 2026-09-09.**
+  **Both have now cut real releases — five of them, 1.10.0 through 1.12.0,
+  between 2026-09-09 and 2026-09-11.**
   Until then they had only been smoke-tested against an already-released tag,
   where both correctly *refused*; a refusal proves the guard, not the path.
   The tag push and the Trusted Publishing exchange are the two steps only a
@@ -2191,7 +2222,16 @@ and had to be added back was the one that did not.
   notes: a set that is empty, or merely not the set you meant, satisfies every
   condition asked of it.
 
-    **`main` is protected, so "commit" there means *merged*, not committed
+  **A PR stacked on another PR's branch dies with it.** `gh pr merge
+  --delete-branch` on the base closes the stacked PR automatically, and a
+  closed PR cannot be retargeted — the API refuses with "Cannot change the
+  base branch of a closed pull request". Either retarget the stacked PR to
+  `main` *before* merging its base, or accept that it comes back as a new
+  number: rebase the branch (its base's commits drop as already upstream),
+  force-push, open again. The temperature panel is #249 closed and #250
+  merged for exactly this reason.
+
+  **`main` is protected, so "commit" there means *merged*, not committed
   locally.** The version bump reaches `main` through a PR like anything else,
   and the tag belongs on the squashed commit that lands. Tagging the local
   commit first appears to work — the tag pushes, the workflow runs, the
@@ -2211,9 +2251,15 @@ and had to be added back was the one that did not.
   gh attestation verify --repo jchultarsky/mirador mirador-aarch64-apple-darwin.tar.gz
   ```
 
-  Two traps when checking it. `gh attestation verify` prints its success banner
+  Three traps when checking it. `gh attestation verify` prints its success banner
   only to a TTY, so redirecting it gives an empty file that looks like a
-  failure; and `$?` after a pipe reports the *pipe's* exit status, not `gh`'s.
+  failure; `$?` after a pipe reports the *pipe's* exit status, not `gh`'s; and
+  on the owner's Mac a verify that is fed relative paths can be handed files
+  that are not there — `ls` is eza with icons and colour, so `ls | grep name`
+  found nothing for files that existed, and a `cd` inside a scripted shell
+  call was reset before the verify ran. 1.12.0's first check reported both
+  real artifacts as failing that way. Download with `--dir`, test each file
+  with `[ -s path ]`, and verify by absolute path.
   Confirm the check is real by pointing it at a repo that did not build the
   artifact — that must exit 1 with a 404. Nothing else is manual — targets, checksums,
   installers and release notes are all the workflow's job.
