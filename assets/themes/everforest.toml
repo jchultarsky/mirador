@@ -1,0 +1,67 @@
+# Everforest — a green-based comfort palette, by Sainnhe Park.
+#
+# The medium dark variant, and the origin of `everforest-light`, which shipped
+# first and mirrors this file role for role. Everforest's whole identity is
+# green, so green carries the focus and title the way orange carries
+# Gruvbox's — and it doubles as `success`, which the palette invites: its
+# green *is* its statement of things being well. Aqua takes the labels to keep
+# two distinct green-family tones in play, and the chrome is the palette's own
+# background ramp, which leafs toward green even in its greys.
+#
+# Values from sainnhe/everforest's autoload/everforest.vim (medium, dark:
+# the bg ramp from palette1 and the foreground set from palette2).
+
+border         = "bg5"
+border_focused = "green"
+rule           = "bg2"
+title          = "green"
+text           = "reset"
+muted          = "grey1"
+label          = "aqua"
+accent         = "green"
+key            = "purple"
+success        = "green"
+warning        = "yellow"
+error          = "red"
+track          = "bg3"
+
+[palette]
+bg2    = "#3d484d"
+bg3    = "#475258"
+bg5    = "#56635f"
+grey1  = "#859289"
+red    = "#e67e80"
+orange = "#e69875"
+yellow = "#dbbc7f"
+green  = "#a7c080"
+aqua   = "#83c092"
+blue   = "#7fbbb3"
+purple = "#d699b6"
+
+# Ramps start in the background ramp's own bg3, so an idle graph is a shade of
+# the forest floor rather than a line drawn on it.
+
+[cpu_gradient]
+start = "#475258"
+mid   = "#dbbc7f"
+end   = "#e67e80"
+
+[rx_gradient]
+start = "#475258"
+mid   = "#83c092"
+end   = "#a7c080"
+
+[tx_gradient]
+start = "#475258"
+mid   = "#7fbbb3"
+end   = "#d699b6"
+
+[gain_gradient]
+start = "#475258"
+mid   = "#a7c080"
+end   = "#a7c080"
+
+[loss_gradient]
+start = "#475258"
+mid   = "#e67e80"
+end   = "#e67e80"

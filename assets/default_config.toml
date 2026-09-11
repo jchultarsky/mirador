@@ -148,7 +148,7 @@ rows = [
 #
 #     theme = "high-contrast"
 #
-# Sixteen ship inside the binary. Four are mirador's own — `default` (this),
+# Nineteen ship inside the binary. Four are mirador's own — `default` (this),
 # `default-light`, `high-contrast` and `ansi` — and twelve are ports of
 # palettes you may already be running elsewhere: `nord`, `gruvbox`,
 # `gruvbox-light`, `dracula`, `catppuccin-mocha`, `catppuccin-latte`,
