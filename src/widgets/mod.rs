@@ -9,6 +9,7 @@ pub mod calculator;
 pub mod calendar;
 pub mod clocks;
 pub mod cpu;
+pub mod memory;
 pub mod network;
 pub mod news;
 pub mod notes;
@@ -36,6 +37,7 @@ pub const WIDGET_NAMES: &[&str] = &[
     "watchlog",
     "news",
     "cpu",
+    "memory",
     "network",
     "calculator",
 ];
@@ -77,6 +79,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         )),
         "pomodoro" => Box::new(pomodoro::PomodoroPanel::new(config.pomodoro.clone())),
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
+        "memory" => Box::new(memory::MemoryPanel::new(config.memory.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         "calculator" => Box::new(calculator::CalculatorPanel::new(config.calculator)),
         _ => {
@@ -187,18 +190,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Every panel, built with nothing behind it that leaves the process, and
-    /// with enough on screen to be worth measuring: seeded tasks and notes, a
-    /// canned watchlist and reading, three headlines, a calendar with events
-    /// tomorrow.
-    ///
-    /// Named alongside `WIDGET_NAMES` and checked against it, so a new widget
-    /// cannot be left out of the sweep without this failing to compile the
-    /// list it expects.
-    fn offline_panels(
-        dir: &std::path::Path,
-        config: &Config,
-    ) -> Vec<(&'static str, Box<dyn Panel>)> {
+    /// A calendar with events tomorrow and three headlines, written and built
+    /// for the sweep so the agenda and news panels have something to measure.
+    fn sample_data(dir: &std::path::Path) -> (std::path::PathBuf, Vec<crate::feed::Story>) {
         let today = jiff::Zoned::now().date();
         let tomorrow = today.tomorrow().unwrap_or(today);
         let ics = dir.join("sample.ics");
@@ -232,6 +226,23 @@ mod tests {
                 "A very long headline that has to wrap on any panel narrower than it",
             ),
         ];
+
+        (ics, stories)
+    }
+
+    /// Every panel, built with nothing behind it that leaves the process, and
+    /// with enough on screen to be worth measuring: seeded tasks and notes, a
+    /// canned watchlist and reading, three headlines, a calendar with events
+    /// tomorrow.
+    ///
+    /// Named alongside `WIDGET_NAMES` and checked against it, so a new widget
+    /// cannot be left out of the sweep without this failing to compile the
+    /// list it expects.
+    fn offline_panels(
+        dir: &std::path::Path,
+        config: &Config,
+    ) -> Vec<(&'static str, Box<dyn Panel>)> {
+        let (ics, stories) = sample_data(dir);
 
         let panels: Vec<(&'static str, Box<dyn Panel>)> = vec![
             (
@@ -282,6 +293,14 @@ mod tests {
                 Box::new(news::NewsPanel::offline(&config.news, stories)),
             ),
             ("cpu", Box::new(cpu::CpuPanel::new(config.cpu.clone()))),
+            (
+                "memory",
+                Box::new(memory::MemoryPanel::with_reading(
+                    config.memory.clone(),
+                    6_657_199_308,
+                    17_179_869_184,
+                )),
+            ),
             (
                 "network",
                 Box::new(network::NetworkPanel::new(config.network.clone())),

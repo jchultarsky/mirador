@@ -172,7 +172,7 @@ docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
              drawings and key tables, the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, news, cpu, network, calculator
+             pomodoro, watchlog, news, cpu, memory, network, calculator
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -261,7 +261,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 327 of them, including the ones mirador
+    trip through `toml` discards all 335 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -345,6 +345,17 @@ map, that one is the procedure.
     keeps that sweep complete, and
     `every_hand_built_composite_line_in_a_widget_is_accounted_for` counts what
     is left and makes a new one justify itself.
+
+    **`grid::assemble` itself had the bug it exists to prevent, until
+    2026-09-11.** When the *first* part did not fit it truncated span by span
+    and stopped when the room ran out — so a span that fitted exactly left the
+    spans after it dropped in silence: ` 38` for ` 38%` at three columns, the
+    unit gone with no `…`. Every readout built from a figure span and a unit
+    span had it latently. It was found by the new memory panel's readout
+    sweep, a test that asserts the exact text at every width from 1 to 40 and
+    so *can* fail; the whole part is abridged as one string now and handed
+    back to its spans, so the ellipsis lands wherever the cut falls.
+    `a_first_part_abridged_at_a_span_boundary_still_says_so`.
 
     **A render-level sweep at one width cannot check this, and it was tried
     first.** A buffer records what the terminal *kept*, so an overflowing line
@@ -1091,9 +1102,25 @@ persistence story rests on. The known cost is that panels of unlike natural
 height in one row waste space; the mitigation is that arrange mode makes it
 easy to group like with like.
 
-**The default is four rows of thirteen panels**, re-measured at 120x40 on
-2026-08-01 when the calculator joined it: nothing truncates, every panel is
-legible and no frame title is clipped.
+**The default is four rows of fourteen panels**, re-measured at 120x40 on
+2026-09-11 when `memory` joined it: nothing truncates, every panel is legible
+and no frame title is clipped. It was thirteen from 2026-08-01, when the
+calculator arrived, until then.
+
+**`memory` is the fourteenth, and it went where the calculator could not.**
+It is the missing quarter of "what compute is available" — every monitor this
+program borrows from pairs CPU with memory before it shows network — and it is
+`cpu` with a different sample: the same braille history, the same meter, and
+*the same gradient*, deliberately. A `memory_gradient` key would have been a
+line in nineteen theme files for a distinction between two gauges of one
+instrument that nobody would see; the cpu ramp colours both. The instrument
+row now holds five, and the arithmetic that refused the calculator a place
+there still holds: `stocks` keeps its 30 and its change column, and memory's
+cells come from the three panels that scale — pomodoro 24 → 17, cpu 20 → 17,
+network 26 → 20, memory 16. At 120 columns that costs the pomodoro its
+`25m focus · 5m break` line (dropped whole) and nothing else; the border
+counter says whole gigabytes because `64.0 GB` cost the title its last two
+letters. `s` toggles a swap row, drawn only when the machine has swap.
 
 Where the thirteenth went was decided by arithmetic rather than taste, and the
 arithmetic is worth keeping. The instrument row was the obvious home — a

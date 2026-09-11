@@ -351,7 +351,7 @@ overwritten, so resetting twice still leaves the first one recoverable.
 
 ## The panels
 
-Thirteen widgets, each answering one question. Put the ones you want in the
+Fourteen widgets, each answering one question. Put the ones you want in the
 layout and drop the rest — a widget your layout leaves out is never built, and
 nothing will nag you about it.
 
@@ -756,27 +756,29 @@ answers stay: an answer without its sum is still an answer.
 Nothing is kept when you quit. There is no memory key, no percent key and no
 functions — the tape and carrying an answer forward cover what those were for.
 
-### CPU and network
+### CPU, memory and network
 
 CPU shows average load, a moving history graph and a per-core meter row —
-`c` toggles that row when the panel is focused. Network shows receive and
-transmit rates as two graphs, plus a session total and the peak rate seen.
+`c` toggles that row when the panel is focused. Memory shows the share in use,
+the same kind of graph, and a swap meter when the machine has swap — `s`
+toggles that. Network shows receive and transmit rates as two graphs, plus a
+session total and the peak rate seen.
 
-Both draw their history in **braille**, which packs two samples into every
+All three draw their history in **braille**, which packs two samples into every
 character cell and four levels into every row — twice the horizontal
 resolution of a block-element sparkline in the same space. The colour gradient
 runs *vertically by magnitude*, one colour per row, so the profile stays put
 as data scrolls: a graph left on screen all day changes colour when the load
 changes, not merely because time passed.
 
-> These two panels are the one thing this README will not show you in a code
+> These three panels are the one thing this README will not show you in a code
 > block. Braille is missing from several of the fonts GitHub falls back to, so
 > the glyphs render at a width the surrounding box characters do not share and
 > the panel tears itself apart. The recording at the top of this file shows
 > them as they actually look. It is a real terminal, which is the only place
 > the alignment is guaranteed.
 
-Both buffers grow to fill the panel, so `history` is a floor on what is kept
+Every buffer grows to fill its panel, so `history` is a floor on what is kept
 rather than a cap on what a wider panel can draw.
 
 ## Command line
@@ -957,6 +959,7 @@ rather than failing quietly.
 | `pomodoro` | A focus timer: phase, time left, progress, and the set so far |
 | `calculator` | Type a sum, press Enter; an adding machine's tape of what you worked out |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
+| `memory` | Memory in use, a moving chart, and a swap meter |
 | `network` | Receive and transmit rates as moving charts |
 
 ### External panels (optional)

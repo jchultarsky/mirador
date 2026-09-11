@@ -49,8 +49,8 @@ pub use plugins::PluginConfig;
 #[allow(unused_imports)]
 pub use widgets::{
     AgendaConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig, CpuConfig,
-    NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig, TodoConfig,
-    WeatherConfig,
+    MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig, StocksConfig,
+    TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -81,6 +81,7 @@ pub struct Config {
     pub pomodoro: PomodoroConfig,
     pub calculator: CalculatorConfig,
     pub cpu: CpuConfig,
+    pub memory: MemoryConfig,
     pub network: NetworkConfig,
 }
 
