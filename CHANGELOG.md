@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status bar carries an alert. Not placed in the default layout, since a
   desktop would open on `No battery`; `w` switches it on. `[battery]` in the
   config sets the two thresholds and the sample interval.
+- **A temperature panel.** The hottest sensor with its history in the CPU
+  panel's face, and a table of every sensor group's current and peak
+  reading. The platform's list is grouped the way a person would write it —
+  Apple silicon's fourteen die readings become one `CPU die` row, and
+  sensors reporting impossible values are dropped. `u` toggles Celsius and
+  Fahrenheit, and the choice is remembered. Above `alert_above_c` the status
+  bar says so. Also not in the default layout: on Windows the sensors need
+  elevation, and a VM or a container has none, so the panel says so rather
+  than drawing an empty graph.
 
 ## [1.11.0] - 2026-09-11
 

@@ -489,6 +489,22 @@ warn_below_pct  = 20
 alert_below_pct = 10
 
 # ---------------------------------------------------------------------------
+# Temperature
+#
+# The hottest sensor with its history, and a table of every sensor group's
+# current and peak reading. Sensors are grouped the way a person would list
+# them: fourteen die readings become one `CPU die` row. Not in the default
+# layout, because the panel reads what the platform reports — on Windows that
+# needs elevation, and a VM or a container reports nothing. `w` switches it
+# on; `u` toggles the units.
+# ---------------------------------------------------------------------------
+[temperature]
+history       = 120           # a floor, not a cap — see the note under [cpu]
+sample_secs   = 5
+units         = "celsius"     # or "fahrenheit"
+alert_above_c = 95            # the status bar says so above this; 0 disables
+
+# ---------------------------------------------------------------------------
 # Network
 #
 # Leave `interfaces` empty to aggregate every non-loopback interface, or name

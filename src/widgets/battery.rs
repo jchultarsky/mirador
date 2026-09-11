@@ -109,6 +109,22 @@ impl BatteryPanel {
         }
     }
 
+    /// A laptop three hours from empty, for the sweep and the dump.
+    #[cfg(test)]
+    pub(crate) fn canned(config: BatteryConfig) -> Self {
+        Self::with_reading(
+            config,
+            Some(Reading {
+                charge_pct: 80,
+                flow: Flow::Discharging,
+                remaining: Some(Duration::from_mins(192)),
+                health_pct: Some(100),
+                cycles: Some(3),
+                watts: 12.4,
+            }),
+        )
+    }
+
     /// Read the first battery the machine reports.
     fn sample(&mut self) -> bool {
         let interval = Duration::from_secs(self.config.sample_secs.max(1));

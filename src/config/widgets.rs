@@ -415,6 +415,31 @@ impl Default for BatteryConfig {
     }
 }
 
+/// Temperature panel settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TemperatureConfig {
+    /// Samples to keep; a floor, since the buffer grows to the panel's width.
+    pub history: usize,
+    /// Seconds between readings.
+    pub sample_secs: u64,
+    /// `celsius` or `fahrenheit`; `u` toggles it in the panel.
+    pub units: String,
+    /// Above this, in Celsius, the hottest sensor is an alert. Zero disables.
+    pub alert_above_c: u16,
+}
+
+impl Default for TemperatureConfig {
+    fn default() -> Self {
+        Self {
+            history: 120,
+            sample_secs: 5,
+            units: "celsius".into(),
+            alert_above_c: 95,
+        }
+    }
+}
+
 /// Network chart settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

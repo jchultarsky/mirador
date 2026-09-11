@@ -16,6 +16,7 @@ pub mod news;
 pub mod notes;
 pub mod pomodoro;
 pub mod stocks;
+pub mod temperature;
 pub mod todo;
 pub mod watchlog;
 pub mod weather;
@@ -41,6 +42,7 @@ pub const WIDGET_NAMES: &[&str] = &[
     "memory",
     "network",
     "battery",
+    "temperature",
     "calculator",
 ];
 
@@ -84,6 +86,9 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         "memory" => Box::new(memory::MemoryPanel::new(config.memory.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         "battery" => Box::new(battery::BatteryPanel::new(config.battery.clone())),
+        "temperature" => Box::new(temperature::TemperaturePanel::new(
+            config.temperature.clone(),
+        )),
         "calculator" => Box::new(calculator::CalculatorPanel::new(config.calculator)),
         _ => {
             let Some(plugin) = config.plugin(name) else {
@@ -310,16 +315,12 @@ mod tests {
             ),
             (
                 "battery",
-                Box::new(battery::BatteryPanel::with_reading(
-                    config.battery.clone(),
-                    Some(battery::Reading {
-                        charge_pct: 80,
-                        flow: battery::Flow::Discharging,
-                        remaining: Some(std::time::Duration::from_mins(192)),
-                        health_pct: Some(100),
-                        cycles: Some(3),
-                        watts: 12.4,
-                    }),
+                Box::new(battery::BatteryPanel::canned(config.battery.clone())),
+            ),
+            (
+                "temperature",
+                Box::new(temperature::TemperaturePanel::canned(
+                    config.temperature.clone(),
                 )),
             ),
             (
