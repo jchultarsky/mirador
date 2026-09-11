@@ -19,6 +19,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::chart::meter_line;
 use crate::config::PomodoroConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
@@ -621,21 +622,6 @@ fn draw_clock(
 /// arithmetic on `Rect` fields. The measurement itself is `grid::display_width`.
 fn display_width(text: &str) -> u16 {
     u16::try_from(crate::grid::display_width(text)).unwrap_or(u16::MAX)
-}
-
-/// One row of meter: filled cells in `fill`, the rest in `track`, same glyph
-/// throughout so the footprint never moves.
-fn meter_line(percent: u16, width: u16, fill: Color, track: Color) -> Vec<Span<'static>> {
-    let width = usize::from(width);
-    let filled = usize::from(percent.min(100)) * width / 100;
-    (0..width)
-        .map(|i| {
-            Span::styled(
-                "■",
-                Style::default().fg(if i < filled { fill } else { track }),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

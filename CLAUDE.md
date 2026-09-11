@@ -172,7 +172,8 @@ docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
              drawings and key tables, the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, news, cpu, memory, network, calculator
+             pomodoro, watchlog, news, cpu, memory, network, battery,
+             calculator
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -261,7 +262,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 335 of them, including the ones mirador
+    trip through `toml` discards all 344 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -438,6 +439,30 @@ time you spend at the dashboard rather than about something outside it. That
 makes it the one panel where a nagging design would do real damage, which is
 why the chime defaults off and a paused timer greys out instead of blinking.
 The filter still holds for anything not asked for by name.
+
+**The battery panel was asked for by name on 2026-09-11**, the same route as
+the pomodoro, and it is worth three decisions being written down. First, **it
+is the first widget not placed in the default layout**: a desktop would open on
+`No battery`, and the default is a dashboard for any machine, so
+`the_default_layout_places_every_widget` now carries an excused list with the
+reason beside each name — the rule that every widget is placed still holds for
+everything not on it. Second, **it is the first widget that reads something
+`sysinfo` does not**, and it does so through `starship-battery` (ISC, MSRV
+1.89, pure-Rust bindings, NetBSD supported) rather than a polled process per
+platform: `pmset -g batt`, sysfs and a PowerShell query are three code paths to
+keep honest for one fact, and the crate's macOS bindings were already in the
+tree under `sysinfo`. Third, **the face is the pomodoro's** — label, numerals,
+meter, detail — and it is calm on purpose: brass while there is plenty, amber
+and red only when the charge is low *and* the machine is running on it, and
+charging told by the label rather than by flooding the panel green. The first
+capture said `PLUGGED IN` in the border and again inside, and `holding at 80%`
+under a five-row `80`; that is the tasks-panel duplication of 1.10.0 arriving
+in a new panel, and the rule from that pass holds here — the time lives in the
+border and nowhere else, the label has the state, the numerals have the
+charge, the detail row has what is left (health, cycles, watts). The alert
+fires only for the one battery fact that gets worse if nobody acts: running
+down and nearly gone. macOS reports "plugged in, holding at 80%" as `Unknown`
+with no energy moving, which the panel names `PLUGGED IN`.
 
 **The filter governs what mirador *ships*, which after discussion #191 is
 narrower than it used to be.** If external panels happen, "does this answer one

@@ -475,6 +475,20 @@ sample_secs = 2               # see the note under [cpu]
 show_swap   = true
 
 # ---------------------------------------------------------------------------
+# Battery
+#
+# Charge, which way it is going, and how long that gives you. Not in the
+# default layout, because a desktop would open on an empty panel — press `w`
+# and switch it on. Below `warn_below_pct` the figure turns amber while running
+# on the battery; below `alert_below_pct` it turns red and the status bar says
+# so. Neither applies while plugged in.
+# ---------------------------------------------------------------------------
+[battery]
+sample_secs     = 30
+warn_below_pct  = 20
+alert_below_pct = 10
+
+# ---------------------------------------------------------------------------
 # Network
 #
 # Leave `interfaces` empty to aggregate every non-loopback interface, or name
