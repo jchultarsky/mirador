@@ -334,7 +334,7 @@ fn clock_text(remaining: Duration) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-const BINDINGS: &[Binding] = &[
+pub(crate) const BINDINGS: &[Binding] = &[
     Binding::primary("space", "start/pause"),
     Binding::primary("n", "next phase"),
     Binding::primary("+/-", "length"),

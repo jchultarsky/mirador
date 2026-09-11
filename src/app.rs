@@ -37,7 +37,7 @@ use crate::theme::Gradients;
 const HINT_GAP: &str = "  ";
 
 /// Global bindings, used for both the status bar and the help overlay.
-const GLOBAL: &[Binding] = &[
+pub(crate) const GLOBAL: &[Binding] = &[
     Binding::primary("Tab", "focus"),
     Binding::primary("?", "keys"),
     Binding::primary("q", "quit"),

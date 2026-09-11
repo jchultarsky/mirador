@@ -44,6 +44,93 @@ fn readme() -> String {
         .replace("\r\n", "\n")
 }
 
+/// The individual keys a `Binding::key` label or a README key cell names.
+///
+/// Both sides spell a list of keys in prose — `j / k`, `+/-`, `0-9 . + - * /`,
+/// `` `1` – `9` ``, `` `Enter` or `=` `` — and the comparison has to be between
+/// the keys, not the prose. `/` is both a separator and a key, which is why
+/// ` / ` with spaces is split first and a lone `/` afterwards is kept.
+fn key_tokens(label: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for group in label.split(" / ") {
+        for piece in group.split_whitespace() {
+            let pieces: Vec<&str> = if piece.len() > 1 && piece.contains('/') {
+                piece.split('/').collect()
+            } else {
+                vec![piece]
+            };
+            for raw in pieces {
+                if raw.is_empty() || raw == "or" {
+                    continue;
+                }
+                let token = match raw.replace('–', "-").as_str() {
+                    "Enter" | "↵" => "↵".to_string(),
+                    "Space" | "space" => "space".to_string(),
+                    "PageUp" => "PgUp".to_string(),
+                    "PageDown" => "PgDn".to_string(),
+                    other => other.to_string(),
+                };
+                out.insert(token);
+            }
+        }
+    }
+    out
+}
+
+/// The keys named in one README table cell: every backtick span, with
+/// `` `X`–`Y` `` ranges joined back into `X-Y` before splitting.
+fn readme_cell_keys(cell: &str) -> std::collections::BTreeSet<String> {
+    // Only an en dash joins a range: `` `0`–`9` `` is one key, `` `+` `-` ``
+    // is two, and the minus key is spelled with the same character as the
+    // ASCII range dash — so the ASCII form is never treated as a range here.
+    let mut joined = cell.to_string();
+    for dash in ["`–`", "` – `"] {
+        joined = joined.replace(dash, "-");
+    }
+    let spans: Vec<&str> = joined.split('`').skip(1).step_by(2).collect();
+    key_tokens(&spans.join(" "))
+}
+
+/// The README's key tables, keyed by the panel (or `global`) each describes.
+///
+/// Three panels and the global keys have tables; every other panel documents
+/// its keys in prose, which this cannot check. The tasks table sits under the
+/// arranging heading, introduced by a sentence rather than a heading of its
+/// own, so it is found by that sentence.
+fn readme_key_tables() -> std::collections::BTreeMap<&'static str, Vec<String>> {
+    let text = readme();
+    let mut tables: std::collections::BTreeMap<&'static str, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let mut heading = String::new();
+    let mut intro = String::new();
+    for line in text.lines() {
+        if line.starts_with('#') {
+            heading = line.trim_start_matches('#').trim().to_string();
+            intro.clear();
+            continue;
+        }
+        if line.starts_with("| `") {
+            let cell = line
+                .trim_start_matches('|')
+                .split('|')
+                .next()
+                .unwrap_or("")
+                .trim();
+            let which = match (heading.as_str(), intro.as_str()) {
+                ("Pomodoro", _) => "pomodoro",
+                ("Calculator", _) => "calculator",
+                ("Keys", _) => "global",
+                (_, "In the task panel:") => "todo",
+                _ => continue,
+            };
+            tables.entry(which).or_default().push(cell.to_string());
+        } else if !line.trim().is_empty() && !line.starts_with('|') {
+            intro = line.trim().to_string();
+        }
+    }
+    tables
+}
+
 /// Every `.rs` file under `src/`, concatenated.
 fn sources() -> String {
     fn walk(dir: &Path, into: &mut String) {
@@ -442,6 +529,83 @@ mod tests {
              has probably stopped matching, and a check that inspects nothing \
              passes every time"
         );
+    }
+
+    /// Each widget checks its documented keys against its own `BINDINGS`, and
+    /// the README's key tables were checked against nothing — the last
+    /// docs-versus-code seam with no guard, after two drawings went stale in
+    /// an hour. Both directions: a key the README names must be one the panel
+    /// declares, and every *primary* key — the ones shown without pressing
+    /// `?` — must be in the README. Extras may be left out of the README;
+    /// they are aliases and expert keys, and a table that lists `Esc clear
+    /// filter` beside `/ filter` is longer without being more useful.
+    ///
+    /// The day it was written it found the calculator accepting `.` and `=`,
+    /// documented in the README, with neither in the labels `?` shows.
+    #[test]
+    fn every_key_table_in_the_readme_matches_the_bindings_it_describes() {
+        let tables = readme_key_tables();
+        let declared: [(&str, &[crate::frame::Binding]); 4] = [
+            ("global", crate::app::GLOBAL),
+            ("todo", crate::widgets::todo::BINDINGS),
+            ("pomodoro", crate::widgets::pomodoro::BINDINGS),
+            ("calculator", crate::widgets::calculator::TAPE_BINDINGS),
+        ];
+        let mut faults = Vec::new();
+        for (name, bindings) in declared {
+            let rows = tables
+                .get(name)
+                .unwrap_or_else(|| panic!("no README key table found for `{name}`"));
+            assert!(
+                rows.len() >= 3,
+                "the `{name}` table has {} rows — the parser has stopped matching",
+                rows.len()
+            );
+
+            let documented: std::collections::BTreeSet<String> = rows
+                .iter()
+                .flat_map(|cell| readme_cell_keys(cell))
+                .collect();
+            let all: std::collections::BTreeSet<String> =
+                bindings.iter().flat_map(|b| key_tokens(&b.key)).collect();
+            let primary: std::collections::BTreeSet<String> = bindings
+                .iter()
+                .filter(|b| b.primary)
+                .flat_map(|b| key_tokens(&b.key))
+                .collect();
+
+            for key in documented.difference(&all) {
+                faults.push(format!(
+                    "README documents `{key}` for `{name}`, which declares no such key"
+                ));
+            }
+            for key in primary.difference(&documented) {
+                faults.push(format!(
+                    "`{name}` advertises `{key}` in its border and the README's table omits it"
+                ));
+            }
+        }
+        assert!(faults.is_empty(), "{}", faults.join("\n"));
+    }
+
+    #[test]
+    fn key_tokens_split_the_way_both_sides_write_them() {
+        let set = |s: &str| key_tokens(s).into_iter().collect::<Vec<_>>();
+        assert_eq!(set("j / k"), ["j", "k"]);
+        assert_eq!(set("+/-"), ["+", "-"]);
+        assert_eq!(set("0-9 . + - * /"), ["*", "+", "-", ".", "/", "0-9"]);
+        assert_eq!(set("Enter / ="), ["=", "↵"]);
+        assert_eq!(set("Ctrl+←→↑↓"), ["Ctrl+←→↑↓"]);
+        assert_eq!(set("PgUp / PgDn"), ["PgDn", "PgUp"]);
+        let cell = |c: &str| readme_cell_keys(c).into_iter().collect::<Vec<_>>();
+        assert_eq!(cell("`1` – `9`"), ["1-9"]);
+        assert_eq!(cell("`0`–`9` `.`"), [".", "0-9"]);
+        assert_eq!(cell("`+` `-` `*` `/`"), ["*", "+", "-", "/"]);
+        assert_eq!(cell("`+` / `-`"), ["+", "-"]);
+        assert_eq!(cell("`Enter` or `=`"), ["=", "↵"]);
+        assert_eq!(cell("`j` / `k`, `↑` / `↓`"), ["j", "k", "↑", "↓"]);
+        assert_eq!(cell("`PageUp` / `PageDown`"), ["PgDn", "PgUp"]);
+        assert_eq!(cell("`Space`"), ["space"]);
     }
 
     /// The discriminator is empirical, so it is worth knowing when it stops
