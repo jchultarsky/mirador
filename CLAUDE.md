@@ -173,7 +173,7 @@ docs.rs      the guard on *this file* — cited tests, version, paths, and that
              drawings and key tables, the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, memory, network, battery,
-             calculator
+             temperature, calculator
 ```
 
 `Panel` has two input hooks. `handle_key` goes to the *focused* panel;
@@ -262,7 +262,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 344 of them, including the ones mirador
+    trip through `toml` discards all 354 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -463,6 +463,25 @@ charge, the detail row has what is left (health, cycles, watts). The alert
 fires only for the one battery fact that gets worse if nobody acts: running
 down and nearly gone. macOS reports "plugged in, holding at 80%" as `Unknown`
 with no energy moving, which the panel names `PLUGGED IN`.
+
+**The temperature panel followed the same day, by the same route**, and it
+is the second on the excused list, for a different reason: it reads what the
+platform reports, and on Windows that is nothing without elevation, in a VM
+or a container nothing at all. Two things about it are worth keeping. **The
+panel's real work is `group`**, not drawing — `sysinfo::Components` on Apple
+silicon returns twenty-five entries for what a person would call three
+sensors: fourteen `PMU tdie` readings for one die, a `PMU tcal` calibration
+reference that is not a temperature of anything, and eight `PMU tdev` entries
+at −9201°C. Trailing digits come off, a short rename table maps the Apple and
+Linux hwmon labels it knows, a plausibility range drops the impossible, and
+the peak is the panel's memory rather than the platform's, because
+`Component::max` is not kept everywhere. Unknown labels keep their own name
+minus the digits — `iwlwifi` — which is honest if plain. And **it shares the
+cpu ramp on purpose**: degrees Celsius and load percent both run 0–100 and
+both mean "how hard is this machine working", so the two graphs change colour
+together. The face is the cpu panel's with the table where the per-core strip
+would be; the table takes at most half the panel and only when it can show a
+header and a row.
 
 **The filter governs what mirador *ships*, which after discussion #191 is
 narrower than it used to be.** If external panels happen, "does this answer one

@@ -49,6 +49,9 @@ pub struct UiState {
     /// `u` in the weather panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weather_units: Option<String>,
+    /// `u` in the temperature panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature_units: Option<String>,
     /// `s` in the task panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub todo_sort: Option<String>,
@@ -113,6 +116,11 @@ impl UiState {
             } else {
                 "imperial".into()
             }),
+            temperature_units: Some(if config.temperature.units == "fahrenheit" {
+                "fahrenheit".into()
+            } else {
+                "celsius".into()
+            }),
             todo_sort: Some(sort.label().to_string()),
             todo_show_completed: Some(config.todo.show_completed),
             clocks_show_seconds: Some(config.clocks.show_seconds),
@@ -168,6 +176,7 @@ impl UiState {
         }
         keep_if_changed!(
             weather_units,
+            temperature_units,
             weather_location,
             agenda_file,
             todo_sort,
@@ -354,6 +363,7 @@ mod tests {
         let (path, _g) = dir("roundtrip");
         let state = UiState {
             weather_units: Some("metric".into()),
+            temperature_units: Some("fahrenheit".into()),
             weather_location: Some("Lisbon, Portugal".into()),
             agenda_file: Some("/tmp/work.ics".into()),
             todo_sort: Some("due".into()),

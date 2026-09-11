@@ -50,7 +50,7 @@ pub use plugins::PluginConfig;
 pub use widgets::{
     AgendaConfig, BatteryConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig,
     CpuConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig,
-    StocksConfig, TodoConfig, WeatherConfig,
+    StocksConfig, TemperatureConfig, TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -84,6 +84,7 @@ pub struct Config {
     pub memory: MemoryConfig,
     pub network: NetworkConfig,
     pub battery: BatteryConfig,
+    pub temperature: TemperatureConfig,
 }
 
 /// Global behaviour.
@@ -301,6 +302,12 @@ impl Config {
                 self.weather.units
             );
         }
+        if !matches!(self.temperature.units.as_str(), "celsius" | "fahrenheit") {
+            anyhow::bail!(
+                "`[temperature].units` is `{}`; expected `celsius` or `fahrenheit`.",
+                self.temperature.units
+            );
+        }
         // A zero-length phase would end on the tick it started and spin the
         // timer through the cycle; a zero-round set would divide by zero
         // deciding when the long break falls. Both are caught here rather than
@@ -446,6 +453,11 @@ impl Config {
             && matches!(units.as_str(), "metric" | "imperial")
         {
             self.weather.units.clone_from(units);
+        }
+        if let Some(units) = &state.temperature_units
+            && matches!(units.as_str(), "celsius" | "fahrenheit")
+        {
+            self.temperature.units.clone_from(units);
         }
         if let Some(sort) = &state.todo_sort
             && sort.parse::<crate::task::SortMode>().is_ok()
@@ -832,10 +844,17 @@ mod tests {
         // The default is a dashboard for any machine; a panel that is empty on
         // most of them would be a poor first run for everyone to save a
         // discovery step for some. `w` places them, and the README names them.
-        const UNPLACED_BY_DEFAULT: &[(&str, &str)] = &[(
-            "battery",
-            "laptops only — a desktop would open on `No battery`",
-        )];
+        const UNPLACED_BY_DEFAULT: &[(&str, &str)] = &[
+            (
+                "battery",
+                "laptops only — a desktop would open on `No battery`",
+            ),
+            (
+                "temperature",
+                "reads what the platform reports, which on Windows without \
+                 elevation and in most VMs and containers is nothing",
+            ),
+        ];
         // first run, and this is exactly how notes and stocks went unseen.
         let layout = Layout::default();
         let placed: Vec<&str> = layout

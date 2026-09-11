@@ -795,6 +795,24 @@ status bar says so.
 It is **not in the default layout**: a desktop would open on `No battery`, and
 the default is a dashboard for any machine. Press `w` and switch it on.
 
+### Temperature
+
+The hottest thing in the machine, in the same face as the CPU panel: a
+readout, a braille history, and a table of every sensor with its current and
+peak reading, hottest first. The platform's list is grouped the way a person
+would write it — Apple silicon's fourteen `PMU tdie` readings become one
+`CPU die` row, a calibration reference and eight sensors reporting minus nine
+thousand degrees are dropped — and the same colour ramp as the CPU graph runs
+from cool to hot, so the two panels change colour together. `u` toggles
+Celsius and Fahrenheit. Above `alert_above_c` (95 by default) the hottest
+sensor reaches the status bar, since a die past its limit is the one reading
+here that gets worse if nobody acts.
+
+Also **not in the default layout**, for a different reason: the panel reads
+what the platform reports, and on Windows that needs elevation, while a VM or
+a container reports nothing. Where there is nothing to read it says so rather
+than drawing an empty graph. Press `w` and switch it on.
+
 ## Command line
 
 Every flag is optional; with none of them mirador opens the dashboard.
@@ -976,6 +994,7 @@ rather than failing quietly.
 | `memory` | Memory in use, a moving chart, and a swap meter |
 | `network` | Receive and transmit rates as moving charts |
 | `battery` | Charge, which way it is going, and how long that gives you — laptops; not placed by default |
+| `temperature` | The hottest sensor with its history, and every sensor's now and peak — where the platform reports them; not placed by default |
 
 ### External panels (optional)
 

@@ -1167,6 +1167,7 @@ mod tests {
         ("clocks", crate::widgets::clocks::COLUMNS),
         ("notes", crate::widgets::notes::COLUMNS),
         ("stocks", crate::widgets::stocks::COLUMNS),
+        ("temperature", crate::widgets::temperature::COLUMNS),
         ("todo", crate::widgets::todo::COLUMNS),
         ("weather", crate::widgets::weather::COLUMNS),
     ];
