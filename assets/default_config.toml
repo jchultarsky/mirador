@@ -89,13 +89,16 @@ rows = [
   { height = 18, panels = [
     # The timer draws block numerals when it has the width for them and falls
     # back to plain text when it does not.
-    { widget = "pomodoro", width = 24 },
+    { widget = "pomodoro", width = 17 },
     # 30 keeps the change column at 120 columns; below a panel width of 35 the
     # markets grid drops it rather than clipping a number. 35 because the grid
     # needs 29, plus 2 for the selection marker and 4 for the frame.
     { widget = "stocks",   width = 30 },
-    { widget = "cpu",      width = 20 },
-    { widget = "network",  width = 26 },
+    # Memory's cells come from the three panels that scale — the timer and the
+    # two graphs — and none from the markets grid, which cannot give any.
+    { widget = "cpu",      width = 17 },
+    { widget = "memory",   width = 16 },
+    { widget = "network",  width = 20 },
   ] },
 ]
 
@@ -459,6 +462,17 @@ sample_secs   = 2             # seconds between samples. Every sample is a new
 show_per_core = true
 warn_pct      = 70.0
 critical_pct  = 90.0
+
+# ---------------------------------------------------------------------------
+# Memory
+#
+# Memory in use as a percentage, a moving chart of it, and a swap meter when
+# the machine has swap. `s` hides and shows the swap row.
+# ---------------------------------------------------------------------------
+[memory]
+history     = 120             # a floor, not a cap — see the note under [cpu]
+sample_secs = 2               # see the note under [cpu]
+show_swap   = true
 
 # ---------------------------------------------------------------------------
 # Network

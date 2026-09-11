@@ -581,15 +581,43 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
         if used + part_width > width {
             // Nothing has been placed and this part is too wide for the line:
             // show as much of it as fits, ellipsised, rather than nothing.
+            //
+            // Abridged as one value, not span by span. The first version
+            // truncated each span into the room left and stopped when the room
+            // ran out — so when a span fitted *exactly*, the spans after it
+            // were dropped and nothing said so: ` 38` where ` 38%` was meant,
+            // the `%` gone without an ellipsis, at three columns. The memory
+            // panel's readout sweep found it. The whole part is truncated as
+            // one string and then handed back to its spans in order, so the
+            // `…` lands wherever the cut falls, boundary or not.
             if spans.is_empty() {
-                let mut room = width;
+                let whole: String = part.iter().map(|s| s.content.as_ref()).collect();
+                let mut abridged = truncate(&whole, width);
                 for span in part {
-                    if room == 0 {
+                    if abridged.is_empty() {
                         break;
                     }
-                    let text = truncate(&span.content, room);
-                    room -= display_width(&text);
-                    spans.push(Span::styled(text, span.style));
+                    // This span's share is its own width, or whatever is left
+                    // of the abridged text — the ellipsis included — if the cut
+                    // fell inside or at the end of it.
+                    let take = display_width(&span.content).min(display_width(&abridged));
+                    let mut cells = 0;
+                    let split = abridged
+                        .char_indices()
+                        .find(|(_, c)| {
+                            let w = display_width(&c.to_string());
+                            if cells + w > take {
+                                return true;
+                            }
+                            cells += w;
+                            false
+                        })
+                        .map_or(abridged.len(), |(i, _)| i);
+                    let rest = abridged.split_off(split);
+                    spans.push(Span::styled(
+                        std::mem::replace(&mut abridged, rest),
+                        span.style,
+                    ));
                 }
             }
             break;
@@ -631,6 +659,50 @@ fn fit(text: &str, width: u16, align: Align) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first part of a line that does not fit is abridged *as a value*:
+    /// however its spans are cut, the result ends in `…`. Span by span, a span
+    /// that fitted exactly left the ones after it dropped in silence —
+    /// ` 38` for ` 38%` at three columns, the unit gone and nothing marking it —
+    /// which is the one thing this function exists to prevent.
+    #[test]
+    fn a_first_part_abridged_at_a_span_boundary_still_says_so() {
+        use ratatui::style::Style;
+        let part = || {
+            vec![
+                Span::styled(" 38", Style::default()),
+                Span::styled("%", Style::default()),
+            ]
+        };
+        let text = |line: &Line<'static>| -> String {
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+
+        // Exactly at the boundary between the spans.
+        let cut = assemble(vec![part()], 3);
+        assert_eq!(
+            text(&cut),
+            " 3\u{2026}",
+            "the cut at the span boundary is marked"
+        );
+        assert_eq!(display_width(&text(&cut)), 3);
+
+        // Inside the first span.
+        assert_eq!(text(&assemble(vec![part()], 2)), " \u{2026}");
+
+        // Fits whole: untouched, both spans intact.
+        let whole = assemble(vec![part()], 4);
+        assert_eq!(text(&whole), " 38%");
+        assert_eq!(
+            whole.spans.len(),
+            2,
+            "no spans are merged when nothing is cut"
+        );
+
+        // Nothing at all.
+        assert_eq!(text(&assemble(vec![part()], 0)), "");
+    }
+
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::widgets::{Paragraph, Wrap};

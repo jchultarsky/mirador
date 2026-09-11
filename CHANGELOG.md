@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A memory panel.** Memory in use as a percentage, a moving braille chart
+  of it, and — on a machine that has swap — a swap meter that `s` hides and
+  shows. It is `cpu`'s sibling in every respect and sits beside it on the
+  instrument row of the default layout, which now holds five panels; the
+  markets grid keeps its width and its change column, and the timer and the
+  two graphs each gave up a little. `[memory]` in the config carries the same
+  `history` and `sample_secs` as `[cpu]`.
+
+### Fixed
+
+- **A readout squeezed below the width of its first value could lose its
+  unit without saying so.** `38` for `38%`, at a width of three cells, in any
+  panel whose first value is a figure beside a unit. The abridging now marks
+  the cut with `…` wherever it falls. Found by the memory panel's own tests
+  on the day it was written.
+
 ## [1.10.2] - 2026-09-10
 
 ### Fixed

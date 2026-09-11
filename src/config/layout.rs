@@ -54,7 +54,7 @@ impl Default for Layout {
                 row(
                     18,
                     &[
-                        ("pomodoro", 24),
+                        ("pomodoro", 17),
                         // 30 rather than 28 so the change column survives at
                         // 120 columns. Below a panel width of 35 the grid drops
                         // it rather than clipping a number, which is right — but
@@ -66,8 +66,12 @@ impl Default for Layout {
                         // `839 B` rather than `839 B/s`, which is the very
                         // failure being fixed, one panel over.
                         ("stocks", 30),
-                        ("cpu", 20),
-                        ("network", 26),
+                        // Memory takes its cells from the three panels that
+                        // scale — pomodoro, cpu and network — and none from
+                        // `stocks`, which cannot give any: see above.
+                        ("cpu", 17),
+                        ("memory", 16),
+                        ("network", 20),
                     ],
                 ),
             ],
