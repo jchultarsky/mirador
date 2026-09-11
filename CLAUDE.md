@@ -2084,9 +2084,13 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.11.0` is released**, as a GitHub release with binaries for macOS
+- **`1.12.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is the first feature release since 1.9.0:
+  and published on crates.io. It adds the two panels asked for by name on
+  2026-09-11 — `battery` and `temperature`, the first widgets deliberately
+  left out of the default layout, so the shipped dashboard and the demo are
+  unchanged — and nothing else user-visible. 1.11.0, earlier the same day,
+  was the first feature release since 1.9.0:
   the `memory` panel — the fourteenth widget, and the missing quarter of
   "what compute is available" — three bundled themes completing two pairs
   (`everforest`, `rose-pine`, `rose-pine-moon`; nineteen ship), the
