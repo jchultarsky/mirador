@@ -285,7 +285,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 354 of them, including the ones mirador
+    trip through `toml` discards all 355 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -492,8 +492,17 @@ with no energy moving, which the panel names `PLUGGED IN`.
 
 **The temperature panel followed the same day, by the same route**, and it
 is the second on the excused list, for a different reason: it reads what the
-platform reports, and on Windows that is nothing without elevation, in a VM
-or a container nothing at all. Two things about it are worth keeping. **The
+platform reports, and on Windows that is at most one ACPI thermal zone that
+many machines do not expose, on NetBSD nothing until `sysinfo` reads envsys,
+in a VM or a container nothing at all. **The first empty-state hint was
+wrong**: it told every Windows user to run as administrator, which is the
+answer on some machines and false on most, and the owner read it on his own
+Windows box and asked whether it was really so. `sysinfo` there runs one WMI
+query for `MSAcpi_ThermalZoneTemperature` and swallows the error, so the
+panel cannot tell "access denied" from "not supported"; the hint now says
+what is true everywhere. On NetBSD `sysinfo`'s component code is the FreeBSD
+code reading `dev.cpu.N.temperature`, a sysctl NetBSD does not have (#255).
+Two things about it are worth keeping. **The
 panel's real work is `group`**, not drawing — `sysinfo::Components` on Apple
 silicon returns twenty-five entries for what a person would call three
 sensors: fourteen `PMU tdie` readings for one die, a `PMU tcal` calibration

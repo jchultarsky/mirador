@@ -809,8 +809,11 @@ sensor reaches the status bar, since a die past its limit is the one reading
 here that gets worse if nobody acts.
 
 Also **not in the default layout**, for a different reason: the panel reads
-what the platform reports, and on Windows that needs elevation, while a VM or
-a container reports nothing. Where there is nothing to read it says so rather
+what the platform reports, and that is uneven. Windows exposes at most one
+ACPI thermal zone through WMI, which many machines do not provide and some
+provide only to an administrator; NetBSD's sensors live in envsys, which
+`sysinfo` does not read yet; a VM or a container reports nothing. Where there
+is nothing to read the panel says so, and says why for that platform, rather
 than drawing an empty graph. Press `w` and switch it on.
 
 ## Command line

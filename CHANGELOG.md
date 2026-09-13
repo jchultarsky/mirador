@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The temperature panel's empty state says what is true on the platform.**
+  The 1.12.0 hint told every Windows user to run as administrator; that is
+  the answer on some machines and wrong on many, since Windows exposes at
+  most one ACPI thermal zone and not every firmware provides one. On NetBSD
+  it now says that `sysinfo` does not read envsys sensors yet (#255). The
+  hint wraps to the panel rather than being cut.
+
 ## [1.12.0] - 2026-09-11
 
 ### Added

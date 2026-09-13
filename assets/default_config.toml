@@ -494,9 +494,10 @@ alert_below_pct = 10
 # The hottest sensor with its history, and a table of every sensor group's
 # current and peak reading. Sensors are grouped the way a person would list
 # them: fourteen die readings become one `CPU die` row. Not in the default
-# layout, because the panel reads what the platform reports — on Windows that
-# needs elevation, and a VM or a container reports nothing. `w` switches it
-# on; `u` toggles the units.
+# layout, because the panel reads what the platform reports, and that is
+# uneven: Windows exposes at most one ACPI zone, and not on every machine;
+# NetBSD's envsys sensors are not read yet; a VM or a container has none.
+# `w` switches it on; `u` toggles the units.
 # ---------------------------------------------------------------------------
 [temperature]
 history       = 120           # a floor, not a cap — see the note under [cpu]

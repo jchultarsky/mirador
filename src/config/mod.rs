@@ -851,8 +851,9 @@ mod tests {
             ),
             (
                 "temperature",
-                "reads what the platform reports, which on Windows without \
-                 elevation and in most VMs and containers is nothing",
+                "reads what the platform reports, which on Windows is at most one \
+                 ACPI zone many machines lack, on NetBSD nothing yet, and in most \
+                 VMs and containers nothing",
             ),
         ];
         // first run, and this is exactly how notes and stocks went unseen.

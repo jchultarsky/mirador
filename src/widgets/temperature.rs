@@ -195,25 +195,44 @@ impl TemperaturePanel {
         if self.celsius { "°C" } else { "°F" }
     }
 
-    /// Say nothing, centred, rather than draw an empty graph over an empty
-    /// table: on Windows the sensors need elevation, and a VM or a container
-    /// has none to report.
-    fn draw_empty(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
-        let hint = if cfg!(windows) {
-            "Run as administrator to read them"
+    /// Why there is nothing, on this platform. Said rather than guessed at:
+    /// the first version told every Windows user to run as administrator,
+    /// which is the answer on some machines and wrong on many — `sysinfo`
+    /// reads one ACPI thermal zone through WMI, and firmware that exposes
+    /// none gives nothing at any privilege. On NetBSD `sysinfo` reads a
+    /// FreeBSD sysctl that does not exist there (its sensors are in envsys);
+    /// #255 is the report.
+    const fn empty_hint() -> &'static str {
+        if cfg!(windows) {
+            "Windows exposes at most one ACPI thermal zone, which many machines \
+             do not provide and some provide only to an administrator"
+        } else if cfg!(target_os = "netbsd") {
+            "sysinfo does not read NetBSD's envsys sensors yet"
         } else {
             "This machine reports none"
-        };
-        let top = area.y + area.height.saturating_sub(2) / 2;
-        for (i, text) in ["No temperature sensors", hint].into_iter().enumerate() {
+        }
+    }
+
+    /// Say nothing, centred, rather than draw an empty graph over an empty
+    /// table. The hint is prose, so it wraps to the width rather than being
+    /// cut — the platform's reason is the useful half of the message.
+    fn draw_empty(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
+        Self::draw_empty_with(frame, area, theme, Self::empty_hint());
+    }
+
+    /// `draw_empty` with the hint as a parameter, so a test on any platform
+    /// can hand it the long Windows sentence and watch it wrap.
+    fn draw_empty_with(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, hint: &str) {
+        let mut lines = vec!["No temperature sensors".to_string()];
+        lines.extend(crate::grid::wrap(hint, usize::from(area.width)));
+        lines.truncate(usize::from(area.height));
+        let count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+        let top = area.y + area.height.saturating_sub(count) / 2;
+        for (i, text) in lines.into_iter().enumerate() {
             let y = top + u16::try_from(i).unwrap_or(0);
             if y < area.y + area.height {
                 frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        crate::grid::truncate(text, usize::from(area.width)),
-                        Style::default().fg(theme.muted),
-                    ))
-                    .centered(),
+                    Paragraph::new(Span::styled(text, Style::default().fg(theme.muted))).centered(),
                     Rect::new(area.x, y, area.width, 1),
                 );
             }
@@ -715,11 +734,66 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_with_no_sensors_says_so() {
+    fn a_machine_with_no_sensors_says_so_and_says_why() {
         let mut p = panel(Vec::new());
         let rows = screen(&mut p, 40, 6);
         let text = rows.join("\n");
         assert!(text.contains("No temperature sensors"), "{rows:?}");
         assert!(!text.contains('⣀'), "no empty graph over nothing: {rows:?}");
+        assert!(
+            !text.contains("administrator") || cfg!(windows),
+            "the administrator line is Windows' alone: {rows:?}"
+        );
+    }
+
+    /// The reason is prose and wraps whole to the width — every word of the
+    /// long Windows sentence reaches the screen in order, where cutting it
+    /// would have left `Windows exposes at most one ACPI…`. Rendered through
+    /// `draw_empty_with` so it is checked on every platform, not only where
+    /// the long sentence is the platform's own.
+    #[test]
+    fn a_long_reason_wraps_rather_than_being_cut() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        const LONG: &str = "Windows exposes at most one ACPI thermal zone, which many \
+                            machines do not provide and some provide only to an administrator";
+        let config = crate::config::Config::default();
+        let hint: Vec<&str> = LONG.split_whitespace().collect();
+        let mut whole_seen = 0;
+        for (width, height) in [(40u16, 8u16), (30, 8), (24, 10), (12, 3), (6, 1)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| {
+                    TemperaturePanel::draw_empty_with(frame, frame.area(), &config.theme, LONG);
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let text: String = (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let shown: Vec<&str> = text.split_whitespace().collect();
+            if height >= 6 {
+                assert!(
+                    shown.windows(hint.len()).any(|w| w == hint.as_slice()),
+                    "the whole hint at {width}x{height}:\n{text}"
+                );
+                whole_seen += 1;
+            }
+            assert!(
+                !text.contains('…') || width < 14,
+                "no cut at {width}x{height}:\n{text}"
+            );
+        }
+        assert_eq!(
+            whole_seen, 3,
+            "the sweep reached the sizes that must show it all"
+        );
     }
 }
