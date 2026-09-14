@@ -1897,8 +1897,9 @@ survive it.** Re-measure rather than implementing what the issue says.
 panel failing — is a trailing-NUL bug in `starship-battery`'s NetBSD backend,
 fixed by [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168)
 and confirmed on real hardware by the reporter on 2026-09-14. It closes when a
-`starship-battery` release carries the fix and mirador bumps to it, which is
-also when 1.12.1 is cut.
+`starship-battery` release carries the fix and mirador bumps to it. 1.12.1
+went out without it, on 2026-09-14, for a `rustls` advisory that could not
+wait, so the battery fix is the next release's.
 
 [#205](https://github.com/jchultarsky/mirador/issues/205)
 was the entry before it and shipped in 1.6.1 the day it was diagnosed — the first
@@ -2134,9 +2135,16 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.12.0` is released**, as a GitHub release with binaries for macOS
+- **`1.12.1` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It adds the two panels asked for by name on
+  and published on crates.io. It is a maintenance release cut on
+  2026-09-14 for a security advisory: `rustls` 0.23.45 for
+  RUSTSEC-2026-0285, found by the supply chain job the day it was
+  published. It also carries `ureq` 3.4.2 (the upstream half of #205), the
+  temperature panel's corrected empty-state hints for Windows and NetBSD,
+  and `dirs` 7. It does **not** carry the NetBSD battery fix, which waits on
+  a `starship-battery` release (#255). 1.12.0 added the two panels asked
+  for by name on
   2026-09-11 — `battery` and `temperature`, the first widgets deliberately
   left out of the default layout, so the shipped dashboard and the demo are
   unchanged — and nothing else user-visible. 1.11.0, earlier the same day,
@@ -2216,8 +2224,8 @@ and had to be added back was the one that did not.
   Both remain runnable by hand from a machine with the right credentials —
   the workflows add a path, they do not close one.
 
-  **Both have now cut real releases — five of them, 1.10.0 through 1.12.0,
-  between 2026-09-09 and 2026-09-11.**
+  **Both have now cut real releases — six of them, 1.10.0 through 1.12.1,
+  between 2026-09-09 and 2026-09-14.**
   Until then they had only been smoke-tested against an already-released tag,
   where both correctly *refused*; a refusal proves the guard, not the path.
   The tag push and the Trusted Publishing exchange are the two steps only a
