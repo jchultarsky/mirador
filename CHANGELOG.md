@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback in `fetch.rs` stays, since a distribution may build against an
   older `ureq`. Also `dirs` 7, which changes nothing mirador reads.
 
+### Security
+
+- **`rustls` 0.23.45**, for RUSTSEC-2026-0285: 0.23.42 accepted TLS 1.3
+  handshake messages sent at the wrong encryption level. The handshake is
+  still authenticated, so a network attacker could not alter one, but a
+  peer could send in plaintext what should have been encrypted. Every
+  fetch mirador makes goes through it.
+
 ## [1.12.0] - 2026-09-11
 
 ### Added
