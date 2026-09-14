@@ -219,8 +219,8 @@ impl Panel for WatchLogPanel {
             // merely true for the second.
             explain(
                 &mut lines,
-                "Calendar entries come from [agenda].file, which f on the \
-                 agenda panel sets.",
+                "Calendar entries come from [agenda].file, which pressing f \
+                 on the agenda panel sets.",
                 theme.muted,
             );
             frame.render_widget(Paragraph::new(lines), area);

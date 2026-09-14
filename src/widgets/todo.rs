@@ -1156,9 +1156,23 @@ impl Panel for TodoPanel {
                 .char_indices()
                 .nth(budget)
                 .map_or(notes.as_str(), |(at, _)| &notes[..at]);
+            // A note longer than the pane keeps the rows that fit and says it
+            // was cut on the last of them (invariant 19). Handing every row to
+            // the `Paragraph` let it drop the rest in silence, so the seeded
+            // overdue task's preview ended a sentence early and looked whole.
+            // A note cut by the budget above is abridged too, even when its
+            // rows happen to fill the pane exactly.
+            let width = usize::from(rows[3].width);
+            let height = usize::from(rows[3].height);
+            let mut lines = crate::grid::wrap(enough, width);
+            if lines.len() > height || enough.len() < notes.len() {
+                lines.truncate(height);
+                if let Some(last) = lines.last_mut() {
+                    *last = truncate(&format!("{}…", last.trim_end()), width);
+                }
+            }
             frame.render_widget(
-                Paragraph::new(crate::grid::wrapped(enough, rows[3].width))
-                    .style(Style::default().fg(theme.muted)),
+                Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.muted)),
                 rows[3],
             );
         }
@@ -1619,6 +1633,60 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A note longer than its preview says it was cut (invariant 19).
+    ///
+    /// Found on a first-run dashboard at 200x50: the seeded overdue task's
+    /// preview stopped after "This one is here to show that;" and the closing
+    /// sentence was gone with nothing to say so, because the `Paragraph` was
+    /// handed every wrapped row and dropped the ones below its two in silence.
+    ///
+    /// `no_panel_cuts_a_value_silently_at_any_width` could not see it: it
+    /// varies the width and differences adjacent renders, and a row that is
+    /// never drawn at all leaves nothing to difference. So this sweeps width
+    /// with the preview's height fixed, and asserts both halves — a note that
+    /// fits carries no `…` — so an ellipsis stuck on unconditionally fails too.
+    #[test]
+    fn a_note_longer_than_its_preview_ends_in_an_ellipsis() {
+        const NOTE: &str = "A task past its due date reads in red, and the counter in the \
+                            border frames it as overdue. This one is here to show that; \
+                            delete it with d once you have seen it.";
+        const HEIGHT: u16 = 12;
+        let (mut p, _dir) = panel("preview-cut");
+        let mut task = Task::new(0, "This one is overdue", p.today);
+        task.notes = Some(NOTE.to_string());
+        p.store.add(task);
+        p.refresh_view();
+
+        let (mut cut, mut whole) = (0, 0);
+        for width in 8..=200u16 {
+            let screen = screen_of(&mut p, width, HEIGHT);
+            let rows: Vec<&str> = screen.lines().collect();
+            // The preview's two rows sit directly above the status line.
+            let first = rows[usize::from(HEIGHT) - 3].trim_end();
+            let last = rows[usize::from(HEIGHT) - 2].trim_end();
+            let wrapped = crate::grid::wrap(NOTE, usize::from(width));
+            assert_eq!(first, wrapped[0].trim_end(), "at width {width}");
+            if wrapped.len() > 2 {
+                cut += 1;
+                assert!(
+                    last.ends_with('…'),
+                    "a note needing {} rows was cut to 2 without saying so at width {width}:\n{screen}",
+                    wrapped.len()
+                );
+            } else {
+                whole += 1;
+                assert!(
+                    !screen.contains('…'),
+                    "a note that fits must not claim to be cut at width {width}:\n{screen}"
+                );
+            }
+        }
+        assert!(
+            cut > 0 && whole > 0,
+            "the sweep must reach both a cut and a whole note: cut {cut}, whole {whole}"
+        );
     }
 
     #[test]

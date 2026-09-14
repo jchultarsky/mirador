@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A task's note preview says when it has been cut.** A note longer than
+  the two-row preview lost its later rows with nothing to show it, so the
+  seeded overdue task's note ended a sentence early and looked complete.
+  The last visible row now ends in `…`.
+- **The watch log's empty state reads as a sentence.** "which f on the
+  agenda panel sets" was missing a word; it now says that pressing `f` on
+  the agenda panel sets `[agenda].file`.
+
 ## [1.12.1] - 2026-09-14
 
 ### Fixed
