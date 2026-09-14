@@ -1916,6 +1916,24 @@ and confirmed on real hardware by the reporter on 2026-09-14. It closes when a
 went out without it, on 2026-09-14, for a `rustls` advisory that could not
 wait, so the battery fix is the next release's.
 
+**Where #168 stands, and the decision not to nudge yet.** A starship
+maintainer reviewed it on 2026-09-13, asking for `CStr` or `strip_suffix`.
+The change was pushed the same day, the reporter confirmed it on NetBSD
+hardware the next morning, and a note went on the PR that pkgsrc had already
+patched `starship` and `oatbar` with the same fix. By the evening of
+2026-09-14 it was green with nothing owed to the reviewer, and not yet
+approved. **The owner chose to wait a week before nudging, and a read-only
+check is scheduled for 2026-09-21** to report whether it merged, whether
+anything is owed, or whether a polite nudge is now reasonable. Do not nudge
+before then.
+
+When that day comes, **check the PR before spending the nudge**: whether it
+still merges cleanly, whether CI has run and is green on the head, and whether
+a review comment is waiting on us. ureq#1195 sat for two weeks with a CHANGELOG
+conflict and CI never approved to run, and a bare "any update?" there would
+have been answered with "please rebase". A nudge is for a maintainer who has
+everything they need, and saying so in it is most of what makes it land.
+
 That release will not be the battery fix alone. **`main` already carries two
 user-visible fixes past 1.12.1**, both from a first-run capture the same
 evening and merged as #260: the task note preview ending in `…` when it is
