@@ -1892,8 +1892,16 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**The tracker is empty.** [#205](https://github.com/jchultarsky/mirador/issues/205)
-was the last entry and shipped in 1.6.1 the day it was diagnosed — the first
+**One issue is open, and it is waiting on upstream.**
+[#255](https://github.com/jchultarsky/mirador/issues/255) — NetBSD's battery
+panel failing — is a trailing-NUL bug in `starship-battery`'s NetBSD backend,
+fixed by [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168)
+and confirmed on real hardware by the reporter on 2026-09-14. It closes when a
+`starship-battery` release carries the fix and mirador bumps to it, which is
+also when 1.12.1 is cut.
+
+[#205](https://github.com/jchultarsky/mirador/issues/205)
+was the entry before it and shipped in 1.6.1 the day it was diagnosed — the first
 BSD sighting, and a real fetch-layer defect underneath it: a resolver that
 answers AAAA-first on a host with no IPv6 route killed every fetch, because
 `ureq` walks its address list only on *connection refused* and an unroutable
@@ -1904,12 +1912,13 @@ before the tag, and the same broadening went upstream as
 sixteen days after it was opened, with no review and without CI ever running on
 the branch.
 
-It is **unreleased upstream** at the time of writing: ureq's crates.io maximum
-is 3.4.1 and the entry sits under `# Unreleased`. The owner's standing
-instruction is to bump when it ships, and dependabot's weekly cargo schedule
-will open that PR without anyone watching for it. **Keep `fetch.rs`'s
-address-family fallback regardless** — a distro can build mirador against
-whatever `ureq` it likes, so upstream merging is not a reason to drop ours.
+It **shipped in ureq 3.4.2 on 2026-09-13**, and mirador's floor moved to
+3.4.2 the next day, on the owner's standing instruction to bump when it
+shipped. Dependabot had not yet noticed: its weekly cargo run had proposed
+3.4.1 the evening before the release, so waiting for it would have cost up to
+a week. **Keep `fetch.rs`'s address-family fallback regardless** — a distro
+can build mirador against whatever `ureq` it likes, so upstream shipping is
+not a reason to drop ours.
 
 The external-panel work that was live here is settled:
 [#191](https://github.com/jchultarsky/mirador/discussions/191)'s contract was
@@ -1925,13 +1934,15 @@ holds and is now part of the plugin contract rather than a one-off refusal: no
 PTY, in-tree or out. See "Contributions from outside" for what was committed to
 and why.
 
-This heading has now gone stale **five** times — #132, then #153, #153 again
+This heading has now gone stale **six** times — #132, then #153, #153 again
 after #178 closed, then #178 for a day after #205 closed alongside a #191
-status that had been settled and shipped for a day, and now ureq#1195 called
-"still in flight" on the day it merged. The entry is written when work starts
-and nothing makes anybody revisit it when the work lands.
+status that had been settled and shipped for a day, then ureq#1195 called
+"still in flight" on the day it merged, and then "unreleased upstream" a day
+after 3.4.2 shipped it, under a "tracker is empty" with #255 open. The entry
+is written when work starts and nothing makes anybody revisit it when the
+work lands.
 
-**The fourth and fifth were both caught the same way**, and it is the only
+**The fourth, fifth and sixth were all caught the same way**, and it is the only
 method that has ever worked here: the owner asked what was left, and the answer
 was checked against `gh issue list` and the upstream PR *before* this file was
 read. Answering from these notes is how the previous four survived. The count

@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it now says that `sysinfo` does not read envsys sensors yet (#255). The
   hint wraps to the panel rather than being cut.
 
+### Changed
+
+- **`ureq` 3.4.2**, which carries the upstream half of the #205 fix: a
+  connect that fails for one resolved address now tries the next one
+  instead of giving up (algesten/ureq#1195). mirador's own address-family
+  fallback in `fetch.rs` stays, since a distribution may build against an
+  older `ureq`. Also `dirs` 7, which changes nothing mirador reads.
+
 ## [1.12.0] - 2026-09-11
 
 ### Added
