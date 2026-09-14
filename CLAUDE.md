@@ -2143,7 +2143,12 @@ and had to be added back was the one that did not.
   published. It also carries `ureq` 3.4.2 (the upstream half of #205), the
   temperature panel's corrected empty-state hints for Windows and NetBSD,
   and `dirs` 7. It does **not** carry the NetBSD battery fix, which waits on
-  a `starship-battery` release (#255). 1.12.0 added the two panels asked
+  a `starship-battery` release (#255). The release run built all five
+  targets and 21 assets, the attestations on an archive and a Windows
+  `-update` binary both trace to `release.yml@refs/tags/v1.12.1` at
+  `138d752` (the wrong-repository control returned 404 for both), and it
+  was live on crates.io at 16:52 UTC — twenty-one minutes after the
+  advisory first turned a pull request red, at 16:31. 1.12.0 added the two panels asked
   for by name on
   2026-09-11 — `battery` and `temperature`, the first widgets deliberately
   left out of the default layout, so the shipped dashboard and the demo are
@@ -2249,6 +2254,16 @@ and had to be added back was the one that did not.
   Both failures are the same shape as every other vacuous check in these
   notes: a set that is empty, or merely not the set you meant, satisfies every
   condition asked of it.
+
+  **A red `supply chain` check is not necessarily the PR's doing.** It runs
+  `cargo deny` against the live advisory database, so an advisory published
+  today fails a PR that touches nothing near the flagged crate — and fails
+  `main` too, silently, until something runs. #257 hit this: a `ureq` bump
+  went red on RUSTSEC-2026-0285 in `rustls`, which `main` carried at the
+  same version. Check `git show origin/main:Cargo.lock` for the flagged
+  version before blaming the diff. The fix is usually a `cargo update -p`
+  on the same branch, and the advisory is then a reason to release rather
+  than a reason to wait: 1.12.1 was cut for it the same day.
 
   **A PR stacked on another PR's branch dies with it.** `gh pr merge
   --delete-branch` on the base closes the stacked PR automatically, and a
