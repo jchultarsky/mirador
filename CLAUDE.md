@@ -404,6 +404,21 @@ map, that one is the procedure.
     a desktop or a CI runner has no battery and reports no sensors, and a
     sweep over an empty panel checks nothing.
 
+    **That sweep varies width, and a cut can also run along the height.**
+    A row the pane has no room for is never drawn at any width, so there
+    is nothing to difference. That is how a task's note preview shipped in
+    1.12.1 still dropping rows in silence, found on 2026-09-14 in a first-run
+    capture: the seeded overdue task's note stopped at "This one is here to
+    show that;" and the closing sentence was simply gone. The preview is a
+    fixed two rows. The last one now ends in `…`, and so does a note the
+    preview's character budget cut exactly at a row boundary, because rows
+    that fill the pane look finished either way.
+    `a_note_longer_than_its_preview_ends_in_an_ellipsis` sweeps width with
+    the height pinned, and asserts both halves: a note that fits carries no
+    `…`, so an ellipsis stuck on unconditionally fails it too. **Any fixed-height
+    region fed prose is this bug waiting**, and wrapping it first (as `grid::wrapped`
+    requires) is not the same as fitting it.
+
 ## Visual system
 
 Design thesis: *the watch station*. The vernacular is a lookout's instrument
@@ -1900,6 +1915,15 @@ and confirmed on real hardware by the reporter on 2026-09-14. It closes when a
 `starship-battery` release carries the fix and mirador bumps to it. 1.12.1
 went out without it, on 2026-09-14, for a `rustls` advisory that could not
 wait, so the battery fix is the next release's.
+
+That release will not be the battery fix alone. **`main` already carries two
+user-visible fixes past 1.12.1**, both from a first-run capture the same
+evening and merged as #260: the task note preview ending in `…` when it is
+cut (see invariant 19), and the watch log's empty state, which read "which f
+on the agenda panel sets" with a word missing. Both sit under Unreleased in
+the CHANGELOG. Neither is urgent enough to cut a release of its own, so they
+ride with the `starship-battery` bump as 1.12.2 unless something else forces
+a release first.
 
 [#205](https://github.com/jchultarsky/mirador/issues/205)
 was the entry before it and shipped in 1.6.1 the day it was diagnosed — the first
