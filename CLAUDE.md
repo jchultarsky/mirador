@@ -1968,7 +1968,9 @@ The external-panel work that was live here is settled:
 agreed in text on 2026-08-24 and shipped in 1.6.0 as protocol v1, now the
 third compatibility promise. The SDK and plugins side belongs to krflol's
 `mirador-plugins` repository, per the division recorded in "Contributions
-from outside" — activity there is expected and is not mirador's queue.
+from outside" — activity there is expected and is not mirador's queue. The
+discussion itself was closed as resolved on 2026-09-14, along with #188
+below; both threads stay readable.
 
 It grew out of [#188](https://github.com/jchultarsky/mirador/discussions/188),
 which asked for a terminal widget and was answered no — mirador is a pane
@@ -2306,6 +2308,18 @@ and had to be added back was the one that did not.
   version before blaming the diff. The fix is usually a `cargo update -p`
   on the same branch, and the advisory is then a reason to release rather
   than a reason to wait: 1.12.1 was cut for it the same day.
+
+  **A merged PR's branch is already gone from GitHub; `git branch -r` may
+  still list it.** The repository deletes head branches on merge, within
+  seconds — the PR's event log records it as `head_ref_deleted`. A
+  `git fetch` without `--prune` keeps the remote-tracking ref regardless, so
+  `origin/<branch>` lingers locally and reads as a remote branch nobody
+  cleaned up. The 2026-09-14 housekeeping fell for it: four refs for #260–#263
+  looked like leftovers, and a `git push origin --delete` was recommended for
+  branches that no longer existed. `git ls-remote --heads origin` asks the
+  remote itself; `git fetch --prune` clears the stale refs. This is the same
+  finding as the 2026-09-10 pass — eleven stale refs there — missed a second
+  time because the first was never written down.
 
   **A PR stacked on another PR's branch dies with it.** `gh pr merge
   --delete-branch` on the base closes the stacked PR automatically, and a
