@@ -1938,21 +1938,25 @@ That release will not be the battery fix alone. **`main` already carries two
 user-visible fixes past 1.12.1**, both from a first-run capture the same
 evening and merged as #260: the task note preview ending in `…` when it is
 cut (see invariant 19), and the watch log's empty state, which read "which f
-on the agenda panel sets" with a word missing. Both sit under Unreleased in
-the CHANGELOG.
+on the agenda panel sets" with a word missing. Both shipped in 1.13.0.
 
 **And it is a feature release, so it is 1.13.0, not the 1.12.2 this paragraph
 first said.** [#265](https://github.com/jchultarsky/mirador/issues/265) asked
 for a 12-hour clock on 2026-09-15, and #266 merged it the same day: `h` and
 `[clocks].twelve_hour`, 24-hour by default because most of the world reads
-the clock that way, with the choice remembered in `state.toml` like `s`. It
-sits under Unreleased beside #260's fixes. A new
+the clock that way, with the choice remembered in `state.toml` like `s`. A new
 key and a new binding are a minor version under semver, whatever else rides
 along. The version was written down while the queue held only fixes, and a
 queue that gains a feature changes the number without anyone touching the
-sentence — the same staleness as the rest of this heading. Nothing here is
-urgent enough to cut a release of its own, so all of it rides with the
-`starship-battery` bump unless something else forces a release first.
+sentence — the same staleness as the rest of this heading.
+
+**The owner then cut 1.13.0 the same day without waiting for the battery
+fix.** The plan had been for everything to ride with the `starship-battery`
+bump, but rust-battery#168 was still unmerged, and a finished feature with
+its reporter waiting was a better reason to release than an upstream PR was a
+reason to hold. The battery fix now goes in whichever release follows the
+bump, and #255's reporter is pinged on *that* one — the promise was the
+release carrying the fix, not the next release.
 
 [#205](https://github.com/jchultarsky/mirador/issues/205)
 was the entry before it and shipped in 1.6.1 the day it was diagnosed — the first
@@ -2190,10 +2194,17 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.12.1` is released**, as a GitHub release with binaries for macOS
+- **`1.13.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a maintenance release cut on
-  2026-09-14 for a security advisory: `rustls` 0.23.45 for
+  and published on crates.io. It is a feature release cut on 2026-09-15:
+  the 12-hour clock asked for in #265 (`h` and `[clocks].twelve_hour`,
+  24-hour by default, the choice remembered in `state.toml`), the wider zone
+  column that keeps a 12-hour row's `+1d` marker, and #260's two fixes — a
+  cut task note preview ending in `…`, and the watch log's empty-state
+  sentence. It does **not** carry the NetBSD battery fix: upstream
+  starship/rust-battery#168 was still unmerged, and the owner chose not to
+  hold a finished feature for it (#255). 1.12.1 was a maintenance release
+  cut on 2026-09-14 for a security advisory: `rustls` 0.23.45 for
   RUSTSEC-2026-0285, found by the supply chain job the day it was
   published. It also carries `ureq` 3.4.2 (the upstream half of #205), the
   temperature panel's corrected empty-state hints for Windows and NetBSD,

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-09-15
+
 ### Added
 
 - **A 12-hour clock** (#265). `h` switches the clock panel between 24- and
@@ -21,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A 12-hour zone row keeps its day marker.** A `time_format` with AM or PM
   in it, such as `%I:%M:%S %p`, was cut to `…` where the `+1d` belongs; the
   table now makes room for it.
-
 - **A task's note preview says when it has been cut.** A note longer than
   the two-row preview lost its later rows with nothing to show it, so the
   seeded overdue task's note ended a sentence early and looked complete.
@@ -1912,7 +1913,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.12.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/jchultarsky/mirador/compare/v1.12.1...v1.13.0
 [1.12.1]: https://github.com/jchultarsky/mirador/compare/v1.12.0...v1.12.1
 [1.12.0]: https://github.com/jchultarsky/mirador/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/jchultarsky/mirador/compare/v1.10.2...v1.11.0
