@@ -40,18 +40,26 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// `d remove` is the one that drops at that width, and it is the right one to
 /// lose: `d` deletes in the task, notes and watchlist panels too, so a reader who
 /// has used any of them already knows it. `s` and the move keys are idiosyncratic
-/// to this panel and guessable from nothing. A wider clock shows all five.
+/// to this panel and guessable from nothing. A wider clock shows all six.
+///
+/// `h` is the same kind of key as `s`, and it shipped in 1.13.0 as an `extra` —
+/// the #109 mistake again, one release later: in `?` and nowhere else, so a wide
+/// clock with room to spare still never offered it. It sits above `d` for the
+/// reason `Shift+↑↓` does, and `12/24h` rather than `12 / 24-hour` because the
+/// border pays for every cell: at the default width the first four still fit
+/// exactly and both of these drop, `h` appears from a 55-cell budget, and `d`
+/// joins it at 66.
 const BINDINGS: &[Binding] = &[
     Binding::primary("s", "seconds"),
     Binding::primary("a", "add"),
     Binding::primary("e", "edit"),
     Binding::primary("Shift+↑↓", "move"),
+    Binding::primary("h", "12/24h"),
     Binding::primary("d", "remove"),
     Binding::extra("↑ / ↓", "select a clock"),
     Binding::extra("j / k", "select a clock"),
     Binding::extra("J / K", "move it"),
     Binding::extra("o", "show file path"),
-    Binding::extra("h", "12 / 24-hour"),
 ];
 
 /// The largest scale the numerals are ever drawn at. Past this a clock stops
@@ -1833,6 +1841,50 @@ mod tests {
         assert!(
             drawn.contains("a add") && drawn.contains("e edit"),
             "adding and editing must survive alongside it: {drawn:?}"
+        );
+    }
+
+    /// `h` shipped in 1.13.0 as an `extra`, so the border never offered it at any
+    /// width — reported by the owner on a clock with room to spare. Asserted at
+    /// both ends of its range: absent where the default width already fits
+    /// exactly four hints, present from the first budget that has room for it,
+    /// and reached before `d`, which the other list panels already teach.
+    #[test]
+    fn the_twelve_hour_key_reaches_the_border_once_there_is_room() {
+        let theme = crate::theme::Theme::default();
+        let drawn = |budget: u16| -> String {
+            crate::frame::hint_line(BINDINGS, &theme, budget)
+                .expect("the clock has primaries")
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect()
+        };
+
+        // Default width: the four that fit are untouched, and `h` waits.
+        let default = drawn(52 - 8);
+        assert!(
+            default.contains("Shift+↑↓") && !default.contains("12/24h"),
+            "at the default width the move key still fits and `h` drops: {default:?}"
+        );
+
+        // The first budget with room for it.
+        let roomy = drawn(55);
+        assert!(
+            roomy.contains("h 12/24h"),
+            "a clock with room for `h` must show it: {roomy:?}"
+        );
+        assert!(
+            !roomy.contains("d remove"),
+            "`h` is offered before `d`, so at 55 cells it is `h` that fits: {roomy:?}"
+        );
+
+        // Wide enough for everything: all six, `h` before `d`.
+        let wide = drawn(200);
+        let (h, d) = (wide.find("h 12/24h"), wide.find("d remove"));
+        assert!(
+            matches!((h, d), (Some(h), Some(d)) if h < d),
+            "a wide clock shows `h` and then `d`: {wide:?}"
         );
     }
 

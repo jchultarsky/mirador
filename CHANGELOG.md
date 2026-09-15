@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The clock's border offers `h`.** 1.13.0 put the 12-hour key only in the
+  `?` overlay, so a clock with room to spare never showed it. It is now on the
+  border and the status bar, after `Shift+↑↓ move` and before `d remove`, as
+  `h 12/24h`. At the default width the border is unchanged; `h` appears as
+  soon as the clock is wide enough for it.
+
 ## [1.13.0] - 2026-09-15
 
 ### Added
