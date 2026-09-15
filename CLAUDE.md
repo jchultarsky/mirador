@@ -2202,8 +2202,13 @@ and had to be added back was the one that did not.
   `?` overlay and a clock with room to spare never showed it — the #109
   mistake with the move keys, repeated one release on, and found by the owner
   on sight. At the default width the border is unchanged. It does not carry
-  the NetBSD battery fix either (#255). 1.13.0 was a feature release cut the
-  same day:
+  the NetBSD battery fix either (#255). The release run built all five
+  targets and 21 assets, and the attestations on an archive and a Windows
+  `-update` binary both trace to `release.yml@refs/tags/v1.13.1` at
+  `5a35380` (the wrong-repository control returned 404 for both), and it
+  was live on crates.io at 15:49 UTC — nine minutes after Cut release was
+  dispatched at 15:40, and twenty-five after 1.13.0. 1.13.0 was a feature
+  release cut the same day:
   the 12-hour clock asked for in #265 (`h` and `[clocks].twelve_hour`,
   24-hour by default, the choice remembered in `state.toml`), the wider zone
   column that keeps a 12-hour row's `+1d` marker, and #260's two fixes — a
@@ -2311,7 +2316,7 @@ and had to be added back was the one that did not.
   Both remain runnable by hand from a machine with the right credentials —
   the workflows add a path, they do not close one.
 
-  **Both have now cut real releases — seven of them, 1.10.0 through 1.13.0,
+  **Both have now cut real releases — eight of them, 1.10.0 through 1.13.1,
   between 2026-09-09 and 2026-09-15.**
   Until then they had only been smoke-tested against an already-released tag,
   where both correctly *refused*; a refusal proves the guard, not the path.
