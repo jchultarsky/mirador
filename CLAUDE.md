@@ -2194,9 +2194,16 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.13.0` is released**, as a GitHub release with binaries for macOS
+- **`1.13.1` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a feature release cut on 2026-09-15:
+  and published on crates.io. It is a patch release cut on 2026-09-15, hours
+  after 1.13.0, carrying one fix (#271): the clock's border offers
+  `h 12/24h`. 1.13.0 had shipped `h` as an `extra`, so it reached only the
+  `?` overlay and a clock with room to spare never showed it — the #109
+  mistake with the move keys, repeated one release on, and found by the owner
+  on sight. At the default width the border is unchanged. It does not carry
+  the NetBSD battery fix either (#255). 1.13.0 was a feature release cut the
+  same day:
   the 12-hour clock asked for in #265 (`h` and `[clocks].twelve_hour`,
   24-hour by default, the choice remembered in `state.toml`), the wider zone
   column that keeps a 12-hour row's `+1d` marker, and #260's two fixes — a
