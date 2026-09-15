@@ -2203,7 +2203,16 @@ and had to be added back was the one that did not.
   cut task note preview ending in `…`, and the watch log's empty-state
   sentence. It does **not** carry the NetBSD battery fix: upstream
   starship/rust-battery#168 was still unmerged, and the owner chose not to
-  hold a finished feature for it (#255). 1.12.1 was a maintenance release
+  hold a finished feature for it (#255). The release run built all five
+  targets and 21 assets, and the attestations on an archive and a Windows
+  `-update` binary both trace to `release.yml@refs/tags/v1.13.0` at
+  `7e43c04` (the wrong-repository control returned 404 for both), and it
+  was live on crates.io at 15:24 UTC — under nine minutes after Cut release
+  was dispatched at 15:16. The first attestation pass reported the archive missing, and it was not: the
+  download pattern asked for `.tar.xz`, the archives are `.tar.gz`, and
+  `gh release download -p` fetches nothing for a pattern that matches
+  nothing, without saying so — the `[ -s ]` test is what stopped that
+  reading as a failed attestation. 1.12.1 was a maintenance release
   cut on 2026-09-14 for a security advisory: `rustls` 0.23.45 for
   RUSTSEC-2026-0285, found by the supply chain job the day it was
   published. It also carries `ureq` 3.4.2 (the upstream half of #205), the
@@ -2295,8 +2304,8 @@ and had to be added back was the one that did not.
   Both remain runnable by hand from a machine with the right credentials —
   the workflows add a path, they do not close one.
 
-  **Both have now cut real releases — six of them, 1.10.0 through 1.12.1,
-  between 2026-09-09 and 2026-09-14.**
+  **Both have now cut real releases — seven of them, 1.10.0 through 1.13.0,
+  between 2026-09-09 and 2026-09-15.**
   Until then they had only been smoke-tested against an already-released tag,
   where both correctly *refused*; a refusal proves the guard, not the path.
   The tag push and the Trusted Publishing exchange are the two steps only a
