@@ -1907,7 +1907,8 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**One issue is open, and it is waiting on upstream.**
+**Two issues are open: #265 has a PR in review (#266, the 12-hour clock),
+and #255 is waiting on upstream.**
 [#255](https://github.com/jchultarsky/mirador/issues/255) — NetBSD's battery
 panel failing — is a trailing-NUL bug in `starship-battery`'s NetBSD backend,
 fixed by [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168)
@@ -1939,9 +1940,19 @@ user-visible fixes past 1.12.1**, both from a first-run capture the same
 evening and merged as #260: the task note preview ending in `…` when it is
 cut (see invariant 19), and the watch log's empty state, which read "which f
 on the agenda panel sets" with a word missing. Both sit under Unreleased in
-the CHANGELOG. Neither is urgent enough to cut a release of its own, so they
-ride with the `starship-battery` bump as 1.12.2 unless something else forces
-a release first.
+the CHANGELOG.
+
+**And it is a feature release, so it is 1.13.0, not the 1.12.2 this paragraph
+first said.** [#265](https://github.com/jchultarsky/mirador/issues/265) asked
+for a 12-hour clock on 2026-09-15 and #266 builds it: `h` and
+`[clocks].twelve_hour`, 24-hour by default because most of the world reads
+the clock that way, with the choice remembered in `state.toml` like `s`. A new
+key and a new binding are a minor version under semver, whatever else rides
+along. The version was written down while the queue held only fixes, and a
+queue that gains a feature changes the number without anyone touching the
+sentence — the same staleness as the rest of this heading. Nothing here is
+urgent enough to cut a release of its own, so all of it rides with the
+`starship-battery` bump unless something else forces a release first.
 
 [#205](https://github.com/jchultarsky/mirador/issues/205)
 was the entry before it and shipped in 1.6.1 the day it was diagnosed — the first
