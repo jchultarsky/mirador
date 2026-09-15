@@ -31,6 +31,12 @@ pub struct ClocksConfig {
     /// look the design is after; `s` turns them off at a keystroke for anyone
     /// who finds the tick draws the eye.
     pub show_seconds: bool,
+    /// A 12-hour clock, with AM/PM set small beside the numerals. Off by
+    /// default; `h` switches it and the choice is remembered. When on it
+    /// governs the whole panel, converting the zone table's `time_format` to
+    /// match (#265). When off, `time_format` is used exactly as written, so a
+    /// config that already asked for `%I:%M:%S %p` keeps its table.
+    pub twelve_hour: bool,
 }
 
 impl Default for ClocksConfig {
@@ -58,6 +64,7 @@ impl Default for ClocksConfig {
             date_format: "%A %d %B".into(),
             show_offset: true,
             show_seconds: true,
+            twelve_hour: false,
         }
     }
 }

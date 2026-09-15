@@ -1165,6 +1165,7 @@ mod tests {
     const EVERY_GRID: &[(&str, &[Column])] = &[
         ("calculator", crate::widgets::calculator::COLUMNS),
         ("clocks", crate::widgets::clocks::COLUMNS),
+        ("clocks", crate::widgets::clocks::COLUMNS_MERIDIEM),
         ("notes", crate::widgets::notes::COLUMNS),
         ("stocks", crate::widgets::stocks::COLUMNS),
         ("temperature", crate::widgets::temperature::COLUMNS),
@@ -1295,7 +1296,10 @@ mod tests {
                     walk(&path, found);
                 } else if path.extension().is_some_and(|e| e == "rs") {
                     let text = std::fs::read_to_string(&path).unwrap();
-                    if text.contains(concat!("const COLUMNS: &[", "Column]")) {
+                    // Counted, not merely detected: a module can declare more
+                    // than one column set, and the clock does (#265).
+                    let declared = text.matches(concat!(": &[", "Column] = &[")).count();
+                    for _ in 0..declared {
                         found.push(path.file_stem().unwrap().to_string_lossy().into_owned());
                     }
                 }

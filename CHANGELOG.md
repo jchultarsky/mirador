@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A 12-hour clock** (#265). `h` switches the clock panel between 24- and
+  12-hour, and the choice is remembered; `[clocks].twelve_hour = true` sets
+  it in the config. The default stays 24-hour. AM or PM sits small at the
+  top right of the numerals, over the seconds, and the zone table follows:
+  its `time_format` is converted to 12-hour with your padding kept. With
+  12-hour off, `time_format` is used as written, as before.
+
 ### Fixed
+
+- **A 12-hour zone row keeps its day marker.** A `time_format` with AM or PM
+  in it, such as `%I:%M:%S %p`, was cut to `…` where the `+1d` belongs; the
+  table now makes room for it.
 
 - **A task's note preview says when it has been cut.** A note longer than
   the two-row preview lost its later rows with nothing to show it, so the

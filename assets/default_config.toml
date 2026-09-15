@@ -223,6 +223,7 @@ time_format = "%H:%M:%S"     # format for the secondary zone table
 date_format = "%A %d %B"     # shown under the large clock; empty hides it
 show_offset = true
 show_seconds = true          # seconds ride small beside the big HH:MM
+twelve_hour = false          # AM/PM clock, and table; `h` switches at runtime
 zones = [
   { label = "Local",  timezone = "local" },
   { label = "UTC",    timezone = "UTC" },

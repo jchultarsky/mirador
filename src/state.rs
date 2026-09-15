@@ -61,6 +61,9 @@ pub struct UiState {
     /// `s` in the clock panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clocks_show_seconds: Option<bool>,
+    /// `h` in the clock panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clocks_twelve_hour: Option<bool>,
     /// `f` in the agenda panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agenda_file: Option<String>,
@@ -124,6 +127,7 @@ impl UiState {
             todo_sort: Some(sort.label().to_string()),
             todo_show_completed: Some(config.todo.show_completed),
             clocks_show_seconds: Some(config.clocks.show_seconds),
+            clocks_twelve_hour: Some(config.clocks.twelve_hour),
             // Resolved the same way the panel resolves it, not read raw from
             // the config. The panel reports the *resolved* path, and a baseline
             // in different terms is not a baseline: with `[agenda].file`
@@ -182,6 +186,7 @@ impl UiState {
             todo_sort,
             todo_show_completed,
             clocks_show_seconds,
+            clocks_twelve_hour,
             pomodoro_focus_minutes,
             pomodoro_short_break_minutes,
             pomodoro_long_break_minutes,
@@ -369,6 +374,7 @@ mod tests {
             todo_sort: Some("due".into()),
             todo_show_completed: Some(true),
             clocks_show_seconds: Some(false),
+            clocks_twelve_hour: Some(true),
             pomodoro_focus_minutes: Some(30),
             pomodoro_short_break_minutes: Some(7),
             pomodoro_long_break_minutes: Some(20),

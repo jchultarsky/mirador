@@ -51,6 +51,7 @@ const BINDINGS: &[Binding] = &[
     Binding::extra("j / k", "select a clock"),
     Binding::extra("J / K", "move it"),
     Binding::extra("o", "show file path"),
+    Binding::extra("h", "12 / 24-hour"),
 ];
 
 /// The largest scale the numerals are ever drawn at. Past this a clock stops
@@ -73,6 +74,19 @@ pub(crate) const COLUMNS: &[Column] = &[
     Column::fixed("vs local", 9).right().drops_below(30),
 ];
 
+/// The zone list when its times carry AM or PM.
+///
+/// `00:00:00 AM +1d` is fifteen cells, and at twelve the marker was cut to `…`
+/// — #107 again, reached by the very `time_format` the README suggests. Chosen
+/// by what the table's format holds rather than by `twelve_hour`, so someone
+/// who wrote `%I:%M:%S %p` themselves gets the room too. `vs local` drops three
+/// cells later, which leaves the zone label exactly the room it has in 24-hour.
+pub(crate) const COLUMNS_MERIDIEM: &[Column] = &[
+    Column::flex("zone", 1),
+    Column::fixed("time", 15),
+    Column::fixed("vs local", 9).right().drops_below(33),
+];
+
 /// A resolved clock: either a working timezone or the error from resolving it.
 #[derive(Debug)]
 struct Clock {
@@ -89,6 +103,8 @@ pub struct ClocksPanel {
     /// Everything else, rendered as a labelled list.
     secondary: Vec<Clock>,
     show_seconds: bool,
+    /// `h`, seeded from `[clocks].twelve_hour`.
+    twelve_hour: bool,
     /// The live list, which the panel edits. `[clocks].zones` seeds it once.
     zones: crate::zones::Zones,
     /// Which secondary clock is selected, for `d`. The primary is index 0 and
@@ -140,11 +156,13 @@ impl ClocksPanel {
         };
 
         let show_seconds = config.show_seconds;
+        let twelve_hour = config.twelve_hour;
         Ok(Self {
             config,
             primary,
             secondary: clocks,
             show_seconds,
+            twelve_hour,
             zones,
             selected: 1,
             asking: None,
@@ -307,6 +325,83 @@ fn without_seconds(format: &str) -> String {
     format.to_string()
 }
 
+/// One conversion specifier in a `strftime` format: its byte range, flags and
+/// conversion character. `%%` comes back as a specifier whose conversion is
+/// `%`, so a literal percent is never mistaken for the start of the next one.
+fn specifiers(format: &str) -> impl Iterator<Item = (std::ops::Range<usize>, &str, char)> {
+    let mut from = 0;
+    std::iter::from_fn(move || {
+        let at = from + format[from..].find('%')?;
+        let spec = &format[at + 1..];
+        let flags_len = spec
+            .find(|c: char| !matches!(c, '-' | '_' | '0' | '^' | '#'))
+            .unwrap_or(spec.len());
+        let conversion = spec[flags_len..].chars().next();
+        let end = at + 1 + flags_len + conversion.map_or(0, char::len_utf8);
+        from = end;
+        Some((at..end, &spec[..flags_len], conversion.unwrap_or('%')))
+    })
+}
+
+/// Whether a format prints AM or PM, which is what decides the table's columns.
+fn has_meridiem(format: &str) -> bool {
+    specifiers(format).any(|(_, _, conversion)| matches!(conversion, 'p' | 'P'))
+}
+
+/// `format` as a 12-hour format, for when `[clocks].twelve_hour` or `h` has
+/// asked for one (#265).
+///
+/// The same shape as [`without_seconds`], for the same reason: the panel is one
+/// panel, so a 12-hour clock above a 24-hour table reads as the setting half
+/// working — and `time_format` is the reader's, so it is converted rather than
+/// replaced. Each 24-hour hour becomes its 12-hour twin with the reader's
+/// padding kept (`%H` to `%I`, `%k` to `%l`, `%T` and `%R` spelled out), and
+/// ` %p` goes straight after the last time specifier, so `%H:%M (%Z)` becomes
+/// `%I:%M %p (%Z)` rather than ending in the meridiem.
+///
+/// There is deliberately no conversion the other way. With the setting off the
+/// format is used as written, which is what it did before the setting existed
+/// — so a config that asked for `%I:%M:%S %p` keeps the table it asked for.
+///
+/// Left alone: a format that is already 12-hour, one with no hour in it, and
+/// one that already says AM or PM somewhere.
+fn twelve_hour_format(format: &str) -> String {
+    let mut out = String::with_capacity(format.len() + 3);
+    let mut converted = false;
+    let mut after_time = None;
+    let mut copied = 0;
+    for (range, flags, conversion) in specifiers(format) {
+        out.push_str(&format[copied..range.start]);
+        copied = range.end;
+        let twin = match conversion {
+            'H' => "I",
+            'k' => "l",
+            'T' => "I:%M:%S",
+            'R' => "I:%M",
+            _ => "",
+        };
+        if twin.is_empty() {
+            out.push_str(&format[range]);
+        } else {
+            out.push('%');
+            out.push_str(flags);
+            out.push_str(twin);
+        }
+        converted |= matches!(conversion, 'H' | 'k' | 'T' | 'R');
+        if matches!(conversion, 'H' | 'k' | 'T' | 'R' | 'I' | 'l' | 'M' | 'S') {
+            after_time = Some(out.len());
+        }
+    }
+    out.push_str(&format[copied..]);
+    if converted
+        && !has_meridiem(format)
+        && let Some(at) = after_time
+    {
+        out.insert_str(at, " %p");
+    }
+    out
+}
+
 /// Look up an IANA zone, treating `local` as the system zone.
 fn resolve_zone(name: &str) -> Result<TimeZone, String> {
     if name.eq_ignore_ascii_case("local") || name.is_empty() {
@@ -356,23 +451,35 @@ fn relative_offset(primary: jiff::tz::Offset, other: jiff::tz::Offset) -> String
 /// ladder goes to plain text *with* the seconds rather than to numerals
 /// without them, because `s` is on and a clock that dropped its seconds by
 /// itself reads as the key not having worked.
+///
+/// A 12-hour clock's `AM` or `PM` sits in the same column as the small seconds,
+/// at the top of the numerals where they sit at the foot (#265), so every rung
+/// leaves it a space and its cells. Over the seconds it costs nothing more:
+/// two letters over two digits.
 fn choose_face(
     show_seconds: bool,
     full: &str,
     short: &str,
     seconds: &str,
+    meridiem: Option<&str>,
     width: u16,
     rows: u16,
 ) -> (String, Option<String>, Option<u16>) {
     let fits =
         |text: &str, columns: u16| glyphs::fitting_scale(text, columns, rows, MAX_CLOCK_SCALE);
+    let cells = |text: &str| u16::try_from(crate::grid::display_width(text)).unwrap_or(u16::MAX);
+    let meridiem_cells = meridiem.map_or(0, |m| cells(m).saturating_add(1));
     if !show_seconds {
-        return (short.to_string(), None, fits(short, width));
+        return (
+            short.to_string(),
+            None,
+            fits(short, width.saturating_sub(meridiem_cells)),
+        );
     }
-    if let Some(scale) = fits(full, width) {
+    if let Some(scale) = fits(full, width.saturating_sub(meridiem_cells)) {
         return (full.to_string(), None, Some(scale));
     }
-    let suffix_cells = u16::try_from(seconds.chars().count()).unwrap_or(0) + 1;
+    let suffix_cells = cells(seconds).max(meridiem.map_or(0, cells)) + 1;
     if let Some(scale) = fits(short, width.saturating_sub(suffix_cells)) {
         return (short.to_string(), Some(seconds.to_string()), Some(scale));
     }
@@ -404,7 +511,9 @@ impl Panel for ClocksPanel {
         // around it. Wide enough to matter, though: below this the panel falls
         // back to plain text, which is the one thing this panel exists not to
         // do. It is a taker of surplus far longer than most panels.
-        Some(glyphs::width_of("00:00:00", MAX_CLOCK_SCALE) + FRAME_WIDTH)
+        // A 12-hour clock's `AM` beside them is a space and two cells more.
+        let meridiem = if self.twelve_hour { 3 } else { 0 };
+        Some(glyphs::width_of("00:00:00", MAX_CLOCK_SCALE) + meridiem + FRAME_WIDTH)
     }
 
     fn max_height(&self) -> Option<u16> {
@@ -471,6 +580,12 @@ impl Panel for ClocksPanel {
         let last = self.secondary.len();
         match key.code {
             KeyCode::Char('s') => self.show_seconds = !self.show_seconds,
+            KeyCode::Char('h') => {
+                self.twelve_hour = !self.twelve_hour;
+                // The instant on screen has not moved, so `tick` would not
+                // see a change until it does — a minute, with seconds hidden.
+                self.last_shown = None;
+            }
             KeyCode::Char('a') => {
                 self.editing = None;
                 self.asking = Some(crate::prompt::Prompt::new(
@@ -529,6 +644,7 @@ impl Panel for ClocksPanel {
 
     fn remember(&self, state: &mut crate::state::UiState) {
         state.clocks_show_seconds = Some(self.show_seconds);
+        state.clocks_twelve_hour = Some(self.twelve_hour);
     }
 
     #[allow(clippy::too_many_lines)] // One panel, drawn top to bottom; the
@@ -561,9 +677,15 @@ impl Panel for ClocksPanel {
         // large, and if it will not fit, set HH:MM large with the seconds
         // riding small at the baseline. The hour and minute stay readable from
         // across the room either way, which is the whole point of the panel.
-        let full = local.strftime("%H:%M:%S").to_string();
-        let short = local.strftime("%H:%M").to_string();
+        //
+        // A 12-hour hour is space-padded, the way one is read, and the blank
+        // still takes a cell — an unknown glyph draws nothing and keeps its
+        // width — so the numerals do not step sideways when 9:59 turns 10:00.
+        let hour = if self.twelve_hour { "%l" } else { "%H" };
+        let full = local.strftime(&format!("{hour}:%M:%S")).to_string();
+        let short = local.strftime(&format!("{hour}:%M")).to_string();
         let seconds = local.strftime("%S").to_string();
+        let meridiem = self.twelve_hour.then(|| local.strftime("%p").to_string());
 
         // Budget the panel before sizing the clock. The zone table is the
         // reason this panel exists beyond telling the time, so it gets its
@@ -598,6 +720,7 @@ impl Panel for ClocksPanel {
             &full,
             &short,
             &seconds,
+            meridiem.as_deref(),
             area.width,
             clock_budget,
         );
@@ -605,11 +728,17 @@ impl Panel for ClocksPanel {
 
         if let Some(scale) = scale {
             let big = BigText::new(&time_text, scale);
-            // Reserve room for the small seconds so the pair stays centred as
-            // a unit rather than the big block jumping when seconds appear.
+            // Reserve room for the small seconds and the meridiem, which share
+            // a column, so the whole stays centred as a unit rather than the
+            // big block jumping when seconds appear.
             let suffix = small_seconds
-                .as_ref()
-                .map_or(0, |s| u16::try_from(s.chars().count()).unwrap_or(0) + 1);
+                .iter()
+                .chain(&meridiem)
+                .map(|text| crate::grid::display_width(text))
+                .max()
+                .map_or(0, |cells| {
+                    u16::try_from(cells).unwrap_or(u16::MAX).saturating_add(1)
+                });
             let total = big.width + suffix;
             let x = area.x + (area.width.saturating_sub(total)) / 2;
 
@@ -643,13 +772,38 @@ impl Panel for ClocksPanel {
                     );
                 }
             }
+
+            if let Some(meridiem) = &meridiem {
+                // At the top of the numerals where the seconds sit at the foot,
+                // as #265 asked, so the two read as notes on one time. The
+                // utility face's weight, the seconds' dimness, and the same
+                // clamp as theirs: whole or not at all.
+                let sx = x + big.width + 1;
+                let room = (area.x + area.width).saturating_sub(sx);
+                let cells = suffix.saturating_sub(1);
+                if room >= cells {
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            meridiem.clone(),
+                            Style::default()
+                                .fg(theme.muted)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Rect::new(sx, area.y, cells, 1),
+                    );
+                }
+            }
             cursor += big.height;
         } else {
             // Too small for block digits at any scale: fall back to plain text
             // rather than clipping — and truncate the plain text too, since a
             // rect the width of the panel cuts `15:54:33` to `15:54:3` at seven
             // columns, which is a different time.
-            let text = if self.show_seconds { full } else { short };
+            let time = if self.show_seconds { full } else { short };
+            let text = match &meridiem {
+                Some(meridiem) => format!("{} {meridiem}", time.trim_start()),
+                None => time,
+            };
             let text = crate::grid::truncate(&text, usize::from(area.width));
             frame.render_widget(
                 Paragraph::new(Span::styled(
@@ -708,16 +862,26 @@ impl Panel for ClocksPanel {
             return;
         }
 
-        let grid = Grid::new(COLUMNS, area.width);
-        let mut lines = vec![grid.header(theme)];
-
-        // Once per draw rather than once per row: `s` governs the whole panel,
-        // not just the numerals above this table.
-        let time_format = if self.show_seconds {
-            self.config.time_format.clone()
+        // Once per draw rather than once per row: `s` and `h` govern the whole
+        // panel, not just the numerals above this table. Hours first, since
+        // `%T` spelled out is what lets `without_seconds` find the seconds.
+        let time_format = if self.twelve_hour {
+            twelve_hour_format(&self.config.time_format)
         } else {
-            without_seconds(&self.config.time_format)
+            self.config.time_format.clone()
         };
+        let time_format = if self.show_seconds {
+            time_format
+        } else {
+            without_seconds(&time_format)
+        };
+        let columns = if has_meridiem(&time_format) {
+            COLUMNS_MERIDIEM
+        } else {
+            COLUMNS
+        };
+        let grid = Grid::new(columns, area.width);
+        let mut lines = vec![grid.header(theme)];
 
         for (index, clock) in self.secondary.iter().enumerate() {
             // The cursor is over the zone list, whose first entry is zone 1.
@@ -980,13 +1144,22 @@ mod tests {
         let crate::grid::Width::Fixed(width) = time.width else {
             panic!("the time column is fixed width");
         };
-        for marker in ["", " +1d", " -1d"] {
-            let widest = format!("00:00:00{marker}");
-            assert!(
-                crate::grid::display_width(&widest) <= usize::from(width),
-                "`{widest}` needs {} cells and the column is {width}",
-                crate::grid::display_width(&widest)
-            );
+        let meridiem = COLUMNS_MERIDIEM
+            .iter()
+            .find(|column| column.label == "time")
+            .expect("there is a time column");
+        let crate::grid::Width::Fixed(meridiem_width) = meridiem.width else {
+            panic!("the time column is fixed width");
+        };
+        for (time, width) in [("00:00:00", width), ("00:00:00 AM", meridiem_width)] {
+            for marker in ["", " +1d", " -1d"] {
+                let widest = format!("{time}{marker}");
+                assert!(
+                    crate::grid::display_width(&widest) <= usize::from(width),
+                    "`{widest}` needs {} cells and the column is {width}",
+                    crate::grid::display_width(&widest)
+                );
+            }
         }
     }
 
@@ -1181,7 +1354,7 @@ mod tests {
 
         // Room for the numerals and the seconds: the pair, at scale 1.
         let (text, small, scale) =
-            choose_face(true, full, short, seconds, short_width + suffix, rows);
+            choose_face(true, full, short, seconds, None, short_width + suffix, rows);
         assert_eq!(
             (text.as_str(), small.as_deref(), scale),
             (short, Some(seconds), Some(1))
@@ -1189,8 +1362,15 @@ mod tests {
 
         // Room for the numerals alone: not numerals alone. Plain text keeps
         // every digit the reader asked for.
-        let (text, small, scale) =
-            choose_face(true, full, short, seconds, short_width + suffix - 1, rows);
+        let (text, small, scale) = choose_face(
+            true,
+            full,
+            short,
+            seconds,
+            None,
+            short_width + suffix - 1,
+            rows,
+        );
         assert_eq!(
             (text.as_str(), small.as_deref(), scale),
             (full, None, None),
@@ -1198,10 +1378,185 @@ mod tests {
         );
 
         // Seconds off: the short form fits the whole width, no suffix reserved.
-        let (text, small, scale) = choose_face(false, full, short, seconds, short_width, rows);
+        let (text, small, scale) =
+            choose_face(false, full, short, seconds, None, short_width, rows);
         assert_eq!(
             (text.as_str(), small.as_deref(), scale),
             (short, None, Some(1))
+        );
+
+        // A meridiem shares the seconds' column: two letters over two digits
+        // cost nothing more than the digits did.
+        let (text, small, scale) = choose_face(
+            true,
+            full,
+            short,
+            seconds,
+            Some("PM"),
+            short_width + suffix,
+            rows,
+        );
+        assert_eq!(
+            (text.as_str(), small.as_deref(), scale),
+            (short, Some(seconds), Some(1))
+        );
+
+        // With the seconds hidden it still needs its own space and two cells.
+        let (_, _, scale) = choose_face(false, full, short, seconds, Some("PM"), short_width, rows);
+        assert_eq!(
+            scale, None,
+            "the numerals fit only by leaving AM/PM no room"
+        );
+        let (_, _, scale) = choose_face(
+            false,
+            full,
+            short,
+            seconds,
+            Some("PM"),
+            short_width + 3,
+            rows,
+        );
+        assert_eq!(scale, Some(1));
+    }
+
+    /// #265: a 12-hour clock converts the reader's own `time_format`, keeping
+    /// their padding and putting AM/PM beside the time rather than at the end
+    /// of whatever follows it.
+    #[test]
+    fn a_twelve_hour_clock_converts_the_table_format_it_is_given() {
+        assert_eq!(twelve_hour_format("%H:%M:%S"), "%I:%M:%S %p");
+        // Padding is the reader's.
+        assert_eq!(twelve_hour_format("%k:%M"), "%l:%M %p");
+        assert_eq!(twelve_hour_format("%-H:%M"), "%-I:%M %p");
+        // Whole-time shorthands are spelled out, so `s` can find the seconds.
+        assert_eq!(twelve_hour_format("%T"), "%I:%M:%S %p");
+        assert_eq!(without_seconds(&twelve_hour_format("%T")), "%I:%M %p");
+        assert_eq!(twelve_hour_format("%R"), "%I:%M %p");
+        // AM/PM goes beside the time, not after whatever follows it.
+        assert_eq!(twelve_hour_format("%H:%M (%Z)"), "%I:%M %p (%Z)");
+        // Nothing to convert is left exactly alone.
+        assert_eq!(twelve_hour_format("%I:%M:%S %p"), "%I:%M:%S %p");
+        assert_eq!(twelve_hour_format("%-I:%M%P"), "%-I:%M%P");
+        assert_eq!(twelve_hour_format("%H:%M %p"), "%I:%M %p");
+        assert_eq!(twelve_hour_format("%M past"), "%M past");
+        assert_eq!(twelve_hour_format(""), "");
+        // A literal percent is not a specifier.
+        assert_eq!(twelve_hour_format("100%% %H"), "100%% %I %p");
+        assert_eq!(twelve_hour_format("%%H:%M"), "%%H:%M");
+        // A trailing lone `%` neither panics nor vanishes.
+        assert_eq!(twelve_hour_format("%H %"), "%I %p %");
+    }
+
+    #[test]
+    fn h_switches_the_clock_between_twelve_and_twenty_four_hours() {
+        let (mut panel, _guard) = panel_from_named("h-key", ClocksConfig::default());
+        assert!(!panel.twelve_hour);
+        assert_eq!(
+            panel.handle_key(KeyEvent::from(KeyCode::Char('h'))),
+            KeyOutcome::Consumed
+        );
+        assert!(panel.twelve_hour);
+        let mut state = crate::state::UiState::default();
+        panel.remember(&mut state);
+        assert_eq!(state.clocks_twelve_hour, Some(true));
+        press(&mut panel, KeyCode::Char('h'));
+        assert!(!panel.twelve_hour);
+    }
+
+    /// The rows of `panel` drawn at `width` x `height`, one string per row.
+    fn drawn(panel: &mut ClocksPanel, width: u16, height: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// AM/PM is a value like the small seconds: `PM`, never `P`. Swept over
+    /// sizes with the seconds on and off, because the two take different
+    /// rungs of the ladder and each reserves the meridiem's room separately.
+    /// The plain-text fallback carries it too, or says `…`.
+    #[test]
+    fn the_meridiem_is_drawn_whole_or_not_at_all() {
+        let (mut seen_beside, mut seen_plain) = (false, false);
+        for show_seconds in [true, false] {
+            for width in 6..=100u16 {
+                for height in 6..=14u16 {
+                    let (mut panel, _guard) = panel_from_named("meridiem", ClocksConfig::default());
+                    panel.twelve_hour = true;
+                    panel.show_seconds = show_seconds;
+                    let rows = drawn(&mut panel, width, height);
+                    let top = &rows[0];
+                    if top.contains('\u{2588}') {
+                        let after = top.rsplit('\u{2588}').next().unwrap_or("").trim();
+                        assert!(
+                            after == "AM" || after == "PM",
+                            "at {width}x{height} the numerals' top row ends {after:?}: {top:?}"
+                        );
+                        seen_beside = true;
+                    } else {
+                        let text = top.trim();
+                        assert!(
+                            text.ends_with("AM")
+                                || text.ends_with("PM")
+                                || text.ends_with('\u{2026}'),
+                            "at {width}x{height} the plain clock lost its meridiem silently: {text:?}"
+                        );
+                        seen_plain = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            seen_beside && seen_plain,
+            "the sweep must reach both faces, or it proves half of this"
+        );
+    }
+
+    /// A 12-hour zone row is fifteen cells with its day marker, and at the
+    /// 24-hour table's twelve the marker was the part cut. Kiritimati is
+    /// UTC+14 and the primary UTC−12, so it is tomorrow there at every instant
+    /// this test could run — the marker is certain, not a matter of the hour.
+    #[test]
+    fn a_twelve_hour_zone_row_keeps_its_day_marker() {
+        let (mut panel, _guard) = panel_from_named(
+            "meridiem-marker",
+            ClocksConfig {
+                zones: vec![
+                    zone("Here", "Etc/GMT+12"),
+                    zone("Kiritimati", "Pacific/Kiritimati"),
+                ],
+                twelve_hour: true,
+                ..ClocksConfig::default()
+            },
+        );
+        let rows = drawn(&mut panel, 40, 20);
+        let row = rows
+            .iter()
+            .find(|row| row.contains("Kiritimati"))
+            .expect("the zone row is drawn");
+        assert!(
+            row.contains("M +1d"),
+            "a 12-hour row keeps AM/PM and its marker: {row:?}"
         );
     }
 

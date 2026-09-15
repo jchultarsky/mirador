@@ -470,6 +470,9 @@ impl Config {
         if let Some(show) = state.clocks_show_seconds {
             self.clocks.show_seconds = show;
         }
+        if let Some(twelve) = state.clocks_twelve_hour {
+            self.clocks.twelve_hour = twelve;
+        }
         // Free text, so there is nothing to validate against here — the panel
         // that wrote it checked that the file could be read, and a file that
         // has since gone is the panel's "no agenda file" case rather than a

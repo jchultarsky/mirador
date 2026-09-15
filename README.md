@@ -241,6 +241,7 @@ Some settings you change with a keystroke are remembered across restarts:
 | Task sort order | `s` | Tasks |
 | Whether completed tasks show | `c` | Tasks |
 | Seconds on the clock | `s` | Clock |
+| 12- or 24-hour clock | `h` | Clock |
 | Pomodoro durations | `+` / `-` | Pomodoro |
 | Watchlist symbols | `a` / `d` | Markets |
 | World clocks | `a` / `e` / `d` | Clock |
@@ -426,6 +427,12 @@ The first configured zone renders large; the rest become a table showing their
 offset *relative to that zone*, which is the number you actually want when
 scheduling across one. The calendar prints month grids in the shape `cal`
 does, with today marked.
+
+The clock is 24-hour unless you ask otherwise: `h` switches it to 12-hour and
+back, and the choice is remembered, or set `[clocks].twelve_hour = true`. AM or
+PM sits small at the top right of the numerals, over the seconds, and the table
+follows — its `time_format` is converted to 12-hour, keeping your padding. With
+12-hour off, `time_format` is used exactly as you wrote it.
 
 `a` adds a clock and `d` removes the selected one. Adding one opens a list of
 cities; type to narrow it, `↑↓` to choose, `Enter` to add.
