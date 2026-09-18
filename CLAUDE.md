@@ -2264,7 +2264,15 @@ and had to be added back was the one that did not.
   the second that day, carrying the disk panel (#278): the seventeenth
   widget, the last quarter of "what compute is available", and the third
   on the excused list. It does **not** carry the NetBSD battery fix (#255):
-  `starship-battery` was still 0.11.1 on crates.io. 1.14.0, hours earlier,
+  `starship-battery` was still 0.11.1 on crates.io. The release run built
+  all five targets and 21 assets, the attestations on an archive and a
+  Windows `-update` binary both trace to `release.yml@refs/tags/v1.15.0`
+  at `660108d` (the wrong-repository control returned 404 for both), and
+  it was live on crates.io at 19:54 UTC — eight minutes after Cut release
+  was dispatched at 19:46. Step 0 was a hook-free release build of the
+  merged `main` under tmux, drawing this MacBook's real volume and quitting
+  on `q`; the colour states were captured the same way from a temporary
+  file-backed hook, removed before the commit. 1.14.0, hours earlier,
   was a feature release carrying one change (#275): the battery panel draws a battery — a rounded
   cell filled to the charge with the percentage beside it — in place of the
   block numerals the owner rejected on sight as a second clock. It does
