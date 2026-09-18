@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A disk panel.** Every volume that can fill up, as a line of figures —
+  mount, percent used, free, capacity — over a meter, one block per device.
+  Volumes that share a device are folded into one row, read-only ones are
+  left out, and the reading happens on a thread so a sleeping network mount
+  cannot stall the dashboard. Brass while there is room, amber at
+  `[disk].warn_above_pct` (80), red at `[disk].alert_above_pct` (95), where
+  the status bar names the fullest volume. Not in the default layout; `w`
+  switches it on.
+
 ## [1.14.0] - 2026-09-18
 
 ### Changed

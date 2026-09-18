@@ -476,6 +476,22 @@ sample_secs = 2               # see the note under [cpu]
 show_swap   = true
 
 # ---------------------------------------------------------------------------
+# Disk
+#
+# Every volume that can fill up, how full it is, and what is free — one line
+# of figures over a meter per device. Volumes that share a device are folded
+# into one row (`/` and `/System/Volumes/Data` are one APFS container), and
+# read-only ones are left out, since nothing can fill them. Brass while there
+# is room, amber at `warn_above_pct`, red at `alert_above_pct` — where the
+# status bar says so too. Not in the default layout: the instrument row is
+# full at 120 columns. `w` switches it on.
+# ---------------------------------------------------------------------------
+[disk]
+sample_secs     = 30
+warn_above_pct  = 80
+alert_above_pct = 95
+
+# ---------------------------------------------------------------------------
 # Battery
 #
 # Charge, which way it is going, and how long that gives you. Not in the

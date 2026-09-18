@@ -189,7 +189,7 @@ docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
              drawings and key tables, the other documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
-             pomodoro, watchlog, news, cpu, memory, network, battery,
+             pomodoro, watchlog, news, cpu, memory, disk, network, battery,
              temperature, calculator
 ```
 
@@ -285,7 +285,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 355 of them, including the ones mirador
+    trip through `toml` discards all 366 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -549,6 +549,30 @@ both mean "how hard is this machine working", so the two graphs change colour
 together. The face is the cpu panel's with the table where the per-core strip
 would be; the table takes at most half the panel and only when it can show a
 header and a row.
+
+**The disk panel was asked for on 2026-09-18** — "no prompts, just works",
+and colour when usage passes a threshold, because the panel exists to warn
+before a volume runs out. It is the last quarter of "what compute is
+available" and the third widget on the excused list, for the arithmetic
+reason rather than the empty-panel one: the instrument row has no room for a
+sixth panel at 120 columns. Four decisions worth keeping. **Its real work is
+`group`**, as the temperature panel's is: `sysinfo` lists volumes and a
+person thinks in devices, so `/` and `/System/Volumes/Data` — one APFS
+container, one pool of free space, reported twice — fold into one row named
+by the shortest mount point, and what folds them is the *shared free space
+to within a percent*, not the capacity, so two identical disks stay two.
+Read-only volumes are dropped while a writable one remains, which is what
+keeps every snap's squashfs off a Linux list, and the memory-backed pseudo
+file systems are named and skipped. **It reads on a thread**, though the
+call is local: a volume read is `statfs`, which sleeps for a minute on a
+network mount that has, and even the two volumes on the owner's MacBook cost
+a tenth of a second. **Thresholds, not the cpu ramp**: a disk two-thirds full
+is fine, not warm, so the colour holds brass to 80%, amber to 95%, red past
+it with the status bar carrying the fullest volume — a full disk breaks the
+next save, which is the "gets worse if nobody acts" test met. And **decimal
+units**, because a disk is sold in them and Finder states them that way;
+the memory panel's binary gigabytes are the convention on the other side of
+the same line.
 
 **The filter governs what mirador *ships*, which after discussion #191 is
 narrower than it used to be.** If external panels happen, "does this answer one

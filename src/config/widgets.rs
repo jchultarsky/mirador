@@ -447,6 +447,31 @@ impl Default for TemperatureConfig {
     }
 }
 
+/// Disk panel settings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DiskConfig {
+    /// Seconds between readings. Disks fill by the hour; thirty is plenty,
+    /// and each reading is a blocking call on a thread of its own.
+    pub sample_secs: u64,
+    /// At or above this percentage used, a volume's figures turn amber. Zero
+    /// disables.
+    pub warn_above_pct: u16,
+    /// At or above this percentage used, a volume's figures turn red and the
+    /// status bar says so. Zero disables.
+    pub alert_above_pct: u16,
+}
+
+impl Default for DiskConfig {
+    fn default() -> Self {
+        Self {
+            sample_secs: 30,
+            warn_above_pct: 80,
+            alert_above_pct: 95,
+        }
+    }
+}
+
 /// Network chart settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]

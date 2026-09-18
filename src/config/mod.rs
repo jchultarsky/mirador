@@ -49,8 +49,8 @@ pub use plugins::PluginConfig;
 #[allow(unused_imports)]
 pub use widgets::{
     AgendaConfig, BatteryConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig,
-    CpuConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig, PomodoroConfig,
-    StocksConfig, TemperatureConfig, TodoConfig, WeatherConfig,
+    CpuConfig, DiskConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig,
+    PomodoroConfig, StocksConfig, TemperatureConfig, TodoConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -82,6 +82,7 @@ pub struct Config {
     pub calculator: CalculatorConfig,
     pub cpu: CpuConfig,
     pub memory: MemoryConfig,
+    pub disk: DiskConfig,
     pub network: NetworkConfig,
     pub battery: BatteryConfig,
     pub temperature: TemperatureConfig,
@@ -857,6 +858,12 @@ mod tests {
                 "reads what the platform reports, which on Windows is at most one \
                  ACPI zone many machines lack, on NetBSD nothing yet, and in most \
                  VMs and containers nothing",
+            ),
+            (
+                "disk",
+                "the instrument row at 120 columns has no room for a sixth panel \
+                 without costing `stocks` the change column, and a fifth row is \
+                 a gesture the reader makes, not one shipped for everyone",
             ),
         ];
         // first run, and this is exactly how notes and stocks went unseen.

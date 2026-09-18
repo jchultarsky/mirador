@@ -10,6 +10,7 @@ pub mod calculator;
 pub mod calendar;
 pub mod clocks;
 pub mod cpu;
+pub mod disk;
 pub mod memory;
 pub mod network;
 pub mod news;
@@ -40,6 +41,7 @@ pub const WIDGET_NAMES: &[&str] = &[
     "news",
     "cpu",
     "memory",
+    "disk",
     "network",
     "battery",
     "temperature",
@@ -84,6 +86,7 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
         "pomodoro" => Box::new(pomodoro::PomodoroPanel::new(config.pomodoro.clone())),
         "cpu" => Box::new(cpu::CpuPanel::new(config.cpu.clone())),
         "memory" => Box::new(memory::MemoryPanel::new(config.memory.clone())),
+        "disk" => Box::new(disk::DiskPanel::new(config.disk.clone())),
         "network" => Box::new(network::NetworkPanel::new(config.network.clone())),
         "battery" => Box::new(battery::BatteryPanel::new(config.battery.clone())),
         "temperature" => Box::new(temperature::TemperaturePanel::new(
@@ -308,6 +311,10 @@ mod tests {
                     6_657_199_308,
                     17_179_869_184,
                 )),
+            ),
+            (
+                "disk",
+                Box::new(disk::DiskPanel::canned(config.disk.clone())),
             ),
             (
                 "network",
