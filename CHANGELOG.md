@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-09-18
+
 ### Changed
 
 - **The battery panel draws a battery.** The charge was in block numerals over
@@ -1933,7 +1935,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.13.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.14.0...HEAD
+[1.14.0]: https://github.com/jchultarsky/mirador/compare/v1.13.1...v1.14.0
 [1.13.1]: https://github.com/jchultarsky/mirador/compare/v1.13.0...v1.13.1
 [1.13.0]: https://github.com/jchultarsky/mirador/compare/v1.12.1...v1.13.0
 [1.12.1]: https://github.com/jchultarsky/mirador/compare/v1.12.0...v1.12.1

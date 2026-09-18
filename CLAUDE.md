@@ -2234,9 +2234,15 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.13.1` is released**, as a GitHub release with binaries for macOS
+- **`1.14.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a patch release cut on 2026-09-15, hours
+  and published on crates.io. It is a feature release cut on 2026-09-18
+  carrying one change (#275): the battery panel draws a battery — a rounded
+  cell filled to the charge with the percentage beside it — in place of the
+  block numerals the owner rejected on sight as a second clock. It does
+  **not** carry the NetBSD battery fix (#255): `starship-battery` was still
+  0.11.1 on crates.io that morning, with rust-battery#168 approved and
+  unmerged. 1.13.1 was a patch release cut on 2026-09-15, hours
   after 1.13.0, carrying one fix (#271): the clock's border offers
   `h 12/24h`. 1.13.0 had shipped `h` as an `extra`, so it reached only the
   `?` overlay and a clock with room to spare never showed it — the #109
