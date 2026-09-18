@@ -790,10 +790,13 @@ rather than a cap on what a wider panel can draw.
 
 ### Battery
 
-For laptops. The charge in block numerals with the meter drawn beneath it, a
-label saying which way things are going — `ON BATTERY`, `CHARGING`, `PLUGGED
-IN`, `FULL` — the time left, or to full, in the border, and a line of detail:
-health, cycle count, power draw. Nothing is said twice. Brass while there is
+For laptops. A battery, drawn: a rounded cell with its terminal, filled to the
+charge, and the percentage beside it; a label saying which way things are
+going — `ON BATTERY`, `CHARGING`, `PLUGGED IN`, `FULL`; the time left, or to
+full, in the border; and a line of detail: health, cycle count, power draw.
+Nothing is said twice. The cell grows with the panel and keeps its shape, and
+a panel too short or too narrow for an outline draws a bare meter with the
+figure beside it instead. Brass while there is
 plenty; amber below 20% and red below 10% only while running on the battery,
 since a low battery on mains is nothing to be told about. Below 10% and
 discharging it is the one battery fact that gets worse if nobody acts, so the

@@ -7,11 +7,17 @@
 //! The alternative was a polled process per platform (`pmset -g batt`, sysfs,
 //! a PowerShell query), which is three code paths to keep honest for one fact.
 //!
-//! The face is the pomodoro's: a label, the figure in block numerals, a meter,
-//! a line of detail. Calm by default — brass while there is plenty, and the
-//! signal colours only when the charge is low and the machine is running on
-//! it. Charging is a state, not an alarm, and is told by the label rather than
-//! by flooding the panel green.
+//! The face is a battery, drawn: a label, a rounded cell with its terminal
+//! filled to the charge and the figure beside it, a line of detail. It shipped
+//! first in the pomodoro's face, the charge in block numerals over a meter,
+//! and the owner rejected that on sight — it read as a second clock. The
+//! numerals are for one continuously changing value glanced at across a room,
+//! and a charge is neither; a cell you can see filling is what a battery
+//! looks like everywhere else, and it is nothing else on the dashboard. Calm
+//! by default — brass while there is plenty, and the signal colours only when
+//! the charge is low and the machine is running on it. Charging is a state,
+//! not an alarm, and is told by the label rather than by flooding the panel
+//! green.
 
 use std::time::{Duration, Instant};
 
@@ -24,11 +30,21 @@ use ratatui::widgets::Paragraph;
 use crate::chart::meter_line;
 use crate::config::BatteryConfig;
 use crate::frame::Binding;
-use crate::glyphs::{self, BigText};
+use crate::glyphs;
 use crate::panel::{Panel, RenderContext};
 
-/// The tallest the numerals are drawn.
-const MAX_SCALE: u16 = 2;
+/// The most interior rows the cell is drawn with. Taller than this and it
+/// stops looking like a battery and starts looking like a box.
+const MAX_INTERIOR_ROWS: u16 = 3;
+
+/// Columns per row of the cell, outline included, which is what keeps its
+/// shape as it grows: three times as wide as it is tall, on a screen whose
+/// cells are twice as tall as they are wide.
+const COLUMNS_PER_ROW: u16 = 6;
+
+/// The fewest interior columns worth an outline. Narrower than this and a
+/// bare meter says more.
+const MIN_BODY: u16 = 4;
 
 /// Which way the charge is going.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,57 +300,38 @@ impl Panel for BatteryPanel {
         let colour = self.colour(reading, theme);
         let muted = Style::default().fg(theme.muted);
         let bottom = area.y + area.height;
+        let figure = format!("{}%", reading.charge_pct);
 
-        // The face, top to bottom: label, numerals, meter, detail — centred as a
-        // block the way the pomodoro centres its clock, so a tall panel does not
-        // pin the whole thing to its top edge. Two cells are reserved beside the
-        // numerals for the small `%`, as the clock reserves them for its small
-        // seconds.
-        let digits = reading.charge_pct.to_string();
-        let scale = glyphs::fitting_scale(
-            &digits,
-            area.width.saturating_sub(2),
-            area.height.saturating_sub(3).max(1),
-            MAX_SCALE,
-        );
-        let numeral_rows = scale.map_or(1, |s| BigText::new(&digits, s).height);
-        let mut cursor = area.y + area.height.saturating_sub(3 + numeral_rows) / 2;
+        // The face, top to bottom: label, cell, detail — centred as a block
+        // the way the pomodoro centres its clock, so a tall panel does not
+        // pin the whole thing to its top edge. The cell takes the rows the
+        // label and the detail leave, up to a shape that still reads as a
+        // battery; below three rows there is no room for an outline and the
+        // charge is a bare meter with the figure beside it.
+        let face = Face::fit(area.width, area.height, &figure);
+        let mut cursor = area.y + area.height.saturating_sub(face.rows()) / 2;
 
         // 1. The label.
-        if cursor < bottom {
+        if face.label && cursor < bottom {
             let label = glyphs::utility(label_for(reading.flow));
             draw_centred(frame, area, cursor, &label, colour);
             cursor += 1;
         }
 
-        // 2. The figure.
-        cursor += match scale {
-            Some(scale) => draw_figure(frame, area, cursor, &digits, scale, colour, muted),
-            None if cursor < bottom => {
-                draw_centred(
-                    frame,
-                    area,
-                    cursor,
-                    &format!("{}%", reading.charge_pct),
-                    colour,
-                );
-                1
-            }
-            None => 0,
-        };
+        // 2. The cell, or what there is room for.
+        cursor += draw_cell(
+            frame,
+            area,
+            cursor,
+            face.cell_rows,
+            reading.charge_pct,
+            &figure,
+            colour,
+            theme,
+        );
 
-        // 3. The meter: the charge, as a bar. This *is* the battery, drawn.
-        if cursor < bottom && area.width > 4 {
-            let meter = meter_line(reading.charge_pct, area.width, colour, theme.track);
-            frame.render_widget(
-                Paragraph::new(Line::from(meter)),
-                Rect::new(area.x, cursor, area.width, 1),
-            );
-            cursor += 1;
-        }
-
-        // 4. The detail.
-        if cursor < bottom {
+        // 3. The detail.
+        if face.detail && cursor < bottom {
             let parts = detail_parts(reading, muted);
             if !parts.is_empty() {
                 frame.render_widget(
@@ -343,6 +340,163 @@ impl Panel for BatteryPanel {
                 );
             }
         }
+    }
+}
+
+/// Which rows of the face a height has room for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Face {
+    label: bool,
+    /// Rows for the cell: one or two is a bare meter, three or more an
+    /// outlined cell with `cell_rows - 2` interior rows.
+    cell_rows: u16,
+    detail: bool,
+}
+
+impl Face {
+    /// The label and the detail give way before the cell does, in that
+    /// order from the outside in: a panel one row high is a meter and a
+    /// figure, which is the battery with everything else gone. A panel too
+    /// narrow for an outline beside the figure gets the same bare meter at
+    /// any height, so the rest of the face can close around it.
+    fn fit(width: u16, height: u16, figure: &str) -> Self {
+        let outlined = width >= chrome_width(figure) + MIN_BODY;
+        let (label, cell_rows, detail) = match height {
+            0 | 1 => (false, 1, false),
+            2 => (true, 1, false),
+            3 if outlined => (false, 3, false),
+            4 if outlined => (true, 3, false),
+            _ if outlined => (true, (height - 2).min(MAX_INTERIOR_ROWS + 2), true),
+            _ => (true, 1, true),
+        };
+        Self {
+            label,
+            cell_rows,
+            detail,
+        }
+    }
+
+    fn rows(self) -> u16 {
+        u16::from(self.label) + self.cell_rows + u16::from(self.detail)
+    }
+}
+
+/// The battery cell at `top`: a rounded outline with its terminal on the
+/// right, the interior filled to the charge, and the figure beside it. Where
+/// the width has no room for an outline it is a bare meter and the figure;
+/// where it has no room for that, the figure alone. Returns the rows used.
+#[allow(clippy::too_many_arguments)] // one call site, and each is a distinct fact of the face
+fn draw_cell(
+    frame: &mut Frame,
+    area: Rect,
+    top: u16,
+    rows: u16,
+    charge_pct: u16,
+    figure: &str,
+    colour: Color,
+    theme: &crate::theme::Theme,
+) -> u16 {
+    let bottom = area.y + area.height;
+    if top >= bottom || area.width == 0 {
+        return 0;
+    }
+    let figure_w = u16::try_from(crate::grid::display_width(figure)).unwrap_or(u16::MAX);
+    let chrome = chrome_width(figure);
+    let outline = Style::default().fg(theme.muted);
+    let fill = Style::default().fg(colour);
+    let track = Style::default().fg(theme.track);
+    let figure_spans = |gap: &'static str| {
+        let (digits, unit) = figure.split_at(figure.len().saturating_sub(1));
+        vec![
+            Span::raw(gap),
+            Span::styled(digits.to_string(), fill.add_modifier(Modifier::BOLD)),
+            Span::styled(unit.to_string(), outline),
+        ]
+    };
+
+    let interior_rows = rows.saturating_sub(2);
+    if rows >= 3 && area.width >= chrome + MIN_BODY {
+        let body = (area.width - chrome).min(COLUMNS_PER_ROW * rows - 2);
+        let filled = filled_cells(charge_pct, body);
+        let x = area.x + area.width.saturating_sub(body + chrome) / 2;
+        let cap = |left: &str, right: &str| {
+            Line::from(vec![
+                Span::styled(left.to_string(), outline),
+                Span::styled("─".repeat(usize::from(body)), outline),
+                Span::styled(right.to_string(), outline),
+            ])
+        };
+        let mut lines = vec![cap("╭", "╮")];
+        // The terminal is a third of the cell's height, and the figure sits
+        // on its middle row.
+        let nub_rows: std::ops::RangeInclusive<u16> = match interior_rows {
+            2 => 0..=1,
+            n => (n - 1) / 2..=(n - 1) / 2,
+        };
+        for row in 0..interior_rows {
+            let mut spans = vec![
+                Span::styled("│", outline),
+                Span::styled("█".repeat(usize::from(filled)), fill),
+                Span::styled("░".repeat(usize::from(body - filled)), track),
+                Span::styled("│", outline),
+            ];
+            if nub_rows.contains(&row) {
+                spans.push(Span::styled("▌", outline));
+            }
+            if row == (interior_rows - 1) / 2 {
+                if !nub_rows.contains(&row) {
+                    spans.push(Span::raw(" "));
+                }
+                spans.extend(figure_spans(" "));
+            }
+            lines.push(Line::from(spans));
+        }
+        lines.push(cap("╰", "╯"));
+        for (i, line) in lines.into_iter().enumerate() {
+            let y = top + u16::try_from(i).unwrap_or(u16::MAX);
+            if y >= bottom {
+                break;
+            }
+            frame.render_widget(
+                Paragraph::new(line),
+                Rect::new(x, y, (body + chrome).min(area.width), 1),
+            );
+        }
+        return rows;
+    }
+
+    // No room for an outline: the meter and the figure on one row, the
+    // figure alone if not even that fits, and `…` if not even the figure.
+    let line = if area.width >= figure_w + 3 {
+        let meter = area.width - figure_w - 1;
+        let mut spans = meter_line(charge_pct, meter, colour, theme.track);
+        spans.extend(figure_spans(" "));
+        Line::from(spans)
+    } else if area.width >= figure_w {
+        Line::from(figure_spans("")).centered()
+    } else {
+        let cut = crate::grid::truncate(figure, usize::from(area.width));
+        Line::from(Span::styled(cut, fill.add_modifier(Modifier::BOLD))).centered()
+    };
+    frame.render_widget(Paragraph::new(line), Rect::new(area.x, top, area.width, 1));
+    1
+}
+
+/// What sits beside the cell's interior on its widest row: the outline
+/// either side, the terminal, a space, and the figure.
+fn chrome_width(figure: &str) -> u16 {
+    4 + u16::try_from(crate::grid::display_width(figure)).unwrap_or(u16::MAX)
+}
+
+/// How many of `body` cells the charge fills. Whole cells, rounded down, so
+/// only a full battery draws a full cell — and never none while there is any
+/// charge at all, since an empty cell beside `1%` says two different things.
+fn filled_cells(charge_pct: u16, body: u16) -> u16 {
+    let filled = charge_pct.min(100) * body / 100;
+    if charge_pct > 0 {
+        filled.max(1)
+    } else {
+        filled
     }
 }
 
@@ -379,42 +533,6 @@ fn draw_centred(frame: &mut Frame, area: Rect, y: u16, text: &str, colour: Color
         .centered(),
         Rect::new(area.x, y, area.width, 1),
     );
-}
-
-/// The charge in block numerals with a small `%` on their baseline — a
-/// subscript rather than another glyph, since the face has no `%`. Returns
-/// the rows used.
-fn draw_figure(
-    frame: &mut Frame,
-    area: Rect,
-    top: u16,
-    digits: &str,
-    scale: u16,
-    colour: Color,
-    muted: Style,
-) -> u16 {
-    let bottom = area.y + area.height;
-    let big = BigText::new(digits, scale);
-    let x = area.x + area.width.saturating_sub(big.width + 2) / 2;
-    for (i, row) in big.rows.iter().enumerate() {
-        let y = top + u16::try_from(i).unwrap_or(0);
-        if y >= bottom {
-            break;
-        }
-        frame.render_widget(
-            Paragraph::new(Span::styled(row.clone(), Style::default().fg(colour))),
-            Rect::new(x, y, big.width.min(area.width), 1),
-        );
-    }
-    let y = top + big.height.saturating_sub(1);
-    let sx = x + big.width + 1;
-    if sx < area.x + area.width && y < bottom {
-        frame.render_widget(
-            Paragraph::new(Span::styled("%", muted)),
-            Rect::new(sx, y, 1, 1),
-        );
-    }
-    big.height
 }
 
 /// The detail line as parts for `grid::assemble`: the context under the
@@ -608,7 +726,10 @@ mod tests {
     }
 
     /// Every row of the face is present at an ordinary size, in the order the
-    /// eye reads it, and nothing is drawn as a fragment at any width.
+    /// eye reads it: the label, a cell drawn as a battery with the figure
+    /// beside its terminal, the detail. Nothing is drawn in block numerals,
+    /// which is what made the first face read as a second clock, and nothing
+    /// is drawn as a fragment at any size.
     #[test]
     fn the_face_reads_label_figure_meter_detail_and_never_a_fragment() {
         let mut p = panel(Some(reading(80, Flow::Discharging, Some(11520))));
@@ -619,40 +740,155 @@ mod tests {
             .filter(|r| !r.is_empty())
             .collect();
         assert_eq!(text[0], "ON BATTERY", "{rows:?}");
-        assert!(
-            text.iter().any(|r| r.contains('█')),
-            "the figure is drawn in numerals: {rows:?}"
-        );
-        assert!(
-            text.iter().any(|r| r.contains('█') && r.ends_with('%')),
-            "with the small percent beside the numerals: {rows:?}"
-        );
-        assert!(
-            text.iter().any(|r| r.starts_with('■')),
-            "then the meter: {rows:?}"
-        );
         assert_eq!(
-            *text.last().unwrap(),
-            "health 100%   3 cycles   12.4 W",
+            text[1], "╭───────────────────────────╮",
+            "a rounded cell, three columns to a row: {rows:?}"
+        );
+        assert_eq!(text[2], "│█████████████████████░░░░░░│", "{rows:?}");
+        assert_eq!(
+            text[3], "│█████████████████████░░░░░░│▌ 80%",
+            "the terminal on the middle row, and the figure beside it: {rows:?}"
+        );
+        assert_eq!(text[4], "│█████████████████████░░░░░░│", "{rows:?}");
+        assert_eq!(text[5], "╰───────────────────────────╯", "{rows:?}");
+        assert_eq!(
+            text[6], "health 100%   3 cycles   12.4 W",
             "then the detail — and not the time, which the border has: {rows:?}"
         );
+        assert_eq!(text.len(), 7, "{rows:?}");
         assert!(
             !rows.iter().any(|r| r.contains("left")),
             "the time is said once, by the border: {rows:?}"
         );
 
         for width in 1..=40u16 {
-            for height in 1..=9u16 {
+            for height in 1..=12u16 {
                 let rows = screen(&mut p, width, height);
                 for row in &rows {
                     let t = row.trim();
-                    // No fragment of any detail value: whole or absent.
-                    for bad in ["healt", "cycle", "12."] {
+                    // No fragment of any value: whole or absent. The figure
+                    // is the one that matters most — `80` without its `%`
+                    // beside a cell is a number nobody said.
+                    for bad in ["healt", "cycle", "12.", "80"] {
                         assert!(!t.ends_with(bad), "fragment {t:?} at {width}x{height}");
                     }
+                    assert!(
+                        !t.contains("80") || t.contains("80%"),
+                        "a figure without its unit: {t:?} at {width}x{height}"
+                    );
+                    assert!(
+                        !t.contains('▌') || t.contains("│▌"),
+                        "a terminal off its cell: {t:?} at {width}x{height}"
+                    );
                 }
             }
         }
+    }
+
+    /// The cell fills in proportion to the charge, in whole cells rounded
+    /// down: only a full battery draws a full cell, and any charge at all
+    /// draws at least one, because an empty cell beside `1%` says two things.
+    #[test]
+    fn the_cell_fills_in_proportion_to_the_charge() {
+        let middle = |charge: u16| -> (usize, usize) {
+            let mut p = panel(Some(reading(charge, Flow::Discharging, None)));
+            let rows = screen(&mut p, 34, 3);
+            let row = rows.iter().find(|r| r.contains('▌')).expect("the cell");
+            (row.matches('█').count(), row.matches('░').count())
+        };
+        assert_eq!(middle(100), (16, 0), "full");
+        assert_eq!(middle(99), (15, 1), "nearly full is not full");
+        assert_eq!(middle(50), (8, 8), "half");
+        assert_eq!(middle(7), (1, 15), "low");
+        assert_eq!(middle(1), (1, 15), "any charge at all draws a cell");
+        assert_eq!(middle(0), (0, 16), "empty");
+        assert_eq!(filled_cells(1, 40), 1);
+        assert_eq!(filled_cells(0, 40), 0);
+        assert_eq!(filled_cells(100, 40), 40);
+        assert_eq!(
+            filled_cells(200, 40),
+            40,
+            "a reading over 100 is still full"
+        );
+    }
+
+    /// The face gives up its rows from the outside in — detail, then label —
+    /// and the cell gives up its outline last, becoming the bare meter and
+    /// figure it always was underneath. Too narrow for an outline beside the
+    /// figure, it is the bare meter at any height.
+    #[test]
+    fn the_face_gives_up_its_rows_from_the_outside_in() {
+        let mut p = panel(Some(reading(80, Flow::Discharging, None)));
+        let nonblank = |rows: Vec<String>| -> Vec<String> {
+            rows.into_iter()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect()
+        };
+        let mut at = |w, h| nonblank(screen(&mut p, w, h));
+
+        assert_eq!(at(34, 1), ["■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 80%"]);
+        assert_eq!(
+            at(34, 2),
+            ["ON BATTERY", "■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 80%"]
+        );
+        assert_eq!(
+            at(34, 3),
+            [
+                "╭────────────────╮",
+                "│████████████░░░░│▌ 80%",
+                "╰────────────────╯"
+            ],
+            "three rows is the outline alone"
+        );
+        assert_eq!(
+            at(34, 4),
+            [
+                "ON BATTERY",
+                "╭────────────────╮",
+                "│████████████░░░░│▌ 80%",
+                "╰────────────────╯"
+            ]
+        );
+        assert_eq!(
+            at(34, 5).last().map(String::as_str),
+            Some("health 100%   3 cycles   12.4 W"),
+            "five rows brings the detail back"
+        );
+        assert_eq!(
+            at(9, 7),
+            ["ON BATTE…", "■■■■■ 80%", "health 1…"],
+            "too narrow for an outline: a bare meter, at any height"
+        );
+        let mut q = panel(Some(reading(80, Flow::Discharging, None)));
+        assert_eq!(
+            screen(&mut q, 9, 7)[3],
+            "■■■■■ 80%",
+            "and the three rows are centred, not pinned to the top by the \
+             rows an outline would have taken"
+        );
+        assert_eq!(at(3, 1), ["80%"], "the figure alone");
+        assert_eq!(at(2, 1), ["8…"], "and the figure says when it is cut");
+    }
+
+    /// A taller panel draws a taller cell, wider in step so it keeps its
+    /// shape, up to three interior rows — past that it stops looking like a
+    /// battery and starts looking like a box, and the extra rows go to
+    /// centring the face instead.
+    #[test]
+    fn the_cell_grows_with_the_panel_and_stops_looking_like_a_box() {
+        let mut p = panel(Some(reading(80, Flow::Discharging, None)));
+        let mut cell = |h: u16| -> (usize, usize) {
+            let rows = screen(&mut p, 60, h);
+            let top = rows.iter().find(|r| r.contains('╭')).expect("an outline");
+            let interior = rows.iter().filter(|r| r.contains('│')).count();
+            (interior, top.trim().chars().count())
+        };
+        assert_eq!(cell(5), (1, 18));
+        assert_eq!(cell(6), (2, 24));
+        assert_eq!(cell(7), (3, 30));
+        assert_eq!(cell(12), (3, 30), "capped");
+        assert_eq!(cell(40), (3, 30), "still capped");
     }
 
     #[test]

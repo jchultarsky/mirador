@@ -492,10 +492,27 @@ everything not on it. Second, **it is the first widget that reads something
 1.89, pure-Rust bindings, NetBSD supported) rather than a polled process per
 platform: `pmset -g batt`, sysfs and a PowerShell query are three code paths to
 keep honest for one fact, and the crate's macOS bindings were already in the
-tree under `sysinfo`. Third, **the face is the pomodoro's** — label, numerals,
-meter, detail — and it is calm on purpose: brass while there is plenty, amber
+tree under `sysinfo`. Third, **the face is a battery, drawn** — label, a rounded cell with
+its terminal filled to the charge and the figure in plain bold beside it,
+detail — and it is calm on purpose: brass while there is plenty, amber
 and red only when the charge is low *and* the machine is running on it, and
-charging told by the label rather than by flooding the panel green. The first
+charging told by the label rather than by flooding the panel green.
+
+**The face shipped first as the pomodoro's — numerals over a meter — and the
+owner rejected it on sight on 2026-09-18: the big charge figure looked like
+the clock.** That is the calculator's tape decision arriving at a third panel,
+and the rule it leaves is worth stating once: **block numerals are for one
+continuously changing value glanced at across a room, and nothing else.** The
+clock and the pomodoro qualify; a charge that moves once an hour and is read
+in the same glance as its label does not, and a face that borrows the numerals
+borrows the clock's identity with them. The replacement is the one shape a
+battery has everywhere else — a rounded cell with a nub, filling from the
+left — because it is nothing else on the dashboard, which is the whole point.
+The cell keeps a three-to-one shape as it grows (`COLUMNS_PER_ROW`), stops at
+three interior rows because a taller one reads as a box, and gives up its
+outline before its figure: too short or too narrow and it is the bare meter
+with `80%` beside it, which is what it always was underneath. The figure is
+bold body text, not a small face of its own; `%` sits muted beside it. The first
 capture said `PLUGGED IN` in the border and again inside, and `holding at 80%`
 under a five-row `80`; that is the tasks-panel duplication of 1.10.0 arriving
 in a new panel, and the rule from that pass holds here — the time lives in the

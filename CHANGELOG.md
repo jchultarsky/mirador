@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The battery panel draws a battery.** The charge was in block numerals over
+  a meter, the pomodoro's face, and it read as a second clock. It is now a
+  rounded cell with its terminal, filled to the charge, with the percentage
+  in plain bold beside it. The cell grows with the panel and keeps its shape;
+  a panel too short or too narrow for an outline falls back to a bare meter
+  and the figure. The label, the detail row, the border's time left and the
+  colours are unchanged.
+
 ## [1.13.1] - 2026-09-15
 
 ### Fixed

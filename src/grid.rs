@@ -950,6 +950,12 @@ mod tests {
         const ALLOWED: &[(&str, usize, &str)] = &[
             ("agenda.rs", 1, "the row's summary is truncated to `room`"),
             (
+                "battery.rs",
+                1,
+                "the cell's caps are `body + 2` wide, and `body` is cut to the \
+                 width less the chrome beside it before anything is built",
+            ),
+            (
                 "notes.rs",
                 2,
                 "search field and caret, both cut to the pane",
