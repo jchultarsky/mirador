@@ -23,21 +23,30 @@
 //! that share a device are folded into one row named by the shortest mount
 //! point, read-only volumes are dropped because nothing can fill them, and
 //! what is left is what a person would ask about.
+//!
+//! Under each device, since 1.16.0, the network panel's face: a `↓ read
+//! ↑ write` readout and two braille histories scaled to the device's own
+//! peak — floored at a megabyte a second, so the trickle of background
+//! writes every disk carries draws low instead of filling a graph that has
+//! nothing bigger to show. `i` hides them for anyone who wants the panel as
+//! it was.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chart::meter_line;
+use crate::chart::{BrailleGraph, meter_line};
 use crate::config::DiskConfig;
 use crate::frame::{Binding, FRAME_HEIGHT};
 use crate::panel::{Panel, RenderContext};
+use crate::widgets::network::format_rate;
 
 /// One mounted volume as the platform reports it, before grouping.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +56,9 @@ pub(crate) struct Volume {
     pub total: u64,
     pub available: u64,
     pub read_only: bool,
+    /// Bytes a second since the previous reading.
+    pub read_rate: u64,
+    pub write_rate: u64,
 }
 
 /// One row of the panel: a device, named by its friendliest mount point.
@@ -55,6 +67,9 @@ pub(crate) struct Device {
     pub mount: String,
     pub total: u64,
     pub available: u64,
+    /// Bytes a second since the previous reading.
+    pub read_rate: u64,
+    pub write_rate: u64,
 }
 
 impl Device {
@@ -130,6 +145,10 @@ pub(crate) fn group(volumes: Vec<Volume>) -> Vec<Device> {
                     d.mount = v.mount;
                 }
                 d.available = d.available.min(v.available);
+                // The volumes of one device report one set of counters, so
+                // the larger is the device's, not the sum.
+                d.read_rate = d.read_rate.max(v.read_rate);
+                d.write_rate = d.write_rate.max(v.write_rate);
                 *writable |= !v.read_only;
             }
             None => devices.push((
@@ -137,6 +156,8 @@ pub(crate) fn group(volumes: Vec<Volume>) -> Vec<Device> {
                     mount: v.mount,
                     total: v.total,
                     available: v.available,
+                    read_rate: v.read_rate,
+                    write_rate: v.write_rate,
                 },
                 !v.read_only,
             )),
@@ -161,22 +182,69 @@ fn shorter_order(a: &str, b: &str) -> std::cmp::Ordering {
         .then_with(|| a.cmp(b))
 }
 
-/// Ask the platform for every mounted volume. Blocking; the thread's job.
-fn read() -> Vec<Volume> {
-    use sysinfo::{DiskRefreshKind, Disks};
-    let disks = Disks::new_with_refreshed_list_specifics(DiskRefreshKind::nothing().with_storage());
-    disks
-        .list()
-        .iter()
-        .map(|d| Volume {
-            mount: d.mount_point().to_string_lossy().into_owned(),
-            file_system: d.file_system().to_string_lossy().into_owned(),
-            total: d.total_space(),
-            available: d.available_space(),
-            read_only: d.is_read_only(),
-        })
-        .collect()
+/// The platform's disk list, kept between readings so the I/O counters
+/// are deltas against the last one. Blocking; the thread's job.
+struct Reader {
+    disks: sysinfo::Disks,
+    last: Instant,
+    last_listing: Instant,
+    /// How often to re-list volumes and re-read capacity, which is the
+    /// expensive half; the I/O counters are read every time.
+    relist_every: Duration,
 }
+
+impl Reader {
+    fn new(relist_every: Duration) -> Self {
+        use sysinfo::{DiskRefreshKind, Disks};
+        let disks = Disks::new_with_refreshed_list_specifics(
+            DiskRefreshKind::nothing().with_storage().with_io_usage(),
+        );
+        let now = Instant::now();
+        Self {
+            disks,
+            last: now,
+            last_listing: now,
+            relist_every,
+        }
+    }
+
+    fn read(&mut self) -> Vec<Volume> {
+        use sysinfo::DiskRefreshKind;
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last).as_secs_f64().max(0.001);
+        let relist = now.duration_since(self.last_listing) >= self.relist_every;
+        let kind = if relist {
+            DiskRefreshKind::nothing().with_storage().with_io_usage()
+        } else {
+            DiskRefreshKind::nothing().with_io_usage()
+        };
+        self.disks.refresh_specifics(relist, kind);
+        if relist {
+            self.last_listing = now;
+        }
+        self.last = now;
+        let per_second = |bytes: u64| (bytes as f64 / elapsed) as u64;
+        self.disks
+            .list()
+            .iter()
+            .map(|d| Volume {
+                mount: d.mount_point().to_string_lossy().into_owned(),
+                file_system: d.file_system().to_string_lossy().into_owned(),
+                total: d.total_space(),
+                available: d.available_space(),
+                read_only: d.is_read_only(),
+                read_rate: per_second(d.usage().read_bytes),
+                write_rate: per_second(d.usage().written_bytes),
+            })
+            .collect()
+    }
+}
+
+/// The smallest ceiling a device's graphs are drawn against. Every disk
+/// carries a trickle of background writes, and scaled to its own peak that
+/// trickle would fill the graph; a megabyte a second is where I/O starts
+/// to be worth a full-height mark.
+const SCALE_FLOOR: u64 = 1 << 20;
 
 /// The disk panel.
 #[derive(Debug)]
@@ -192,6 +260,11 @@ pub struct DiskPanel {
     /// What the panel draws from: copied out of `shared` once per change, so
     /// `render`, `counter` and `alert` never take the mutex.
     cache: Option<Vec<Device>>,
+    /// Read and write rate histories by mount, oldest first, fed one sample
+    /// per reading by `tick`.
+    histories: HashMap<String, (VecDeque<u64>, VecDeque<u64>)>,
+    /// Cells a graph was last drawn into, so the histories can grow to fill it.
+    graph_cells: usize,
 }
 
 impl DiskPanel {
@@ -200,7 +273,8 @@ impl DiskPanel {
         let shared: Arc<Mutex<Option<Vec<Device>>>> = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let interval = Duration::from_secs(config.sample_secs.max(1));
+        let interval = Duration::from_secs(config.io_sample_secs.max(1));
+        let relist_every = Duration::from_secs(config.sample_secs.max(1));
         let (state, bump, halt) = (
             Arc::clone(&shared),
             Arc::clone(&generation),
@@ -209,8 +283,9 @@ impl DiskPanel {
         std::thread::Builder::new()
             .name("mirador-disk".into())
             .spawn(move || {
+                let mut reader = Reader::new(relist_every);
                 loop {
-                    let devices = group(read());
+                    let devices = group(reader.read());
                     if let Ok(mut slot) = state.lock() {
                         *slot = Some(devices);
                     }
@@ -231,20 +306,51 @@ impl DiskPanel {
             seen: 0,
             stop,
             cache: None,
+            histories: HashMap::new(),
+            graph_cells: 0,
         }
     }
 
     /// A panel holding `devices`, with no thread behind it, for tests.
     #[cfg(test)]
     pub(crate) fn with_devices(config: DiskConfig, devices: Vec<Device>) -> Self {
-        Self {
+        let mut panel = Self {
             config,
             shared: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
             seen: 0,
             stop: Arc::new(AtomicBool::new(false)),
-            cache: Some(devices),
+            cache: None,
+            histories: HashMap::new(),
+            graph_cells: 0,
+        };
+        panel.take(devices);
+        panel
+    }
+
+    /// Adopt a fresh reading: replace the list, push one sample onto each
+    /// device's histories, and forget any device that is gone.
+    fn take(&mut self, devices: Vec<Device>) {
+        let capacity = crate::samples::capacity(self.config.history, self.graph_cells);
+        for device in &devices {
+            let (reads, writes) = self.histories.entry(device.mount.clone()).or_default();
+            crate::samples::push_bounded(reads, device.read_rate, capacity);
+            crate::samples::push_bounded(writes, device.write_rate, capacity);
         }
+        self.histories
+            .retain(|mount, _| devices.iter().any(|d| &d.mount == mount));
+        self.cache = Some(devices);
+    }
+
+    /// The ceiling both of a device's graphs are drawn against: its own
+    /// peak in either direction, never below `SCALE_FLOOR`.
+    fn scale(&self, mount: &str) -> u64 {
+        self.histories
+            .get(mount)
+            .map_or(0, |(r, w)| {
+                r.iter().chain(w.iter()).copied().max().unwrap_or(0)
+            })
+            .max(SCALE_FLOOR)
     }
 
     /// An internal drive with room and an external one nearly full, for the
@@ -258,11 +364,15 @@ impl DiskPanel {
                     mount: "/".into(),
                     total: 1_995_165_736_960,
                     available: 1_637_809_513_970,
+                    read_rate: 0,
+                    write_rate: 327_680,
                 },
                 Device {
                     mount: "/Volumes/T7".into(),
                     total: 2_000_398_934_016,
                     available: 61_203_144_704,
+                    read_rate: 52_428_800,
+                    write_rate: 0,
                 },
             ],
         )
@@ -294,8 +404,8 @@ impl Drop for DiskPanel {
     }
 }
 
-/// Keys this panel responds to: none. It has nothing to set.
-const BINDINGS: &[Binding] = &[];
+/// Keys this panel responds to.
+const BINDINGS: &[Binding] = &[Binding::primary("i", "i/o")];
 
 /// Rows a device takes at each spacing: text and meter with a blank between
 /// devices, text and meter, or text alone.
@@ -329,8 +439,13 @@ impl Panel for DiskPanel {
     }
 
     fn max_height(&self) -> Option<u16> {
-        // Three rows a device with the last blank line unneeded, and the
-        // frame. Past that every row is space under the last meter.
+        // With the graphs on, more height is more history and the panel
+        // scales like cpu. Without them: three rows a device with the last
+        // blank line unneeded, and the frame — past that every row is space
+        // under the last meter.
+        if self.config.show_io {
+            return None;
+        }
         let devices = u16::try_from(self.devices().len()).unwrap_or(u16::MAX);
         (devices > 0).then(|| FRAME_HEIGHT + devices * 3 - 1)
     }
@@ -345,10 +460,20 @@ impl Panel for DiskPanel {
             return false;
         }
         self.seen = now;
-        if let Ok(slot) = self.shared.lock() {
-            self.cache.clone_from(&slot);
+        let fresh = self.shared.lock().ok().and_then(|slot| slot.clone());
+        if let Some(devices) = fresh {
+            self.take(devices);
         }
         true
+    }
+
+    fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
+        use ratatui::crossterm::event::KeyCode;
+        if matches!(key.code, KeyCode::Char('i')) {
+            self.config.show_io = !self.config.show_io;
+            return crate::panel::KeyOutcome::Consumed;
+        }
+        crate::panel::KeyOutcome::Ignored
     }
 
     fn alert(&self) -> Option<crate::panel::Alert> {
@@ -391,9 +516,23 @@ impl Panel for DiskPanel {
             return;
         }
 
-        let muted = Style::default().fg(theme.muted);
-        let bottom = area.y + area.height;
         let count = u16::try_from(devices.len()).unwrap_or(u16::MAX);
+
+        // With the graphs on, every device gets an equal share of the
+        // height and the graphs take what its figures leave. Without them,
+        // the blocks stack from the top with a blank line between when
+        // there is room, and the rest of the panel is the row's to give away.
+        let show_io = self.config.show_io && area.height >= 3;
+        if show_io {
+            let regions = Layout::vertical(vec![Constraint::Fill(1); devices.len()]).split(area);
+            let devices = devices.to_vec();
+            for (device, region) in devices.iter().zip(regions.iter()) {
+                self.draw_device_with_io(frame, *region, device, ctx);
+            }
+            return;
+        }
+
+        let bottom = area.y + area.height;
         let per = rows_per_device(area.height, count);
         let mut y = area.y;
 
@@ -403,42 +542,11 @@ impl Panel for DiskPanel {
             }
             let pct = device.used_pct();
             let colour = self.colour(pct, theme);
-
-            // Mount, how full, the word, what is free, what it holds — dropped
-            // from the end, so a narrow panel keeps the mount and the figure
-            // that says whether to worry. Each gap travels with the part it
-            // introduces.
-            let parts = vec![
-                vec![Span::styled(
-                    device.mount.clone(),
-                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                )],
-                vec![
-                    Span::styled(
-                        format!("   {pct}"),
-                        Style::default().fg(colour).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled("%", muted),
-                ],
-                // The word is its own part, so a narrow panel keeps the
-                // figure and loses the label rather than the other way round.
-                vec![Span::styled(
-                    format!(" {}", crate::glyphs::utility("used")),
-                    Style::default()
-                        .fg(theme.label)
-                        .add_modifier(Modifier::BOLD),
-                )],
-                vec![Span::styled(
-                    format!("   {} free", human(device.available)),
-                    muted,
-                )],
-                vec![Span::styled(
-                    format!("   of {}", human(device.total)),
-                    muted,
-                )],
-            ];
             frame.render_widget(
-                Paragraph::new(crate::grid::assemble(parts, area.width)),
+                Paragraph::new(crate::grid::assemble(
+                    figures(device, colour, theme),
+                    area.width,
+                )),
                 Rect::new(area.x, y, area.width, 1),
             );
             y += 1;
@@ -452,6 +560,143 @@ impl Panel for DiskPanel {
             }
             if per == 3 && index + 1 < devices.len() {
                 y += 1;
+            }
+        }
+    }
+}
+
+/// The figures line as parts for `grid::assemble`: mount, how full, the
+/// word, what is free, what it holds — dropped from the end, so a narrow
+/// panel keeps the mount and the figure that says whether to worry. The
+/// word is its own part, so the figure outlives its label rather than the
+/// other way round. Each gap travels with the part it introduces.
+fn figures(device: &Device, colour: Color, theme: &crate::theme::Theme) -> Vec<Vec<Span<'static>>> {
+    let muted = Style::default().fg(theme.muted);
+    let pct = device.used_pct();
+    vec![
+        vec![Span::styled(
+            device.mount.clone(),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+        )],
+        vec![
+            Span::styled(
+                format!("   {pct}"),
+                Style::default().fg(colour).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("%", muted),
+        ],
+        vec![Span::styled(
+            format!(" {}", crate::glyphs::utility("used")),
+            Style::default()
+                .fg(theme.label)
+                .add_modifier(Modifier::BOLD),
+        )],
+        vec![Span::styled(
+            format!("   {} free", human(device.available)),
+            muted,
+        )],
+        vec![Span::styled(
+            format!("   of {}", human(device.total)),
+            muted,
+        )],
+    ]
+}
+
+impl DiskPanel {
+    /// One device with its graphs: figures, meter, the `↓ ↑` readout, and
+    /// the rows left split between a read graph and a write graph — or one
+    /// graph of both when only a row is left.
+    fn draw_device_with_io(
+        &mut self,
+        frame: &mut Frame,
+        region: Rect,
+        device: &Device,
+        ctx: RenderContext<'_>,
+    ) {
+        let theme = ctx.theme;
+        if region.height == 0 {
+            return;
+        }
+        let pct = device.used_pct();
+        let colour = self.colour(pct, theme);
+        let muted = Style::default().fg(theme.muted);
+        let track = Style::default().fg(theme.track);
+        let gradient = &ctx.gradients.cpu;
+
+        let graph_rows = region.height.saturating_sub(3);
+        let rows = Layout::vertical([
+            Constraint::Length(1),                             // figures
+            Constraint::Length(u16::from(region.height >= 2)), // meter
+            Constraint::Length(u16::from(region.height >= 3)), // readout
+            Constraint::Length(graph_rows.div_ceil(2)),        // reads
+            Constraint::Length(graph_rows / 2),                // writes
+        ])
+        .split(region);
+
+        frame.render_widget(
+            Paragraph::new(crate::grid::assemble(
+                figures(device, colour, theme),
+                rows[0].width,
+            )),
+            rows[0],
+        );
+        if rows[1].height > 0 {
+            frame.render_widget(
+                Paragraph::new(Line::from(meter_line(
+                    pct,
+                    rows[1].width,
+                    colour,
+                    theme.track,
+                ))),
+                rows[1],
+            );
+        }
+        if rows[2].height > 0 {
+            // Two readings, each a whole part: an arrow left over nothing
+            // reads as a rate of zero.
+            let text = Style::default().fg(theme.text);
+            frame.render_widget(
+                Paragraph::new(crate::grid::assemble(
+                    vec![
+                        vec![
+                            Span::styled("↓ ", muted),
+                            Span::styled(format_rate(device.read_rate), text),
+                        ],
+                        vec![
+                            Span::styled("   ↑ ", muted),
+                            Span::styled(format_rate(device.write_rate), text),
+                        ],
+                    ],
+                    rows[2].width,
+                )),
+                rows[2],
+            );
+        }
+
+        self.graph_cells = usize::from(region.width);
+        let scale = self.scale(&device.mount);
+        let Some((reads, writes)) = self.histories.get(&device.mount) else {
+            return;
+        };
+        if rows[4].height == 0 && rows[3].height > 0 {
+            // One row: both directions in one graph, since a reader with a
+            // row to spare wants to know whether the disk is busy at all.
+            let both: Vec<u64> = reads
+                .iter()
+                .zip(writes.iter())
+                .map(|(r, w)| r.saturating_add(*w))
+                .collect();
+            BrailleGraph::new(&both, scale.saturating_mul(2), gradient)
+                .track_style(track)
+                .render(rows[3], frame.buffer_mut());
+            return;
+        }
+        for (data, rect) in [(reads, rows[3]), (writes, rows[4])] {
+            if rect.height > 0 {
+                let data: Vec<u64> = data.iter().copied().collect();
+                BrailleGraph::new(&data, scale, gradient)
+                    .track_style(track)
+                    .render(rect, frame.buffer_mut());
             }
         }
     }
@@ -489,6 +734,8 @@ mod tests {
             total,
             available,
             read_only,
+            read_rate: 0,
+            write_rate: 0,
         }
     }
 
@@ -497,11 +744,22 @@ mod tests {
             mount: mount.into(),
             total,
             available,
+            read_rate: 0,
+            write_rate: 0,
+        }
+    }
+
+    /// The panel without its graphs, which is the face the older tests
+    /// describe row by row.
+    fn quiet() -> DiskConfig {
+        DiskConfig {
+            show_io: false,
+            ..DiskConfig::default()
         }
     }
 
     fn panel(devices: Vec<Device>) -> DiskPanel {
-        DiskPanel::with_devices(DiskConfig::default(), devices)
+        DiskPanel::with_devices(quiet(), devices)
     }
 
     fn screen(panel: &mut DiskPanel, width: u16, height: u16) -> Vec<String> {
@@ -723,14 +981,16 @@ mod tests {
             Some("1.6 TB free")
         );
         assert_eq!(panel(vec![]).counter(), None);
+        assert_eq!(panel(vec![]).max_height(), None);
         assert_eq!(
-            DiskPanel::with_devices(DiskConfig::default(), vec![]).max_height(),
-            None
+            DiskPanel::canned(quiet()).max_height(),
+            Some(FRAME_HEIGHT + 5),
+            "two devices: text, meter, blank, text, meter"
         );
         assert_eq!(
             DiskPanel::canned(DiskConfig::default()).max_height(),
-            Some(FRAME_HEIGHT + 5),
-            "two devices: text, meter, blank, text, meter"
+            None,
+            "with the graphs on, more height is more history"
         );
     }
 
@@ -739,7 +999,7 @@ mod tests {
     /// the end at any width — never a fragment.
     #[test]
     fn each_device_is_figures_over_a_meter_and_never_a_fragment() {
-        let mut p = DiskPanel::canned(DiskConfig::default());
+        let mut p = DiskPanel::canned(quiet());
         let rows = screen(&mut p, 60, 5);
         assert_eq!(
             rows[0], "/   17% USED   1.6 TB free   of 2.0 TB",
@@ -789,10 +1049,89 @@ mod tests {
         let rows = screen(&mut none, 44, 3).join("\n");
         assert!(rows.contains("No disks readable"), "{rows}");
         assert!(!rows.contains('■'), "no meter for nothing: {rows}");
-        let mut waiting = DiskPanel::with_devices(DiskConfig::default(), vec![]);
+        let mut waiting = panel(vec![]);
         waiting.cache = None;
         let rows = screen(&mut waiting, 44, 3).join("\n");
         assert!(rows.contains("Reading disks"), "{rows}");
+    }
+
+    /// With the graphs on, each device is figures, meter, a `↓ ↑` readout
+    /// and two graphs sharing the rows left — the network panel's face, per
+    /// device — and no fragment of any figure at any size.
+    #[test]
+    fn with_io_each_device_is_figures_meter_readout_and_two_graphs() {
+        let mut p = DiskPanel::canned(DiskConfig::default());
+        let rows = screen(&mut p, 60, 10);
+        assert_eq!(
+            rows[0], "/   17% USED   1.6 TB free   of 2.0 TB",
+            "{rows:?}"
+        );
+        assert!(rows[1].starts_with('■'), "{rows:?}");
+        assert_eq!(rows[2], "↓ 0 B/s   ↑ 320.0 KB/s", "{rows:?}");
+        assert!(
+            rows[3].starts_with('⣀') && rows[4].starts_with('⣀'),
+            "two graphs: {rows:?}"
+        );
+        assert!(rows[5].starts_with("/Volumes/T7"), "{rows:?}");
+        assert_eq!(rows[7], "↓ 50.0 MB/s   ↑ 0 B/s", "{rows:?}");
+
+        for width in 1..=40u16 {
+            for height in 1..=12u16 {
+                for row in screen(&mut p, width, height) {
+                    let t = row.trim();
+                    for bad in ["B/", "KB", "MB", "↑", "↓", "fre", "USE"] {
+                        assert!(!t.ends_with(bad), "fragment {t:?} at {width}x{height}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A tick adopts the reading and pushes one sample per device onto its
+    /// histories; a device that vanishes takes its history with it.
+    #[test]
+    fn each_reading_feeds_the_histories_and_a_gone_device_is_forgotten() {
+        let mut p = DiskPanel::canned(DiskConfig::default());
+        assert_eq!(p.histories["/"].1.len(), 1);
+        let mut root = device("/", 100, 50);
+        root.read_rate = 7;
+        p.take(vec![root]);
+        assert_eq!(
+            p.histories["/"].0.iter().copied().collect::<Vec<_>>(),
+            [0, 7]
+        );
+        assert!(
+            !p.histories.contains_key("/Volumes/T7"),
+            "gone: {:?}",
+            p.histories.keys()
+        );
+    }
+
+    /// The graphs' ceiling is the device's own peak in either direction,
+    /// never below a megabyte a second, so a trickle of background writes
+    /// does not fill the graph.
+    #[test]
+    fn the_scale_is_the_devices_peak_floored_at_a_megabyte() {
+        let p = DiskPanel::canned(DiskConfig::default());
+        assert_eq!(p.scale("/"), SCALE_FLOOR, "320 KB/s is under the floor");
+        assert_eq!(p.scale("/Volumes/T7"), 52_428_800);
+        assert_eq!(p.scale("/nowhere"), SCALE_FLOOR);
+    }
+
+    #[test]
+    fn i_toggles_the_graphs_and_is_documented() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut p = DiskPanel::canned(DiskConfig::default());
+        assert!(p.config.show_io);
+        let outcome = p.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(outcome, crate::panel::KeyOutcome::Consumed);
+        assert!(!p.config.show_io);
+        assert!(BINDINGS.iter().any(|b| b.key == "i"));
+        assert_eq!(
+            p.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            crate::panel::KeyOutcome::Ignored,
+            "every other key stays global"
+        );
     }
 
     /// The rows a device gets: three with a blank between, two, or one, and

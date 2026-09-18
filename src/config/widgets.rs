@@ -451,9 +451,16 @@ impl Default for TemperatureConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiskConfig {
-    /// Seconds between readings. Disks fill by the hour; thirty is plenty,
-    /// and each reading is a blocking call on a thread of its own.
+    /// Seconds between capacity readings. Disks fill by the hour; thirty is
+    /// plenty, and each reading is a blocking call on a thread of its own.
     pub sample_secs: u64,
+    /// Seconds between I/O readings, which feed the graphs.
+    pub io_sample_secs: u64,
+    /// Samples to keep per graph; a floor, since the buffer grows to the
+    /// panel's width.
+    pub history: usize,
+    /// Draw the read and write graphs under each device. `i` toggles it.
+    pub show_io: bool,
     /// At or above this percentage used, a volume's figures turn amber. Zero
     /// disables.
     pub warn_above_pct: u16,
@@ -466,6 +473,9 @@ impl Default for DiskConfig {
     fn default() -> Self {
         Self {
             sample_secs: 30,
+            io_sample_secs: 2,
+            history: 120,
+            show_io: true,
             warn_above_pct: 80,
             alert_above_pct: 95,
         }

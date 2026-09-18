@@ -483,11 +483,15 @@ show_swap   = true
 # into one row (`/` and `/System/Volumes/Data` are one APFS container), and
 # read-only ones are left out, since nothing can fill them. Brass while there
 # is room, amber at `warn_above_pct`, red at `alert_above_pct` — where the
-# status bar says so too. Not in the default layout: the instrument row is
-# full at 120 columns. `w` switches it on.
+# status bar says so too. Under each device, a `↓ read ↑ write` readout and
+# two graphs of its I/O, scaled to its own peak; `i` hides them. Not in the
+# default layout: the instrument row is full at 120 columns. `w` switches it on.
 # ---------------------------------------------------------------------------
 [disk]
-sample_secs     = 30
+sample_secs     = 30          # capacity; the list is re-read this often
+io_sample_secs  = 2           # the graphs; see the note under [cpu]
+history         = 120         # a floor, not a cap — see the note under [cpu]
+show_io         = true
 warn_above_pct  = 80
 alert_above_pct = 95
 

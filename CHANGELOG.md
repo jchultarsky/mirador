@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The disk panel graphs I/O.** Under each device, a `↓ read ↑ write`
+  readout and two braille histories in the network panel's face, scaled to
+  the device's own peak and never below a megabyte a second, so background
+  writes do not fill the graph. `i` hides them; `[disk].show_io`,
+  `io_sample_secs` and `history` set the defaults. With the graphs on the
+  panel scales to its row like the cpu panel.
+
 ## [1.15.0] - 2026-09-18
 
 ### Added

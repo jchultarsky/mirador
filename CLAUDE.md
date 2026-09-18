@@ -285,7 +285,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 366 of them, including the ones mirador
+    trip through `toml` discards all 367 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -573,6 +573,19 @@ next save, which is the "gets worse if nobody acts" test met. And **decimal
 units**, because a disk is sold in them and Finder states them that way;
 the memory panel's binary gigabytes are the convention on the other side of
 the same line.
+
+**The I/O graphs followed the same evening** ("how about an I/O graph like
+the CPU one?"), and they are the network panel's face per device: a `↓ ↑`
+readout and two braille histories under the meter, `i` to hide them. Two
+things to keep. **The reader keeps its `Disks` handle**, because `sysinfo`'s
+counters are deltas since the last refresh of *that* handle — a fresh list
+each read would report nothing — and it re-lists volumes only on the
+capacity cadence, since the I/O refresh alone is the cheap half. And **the
+scale is floored at a megabyte a second** (`SCALE_FLOOR`): every disk
+carries a trickle of background writes, hundreds of kilobytes a second on
+an idle MacBook, and scaled to its own peak that trickle filled the graph
+with noise — the shimmer the visual system forbids. The network panel does
+not need the floor because an idle interface is genuinely idle.
 
 **The filter governs what mirador *ships*, which after discussion #191 is
 narrower than it used to be.** If external panels happen, "does this answer one

@@ -836,9 +836,12 @@ so they are one row — and read-only volumes are left out, since nothing can
 fill them, which is what keeps every snap off a Linux list. Brass while there
 is room, amber from `warn_above_pct` (80 by default), red from
 `alert_above_pct` (95), where the status bar names the fullest volume. The
-figures are decimal, the way a disk is sold. Reading a volume can block on a
-network mount that has gone to sleep, so it happens on a thread and the
-dashboard never waits for it.
+figures are decimal, the way a disk is sold. Under each device, the network
+panel's face: a `↓ read ↑ write` readout and two braille histories, scaled to
+the device's own peak and never below a megabyte a second, so the trickle of
+background writes every disk carries stays low. `i` hides the graphs.
+Reading a volume can block on a network mount that has gone to sleep, so it
+happens on a thread and the dashboard never waits for it.
 
 Also **not in the default layout**, for a third reason: the instrument row
 has no room for a sixth panel at 120 columns without costing the watchlist
@@ -1023,7 +1026,7 @@ rather than failing quietly.
 | `calculator` | Type a sum, press Enter; an adding machine's tape of what you worked out |
 | `cpu` | Average utilisation, a moving chart, and per-core meters |
 | `memory` | Memory in use, a moving chart, and a swap meter |
-| `disk` | Every volume that can fill up: how full, what is free, a meter per device; not placed by default |
+| `disk` | Every volume that can fill up: how full, what is free, a meter and I/O graphs per device; not placed by default |
 | `network` | Receive and transmit rates as moving charts |
 | `battery` | Charge, which way it is going, and how long that gives you — laptops; not placed by default |
 | `temperature` | The hottest sensor with its history, and every sensor's now and peak — where the platform reports them; not placed by default |
