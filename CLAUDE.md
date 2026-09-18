@@ -2258,10 +2258,14 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.14.0` is released**, as a GitHub release with binaries for macOS
+- **`1.15.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a feature release cut on 2026-09-18
-  carrying one change (#275): the battery panel draws a battery — a rounded
+  and published on crates.io. It is a feature release cut on 2026-09-18,
+  the second that day, carrying the disk panel (#278): the seventeenth
+  widget, the last quarter of "what compute is available", and the third
+  on the excused list. It does **not** carry the NetBSD battery fix (#255):
+  `starship-battery` was still 0.11.1 on crates.io. 1.14.0, hours earlier,
+  was a feature release carrying one change (#275): the battery panel draws a battery — a rounded
   cell filled to the charge with the percentage beside it — in place of the
   block numerals the owner rejected on sight as a second clock. It does
   **not** carry the NetBSD battery fix (#255): `starship-battery` was still
