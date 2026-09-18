@@ -2277,7 +2277,18 @@ and had to be added back was the one that did not.
   the third that day, carrying the disk panel's I/O graphs (#281): the
   network face per device, `i` to hide them, the scale floored at a
   megabyte a second. It does **not** carry the NetBSD battery fix (#255):
-  `starship-battery` was still 0.11.1 on crates.io. 1.15.0, earlier that
+  `starship-battery` was still 0.11.1 on crates.io. The release run built
+  all five targets and 21 assets, the attestations on an archive and a
+  Windows `-update` binary both trace to `release.yml@refs/tags/v1.16.0`
+  at `97e0714` (the wrong-repository control returned 404 for both), and
+  it was live on crates.io at 20:23 UTC — seven minutes after Cut release
+  was dispatched at 20:15. Step 0 was the merged `main` as a release build
+  under tmux with a random-data write running: the readout said
+  `↑ 69.8 MB/s`, `i` hid the graphs, `q` quit. Note for the next such
+  drive: **writes from `/dev/zero` never reach the I/O counters** — the
+  file system elides them — so the first capture showed a 2 GB write as
+  `3.9 KB/s` and looked like a broken panel; `dd if=/dev/urandom` is the
+  load that shows. 1.15.0, earlier that
   evening, was a feature release carrying the disk panel (#278): the seventeenth
   widget, the last quarter of "what compute is available", and the third
   on the excused list. It does **not** carry the NetBSD battery fix (#255):
