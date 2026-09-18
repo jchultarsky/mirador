@@ -2242,7 +2242,13 @@ and had to be added back was the one that did not.
   block numerals the owner rejected on sight as a second clock. It does
   **not** carry the NetBSD battery fix (#255): `starship-battery` was still
   0.11.1 on crates.io that morning, with rust-battery#168 approved and
-  unmerged. 1.13.1 was a patch release cut on 2026-09-15, hours
+  unmerged. The release run built all five targets and 21 assets, the
+  attestations on an archive and a Windows `-update` binary both trace to
+  `release.yml@refs/tags/v1.14.0` at `5d06fdc` (the wrong-repository control
+  returned 404 for both), and it was live on crates.io at 14:18 UTC — ten
+  minutes after Cut release was dispatched at 14:09. Step 0 was a
+  hook-free release build driven under tmux on the owner's MacBook, whose
+  real battery read `PLUGGED IN` at 80%. 1.13.1 was a patch release cut on 2026-09-15, hours
   after 1.13.0, carrying one fix (#271): the clock's border offers
   `h 12/24h`. 1.13.0 had shipped `h` as an `extra`, so it reached only the
   `?` overlay and a clock with room to spare never showed it — the #109
