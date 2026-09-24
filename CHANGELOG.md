@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-09-24
+
 ### Added
 
 - **Every panel's own keys can be changed** (#284). Each panel reads its
@@ -2016,7 +2018,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.17.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.18.0...HEAD
+[1.18.0]: https://github.com/jchultarsky/mirador/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/jchultarsky/mirador/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/jchultarsky/mirador/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/jchultarsky/mirador/compare/v1.14.0...v1.15.0

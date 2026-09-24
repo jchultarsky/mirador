@@ -2281,9 +2281,18 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.17.0` is released**, as a GitHub release with binaries for macOS
+- **`1.18.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
   and published on crates.io. It is a feature release cut on 2026-09-24,
+  the second that day, carrying every panel's keys (#284, #288): a
+  `[<widget>.keys]` table for each of the fourteen panels with keys, listed
+  in the key map, reloaded into live panels and reset with the shell's; and
+  the Mac advice for moving resize off Ctrl, corrected from measurements on
+  iTerm2 and Terminal. It does **not** carry the NetBSD battery fix (#255):
+  `starship-battery` was still 0.11.1 on crates.io. Step 0 was the merged
+  `main` as a release build under tmux with a fresh home: first run, a
+  moved `[calendar.keys]` table reloaded with `r` and drawn in the border,
+  `q` quit. 1.17.0 was a feature release cut earlier the same day,
   carrying configurable keys (#284, #285): a `[keys]` section for the
   shell's eleven keys, a key map on `?` pressed twice that reloads and
   resets them, and `mirador --reset-keys`. The reporter's case was resize
