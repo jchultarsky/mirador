@@ -19,6 +19,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
 use crate::config::Config;
 use crate::frame::{Binding, FrameSpec};
+use crate::keymap::Action;
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::state::UiState;
 use crate::theme::Gradients;
@@ -35,51 +36,6 @@ use crate::theme::Gradients;
 /// draws half a hint rebuilds the bar from this same table and would otherwise
 /// hold its own private copy of the gap.
 const HINT_GAP: &str = "  ";
-
-/// Global bindings, used for both the status bar and the help overlay.
-pub(crate) const GLOBAL: &[Binding] = &[
-    Binding::primary("Tab", "focus"),
-    Binding::primary("?", "keys"),
-    Binding::primary("q", "quit"),
-    // After `quit` deliberately. The status bar shows as many primary bindings
-    // as fit, in order, and on a narrow terminal knowing how to get out beats
-    // knowing how to add a panel. A notice naming this key for anyone with
-    // unplaced widgets used to sit on the bar as well; it was retired, and `w`
-    // being a primary is all that remains of it.
-    Binding::primary("w", "panels"),
-    // Last of the primaries, so it is the first to go when the terminal is too
-    // narrow for all of them — but a primary, because the alternative is what
-    // happened to the resize keys below: shipped, useful, and undiscoverable.
-    Binding::primary("m", "arrange"),
-    // Behind `m` for the same reason `m` is behind `w`, and a primary for the
-    // same reason too: nineteen themes ship, and a theme nobody can find is
-    // nineteen files of decoration.
-    Binding::primary("t", "theme"),
-    // Promoted from `extra` at the owner's request, and the comment on `m`
-    // above had already named the reason: shipped, useful, and undiscoverable.
-    // Spelled the way the arrange legend and `--help` already spell it —
-    // `Ctrl+←/→ resize width` plus `Ctrl+↑/↓ resize height` is 45 cells of
-    // status bar and needs 120 columns before either appears, where the
-    // collapsed form fits from 92. Which arrow does which axis is the one
-    // thing nobody has to be told.
-    //
-    // Drawn rather than spelled, because the arrange legend already draws
-    // `←→↑↓ move` two hints away and the pair now reads as one idea: the same
-    // arrows, plain to move and with Ctrl to resize. The word `arrows` was the
-    // only spelled-out arrow left in a program that draws them everywhere
-    // else. Two cells narrower as well, so the full bar fits from 90 rather
-    // than 92 — the smaller half of the reason.
-    //
-    // These four are East Asian Ambiguous: `unicode-width` calls them one cell
-    // and a terminal configured for wide ambiguous draws them as two, which is
-    // invariant 10's trap seen from the other side. The legend has shipped
-    // them since #100 with nothing reported, and the bar drops hints whole, so
-    // the worst such a terminal costs is a hint dropped one column early.
-    Binding::primary("Ctrl+←→↑↓", "resize"),
-    Binding::extra("Shift+Tab", "focus back"),
-    Binding::extra("1-9", "jump to panel"),
-    Binding::extra("Ctrl+C", "quit"),
-];
 
 /// How long a run of resize keystrokes must be quiet before the layout is
 /// written back.
@@ -254,6 +210,8 @@ struct Slot {
 #[allow(clippy::struct_excessive_bools)]
 pub struct App {
     config: Config,
+    /// The shell's keys: the defaults with the config's `[keys]` over them.
+    keymap: crate::keymap::Keymap,
     gradients: Gradients,
     slots: Vec<Slot>,
     /// `(row, column)` in `config.layout` for each slot, so a resize knows
@@ -356,10 +314,12 @@ impl App {
     /// Build every panel named in the layout, in row-major order.
     pub fn new(config: Config) -> Result<Self> {
         let (slots, positions) = Self::build_slots(&config)?;
+        let keymap = crate::keymap::Keymap::new(&config.keys).map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
             config,
+            keymap,
             gradients,
             slots,
             positions,
@@ -840,12 +800,16 @@ impl App {
             return;
         }
 
+        let resize = self.keymap.action(key).filter(|action| action.is_resize());
+
         // Arrange mode claims the bare arrows, which is the whole point of it
         // being a mode: no modifier to discover, and no terminal that declines
-        // to deliver the chord. Anything with Ctrl held falls through, so the
-        // resize keys keep working while you are rearranging — which is when
-        // you are most likely to want them.
-        if self.arranging.is_some() && !ctrl {
+        // to deliver the chord. Anything with Ctrl held falls through, and so
+        // do the resize keys wherever they have been moved to, so resizing
+        // keeps working while you are rearranging — which is when you are most
+        // likely to want it. The keymap refuses a resize key without Ctrl or
+        // Alt, so none of them is a key this mode needs.
+        if self.arranging.is_some() && !ctrl && resize.is_none() {
             self.handle_arrange_key(key);
             return;
         }
@@ -857,13 +821,14 @@ impl App {
         //
         // A panel in a text-entry state still vetoes it, under the same rule
         // that stops `q` quitting mid-form.
-        if ctrl && !self.focus_captures_input() {
-            let resized = match key.code {
-                KeyCode::Right => self.resize_width(true),
-                KeyCode::Left => self.resize_width(false),
-                KeyCode::Down => self.resize_height(true),
-                KeyCode::Up => self.resize_height(false),
-                _ => return self.dispatch_key(key),
+        if let Some(action) = resize
+            && !self.focus_captures_input()
+        {
+            let resized = match action {
+                Action::ResizeWider => self.resize_width(true),
+                Action::ResizeNarrower => self.resize_width(false),
+                Action::ResizeTaller => self.resize_height(true),
+                _ => self.resize_height(false),
             };
             // Only a resize that actually moved something needs writing. Held
             // against a minimum, the key repeats without changing anything, and
@@ -1228,34 +1193,44 @@ impl App {
             return;
         }
 
-        match key.code {
-            // `q` and Ctrl+C only. Esc used to quit here, undocumented — while
-            // the task panel prints "Nothing matches this filter. Esc to
-            // clear." A panel consumes Esc only while its filter is non-empty,
-            // so the same key in the same panel one keystroke apart either
-            // cleared the filter or killed the dashboard, and nothing on screen
-            // said which. Esc means "back out of something" everywhere else.
-            KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Tab => self.cycle_focus(true),
-            KeyCode::BackTab => self.cycle_focus(false),
-            KeyCode::Char('?') => {
+        match self.keymap.action(key) {
+            // The configured quit key and Ctrl+C only. Esc used to quit here,
+            // undocumented — while the task panel prints "Nothing matches this
+            // filter. Esc to clear." A panel consumes Esc only while its filter
+            // is non-empty, so the same key in the same panel one keystroke
+            // apart either cleared the filter or killed the dashboard, and
+            // nothing on screen said which. Esc means "back out of something"
+            // everywhere else, which is why the keymap will not take it.
+            Some(Action::Quit) => self.should_quit = true,
+            Some(Action::FocusNext) => self.cycle_focus(true),
+            Some(Action::FocusPrevious) => self.cycle_focus(false),
+            Some(Action::Help) => {
                 self.show_help = true;
                 // Opening it always starts at the top; the bindings for the
                 // panel you just focused are the reason you pressed `?`.
                 self.help_scroll = 0;
             }
-            KeyCode::Char('w') => {
+            Some(Action::Panels) => {
                 self.picker = Some(crate::picker::Picker::new(self.config.widget_names()));
             }
-            KeyCode::Char('t') => self.open_theme_picker(),
-            KeyCode::Char('m') => self.enter_arrange(),
-            KeyCode::Char(c @ '1'..='9') => {
-                let index = c as usize - '1' as usize;
-                if index < self.slots.len() {
-                    self.focus = index;
+            Some(Action::Theme) => self.open_theme_picker(),
+            Some(Action::Arrange) => self.enter_arrange(),
+            // Reached only while a panel captures input, which vetoes resizing
+            // along with every other global key; see `handle_key`.
+            Some(
+                Action::ResizeWider
+                | Action::ResizeNarrower
+                | Action::ResizeTaller
+                | Action::ResizeShorter,
+            )
+            | None => {
+                if let KeyCode::Char(c @ '1'..='9') = key.code {
+                    let index = c as usize - '1' as usize;
+                    if index < self.slots.len() {
+                        self.focus = index;
+                    }
                 }
             }
-            _ => {}
         }
     }
 
@@ -1631,22 +1606,30 @@ impl App {
             // the help overlay carries only the *global* keys, so this legend
             // is the only place any of these are documented. A key that ships
             // undiscoverable is the mistake the resize keys already made once.
-            for (key, action) in [
-                ("←→↑↓", "move"),
-                ("Enter", "keep"),
-                ("Esc", "cancel"),
-                ("Shift+↑↓", "move row"),
-                ("Ctrl+←→↑↓", "resize"),
-                ("↑↓ at edge", "new row"),
-            ] {
+            //
+            // The resize hint comes from the keymap, so a reader who moved
+            // resize off Ctrl is shown where it went; the rest of the mode's
+            // keys are not configurable yet.
+            let resize = self.keymap.resize_bindings();
+            let fixed = |key: &'static str, action: &'static str| Binding::primary(key, action);
+            let legend = [
+                fixed("←→↑↓", "move"),
+                fixed("Enter", "keep"),
+                fixed("Esc", "cancel"),
+                fixed("Shift+↑↓", "move row"),
+            ]
+            .into_iter()
+            .chain(resize)
+            .chain([fixed("↑↓ at edge", "new row")]);
+            for binding in legend {
                 // Dropped whole rather than clipped: half a hint reads as a
                 // rendering fault, where a missing one just reads as a narrow
                 // terminal. The gap leads the hint it introduces, so a dropped
                 // hint takes its gap with it.
                 parts.push(vec![
                     Span::styled(HINT_GAP, muted),
-                    Span::styled(key, key_style),
-                    Span::styled(format!(" {action}"), muted),
+                    Span::styled(binding.key, key_style),
+                    Span::styled(format!(" {}", binding.action), muted),
                 ]);
             }
             frame.render_widget(
@@ -1670,7 +1653,7 @@ impl App {
         // the widest thing in it. Promoting the resize keys made it need one:
         // at 80 columns the bar ended `Ctrl+←`.
         let mut parts = vec![spans];
-        for binding in GLOBAL.iter().filter(|b| b.primary) {
+        for binding in self.keymap.bindings().iter().filter(|b| b.primary) {
             parts.push(vec![
                 Span::styled(HINT_GAP, muted),
                 Span::styled(binding.key.clone(), key_style),
@@ -1790,6 +1773,7 @@ impl App {
     /// together. The seam is a real one either way: this half decides what the
     /// overlay *says*, the other half where it sits.
     fn help_lines(
+        global: &[Binding],
         panel: Option<(&str, &[Binding])>,
         theme: &crate::theme::Theme,
     ) -> Vec<Line<'static>> {
@@ -1813,7 +1797,7 @@ impl App {
         // at 12: a plugin names its own keys, and one long enough to push the
         // actions off the edge would be a plugin deciding how this dialog is
         // laid out.
-        let key_column = GLOBAL
+        let key_column = global
             .iter()
             .chain(panel_keys)
             .map(|binding| crate::grid::display_width(&binding.key).min(12))
@@ -1829,7 +1813,7 @@ impl App {
         };
 
         let mut lines = vec![section("global")];
-        lines.extend(GLOBAL.iter().map(entry));
+        lines.extend(global.iter().map(entry));
 
         // Bindings are grouped by the panel they belong to, so it is always
         // clear which panel a key acts on.
@@ -1847,6 +1831,7 @@ impl App {
 
         let panel_title = self.slots.get(self.focus).map(|slot| slot.panel.title());
         let lines = Self::help_lines(
+            self.keymap.bindings(),
             self.slots
                 .get(self.focus)
                 .zip(panel_title.as_deref())
@@ -2215,7 +2200,7 @@ mod tests {
         let mut whole = Vec::new();
         let mut acc = String::from(" mirador");
         whole.push(acc.clone());
-        for binding in GLOBAL.iter().filter(|b| b.primary) {
+        for binding in app.keymap.bindings().iter().filter(|b| b.primary) {
             acc.push_str(HINT_GAP);
             acc.push_str(&binding.key);
             acc.push(' ');
@@ -2709,7 +2694,9 @@ mod tests {
             })
             .collect();
 
-        let widest = GLOBAL
+        let widest = app
+            .keymap
+            .bindings()
             .iter()
             .chain(app.slots[app.focus].panel.bindings())
             .map(|binding| crate::grid::display_width(&binding.key))
@@ -3592,6 +3579,96 @@ mod tests {
         );
     }
 
+    /// `config` with `[keys]` set from `toml_text`.
+    fn with_keys(config: Config, toml_text: &str) -> Config {
+        let mut tables: std::collections::BTreeMap<String, crate::keymap::KeysConfig> =
+            toml::from_str(toml_text).expect("valid TOML");
+        Config {
+            keys: tables.remove("keys").expect("a [keys] table"),
+            ..config
+        }
+    }
+
+    /// A rebound quit key replaces `q` rather than joining it, and Ctrl+C is
+    /// untouched by any of it — invariant 2's way out does not depend on the
+    /// reader's config being sensible.
+    #[test]
+    fn a_rebound_quit_key_replaces_q_and_ctrl_c_still_quits() {
+        let config = || with_keys(config_with(&["clocks"]), "[keys]\nquit = \"x\"");
+
+        let mut app = App::new(config()).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(!app.should_quit, "q is no longer the quit key");
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(app.should_quit, "x is");
+
+        let mut app = App::new(config()).unwrap();
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit, "and Ctrl+C always is");
+    }
+
+    /// #284, end to end: Ctrl+arrows switch desktops on a Mac, so resize moves
+    /// to Alt. Alt resizes, Ctrl no longer does, arrange mode lets Alt through
+    /// the way it let Ctrl through, and both bars say where the keys went.
+    #[test]
+    fn resize_rebound_to_alt_works_everywhere_ctrl_did() {
+        let config = with_keys(
+            resizable(),
+            r#"
+            [keys]
+            resize_wider = "alt+right"
+            resize_narrower = "alt+left"
+            resize_taller = "alt+down"
+            resize_shorter = "alt+up"
+            "#,
+        );
+        let widths = |app: &App| -> Vec<u16> {
+            app.config.layout.rows[0]
+                .panels
+                .iter()
+                .map(|p| p.width)
+                .collect()
+        };
+        let mut app = App::new(config).expect("builds");
+        app.focus = 0;
+        let before = widths(&app);
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_eq!(widths(&app), before, "Ctrl+→ is not a resize key any more");
+
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        let widened = widths(&app);
+        assert!(widened[0] > before[0], "Alt+→ widened the panel");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        let arrangement = widgets_by_row(&app);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(
+            widgets_by_row(&app),
+            arrangement,
+            "inside arrange mode Alt+→ resized rather than moving the panel"
+        );
+        assert!(widths(&app)[0] > widened[0], "and it did resize");
+
+        let legend = status_bar_at(&mut app, 120);
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        let plain = status_bar_at(&mut app, 120);
+        for bar in [&plain, &legend] {
+            assert!(bar.contains("Alt+←→↑↓ resize"), "{bar}");
+            assert!(!bar.contains("Ctrl+←"), "{bar}");
+        }
+    }
+
+    #[test]
+    fn a_keymap_that_does_two_things_with_one_key_does_not_start() {
+        let config = with_keys(config_with(&["clocks"]), "[keys]\ntheme = \"q\"");
+        let Err(error) = App::new(config) else {
+            panic!("a clashing keymap was accepted");
+        };
+        let error = error.to_string();
+        assert!(error.contains("bound to both"), "{error}");
+    }
+
     #[test]
     fn only_a_focused_capturing_panel_can_shorten_the_event_wait() {
         struct ResponsivePanel {
@@ -3940,12 +4017,13 @@ mod tests {
 
     #[test]
     fn every_global_binding_has_a_key_and_an_action() {
-        for binding in GLOBAL {
+        let keymap = crate::keymap::Keymap::default();
+        for binding in keymap.bindings() {
             assert!(!binding.key.is_empty());
             assert!(!binding.action.is_empty());
         }
         assert!(
-            GLOBAL.iter().any(|b| b.key == "?" && b.primary),
+            keymap.bindings().iter().any(|b| b.key == "?" && b.primary),
             "help must always be advertised"
         );
     }

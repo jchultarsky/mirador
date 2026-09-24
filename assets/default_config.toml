@@ -538,3 +538,40 @@ history     = 120             # a floor, not a cap — see the note under [cpu]
 sample_secs = 2               # see the note under [cpu]. Sampling the
                               # interface list is the more expensive of the
                               # two by roughly fifteen times.
+
+# ---------------------------------------------------------------------------
+# Keys
+#
+# The dashboard's own keys, moved wherever you like. Every line below is the
+# default; uncomment one and change it. A key is written in words:
+# "q", "?", "tab", "shift+tab", "space", "f5", "ctrl+left", "alt+h". Give an
+# action a list for several keys — quit = ["q", "x"] — or [] to unbind it.
+#
+# The resize keys are read before the focused panel sees them, so each needs
+# Ctrl or Alt held. On a Mac, where Ctrl+arrows switch desktops, Option works
+# as Alt once the terminal is set to send it that way (Terminal: "Use Option
+# as Meta key"; iTerm2: Left Option key "Esc+"). Terminals differ in what
+# Option+arrows send, so if those do nothing, letters travel everywhere:
+#   resize_narrower = "alt+h"
+#   resize_taller   = "alt+j"
+#   resize_shorter  = "alt+k"
+#   resize_wider    = "alt+l"
+#
+# Every other key here is offered to the focused panel first, so a panel that
+# uses a key keeps it while that panel is focused. Two keys are not in this
+# list and cannot be put in it: Ctrl+C always quits, and Esc always backs out
+# of whatever is open. 1-9 still jump straight to a panel. A key given to two
+# actions is refused at startup, with the line to change.
+# ---------------------------------------------------------------------------
+[keys]
+# focus_next      = "tab"
+# focus_previous  = "shift+tab"
+# help            = "?"
+# quit            = "q"
+# panels          = "w"
+# arrange         = "m"
+# theme           = "t"
+# resize_wider    = "ctrl+right"
+# resize_narrower = "ctrl+left"
+# resize_taller   = "ctrl+down"
+# resize_shorter  = "ctrl+up"

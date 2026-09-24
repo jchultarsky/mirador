@@ -86,6 +86,8 @@ pub struct Config {
     pub network: NetworkConfig,
     pub battery: BatteryConfig,
     pub temperature: TemperatureConfig,
+    /// The shell's keys, where the reader has moved them. See [`crate::keymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 /// Global behaviour.
@@ -259,6 +261,8 @@ impl Config {
     /// however mangled, can produce a config that would have been rejected had
     /// it come from the file.
     pub(crate) fn validate(&self) -> Result<()> {
+        crate::keymap::Keymap::new(&self.keys).map_err(anyhow::Error::msg)?;
+
         let mut plugin_ids = std::collections::HashSet::new();
         for plugin in &self.plugins {
             plugin.validate()?;

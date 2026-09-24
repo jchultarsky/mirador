@@ -545,8 +545,9 @@ mod tests {
     #[test]
     fn every_key_table_in_the_readme_matches_the_bindings_it_describes() {
         let tables = readme_key_tables();
+        let global = crate::keymap::Keymap::default();
         let declared: [(&str, &[crate::frame::Binding]); 4] = [
-            ("global", crate::app::GLOBAL),
+            ("global", global.bindings()),
             ("todo", crate::widgets::todo::BINDINGS),
             ("pomodoro", crate::widgets::pomodoro::BINDINGS),
             ("calculator", crate::widgets::calculator::TAPE_BINDINGS),

@@ -18,6 +18,7 @@ mod frame;
 mod glyphs;
 mod grid;
 mod ical;
+mod keymap;
 mod layout_edit;
 mod link;
 mod migrate;
@@ -88,6 +89,8 @@ KEYS:
     Ctrl+←→↑↓              Resize the focused panel
     ?                      Show all key bindings, and the version
     q / Ctrl+C             Quit
+
+All but 1 - 9 and Ctrl+C can be changed in the config's [keys] section.
 
 On first run mirador writes a commented config file you can edit. Run
 `mirador --config-path` to find it.
