@@ -544,18 +544,6 @@ fn resolve_zone(name: &str) -> Result<TimeZone, String> {
     TimeZone::get(name).map_err(|_| format!("unknown timezone `{name}`"))
 }
 
-/// Format a UTC offset as `+09:30`, which `Offset`'s own Display does not do.
-///
-/// The zone table shows offsets relative to the primary clock instead, so this
-/// is kept for the absolute form a future detail view will want.
-#[cfg_attr(not(test), allow(dead_code))]
-fn format_offset(offset: jiff::tz::Offset) -> String {
-    let total = offset.seconds();
-    let sign = if total < 0 { '-' } else { '+' };
-    let abs = total.abs();
-    format!("{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
-}
-
 /// The offset of `other` relative to the primary zone, as `+9h` or `+5h30`.
 ///
 /// Relative offsets answer the question people actually have about a foreign
@@ -1842,28 +1830,6 @@ mod tests {
     fn unknown_zones_report_the_name_instead_of_panicking() {
         let err = resolve_zone("Mars/Olympus").expect_err("must fail");
         assert!(err.contains("Mars/Olympus"), "got: {err}");
-    }
-
-    #[test]
-    fn offsets_format_with_sign_and_padding() {
-        assert_eq!(format_offset(Offset::from_seconds(0).unwrap()), "+00:00");
-        assert_eq!(
-            format_offset(Offset::from_seconds(9 * 3600).unwrap()),
-            "+09:00"
-        );
-        assert_eq!(
-            format_offset(Offset::from_seconds(-5 * 3600).unwrap()),
-            "-05:00"
-        );
-        // Half-hour and quarter-hour zones must not lose their minutes.
-        assert_eq!(
-            format_offset(Offset::from_seconds(5 * 3600 + 1800).unwrap()),
-            "+05:30"
-        );
-        assert_eq!(
-            format_offset(Offset::from_seconds(5 * 3600 + 2700).unwrap()),
-            "+05:45"
-        );
     }
 
     #[test]

@@ -841,29 +841,6 @@ mod tests {
         (tz, from, until)
     }
 
-    /// No generated calendar may panic, and none may take long enough to be
-    /// felt. The dashboard re-reads its `.ics` on a tick, so "slow" here is a
-    /// hang by another name.
-    #[test]
-    #[ignore = "measures memory amplification; not an assertion"]
-    fn probe_memory_amplification() {
-        // The worst case for `unfold`: a file that is nothing but line endings,
-        // so every byte of input becomes a `String` in the returned Vec.
-        for mb in [1usize, 5, 10] {
-            let text = "\n".repeat(mb * 1024 * 1024);
-            let lines = unfold(&text);
-            let vec_bytes = lines.len() * std::mem::size_of::<String>();
-            let heap: usize = lines.iter().map(String::capacity).sum();
-            println!(
-                "{mb} MB of newlines -> {} lines, {} MB of Vec + {} MB of strings = {:.1}x",
-                lines.len(),
-                vec_bytes / 1024 / 1024,
-                heap / 1024 / 1024,
-                (vec_bytes + heap) as f64 / (mb * 1024 * 1024) as f64
-            );
-        }
-    }
-
     #[test]
     #[ignore = "the wide sweep; the committed test is a subset that fits CI"]
     fn probe_wide_sweep() {
@@ -891,6 +868,9 @@ mod tests {
         println!("worst of 40,000: seed {worst_seed} at {worst:?}");
     }
 
+    /// No generated calendar may panic, and none may take long enough to be
+    /// felt. The dashboard re-reads its `.ics` on a tick, so "slow" here is a
+    /// hang by another name.
     #[test]
     fn no_generated_calendar_panics_or_stalls() {
         let (tz, from, until) = utc_window();

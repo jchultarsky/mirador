@@ -2123,10 +2123,11 @@ Nothing is parked any more. **OSC 8 hyperlinks** were the last entry, closed
 renderer" — then the probe overturned that objection, the feature shipped in
 1.9.0 (#222), and the owner closed the loop with a real click. The reasoning
 is kept because it is what got a parked entry unparked. The prototype it
-wanted exists —
-`examples/osc8_probe.rs`, verified byte-for-byte under tmux by capturing the
-pane's raw stream with `pipe-pane` (method in the example's docs). What it
-established:
+wanted was `examples/osc8_probe.rs`, verified byte-for-byte under tmux by
+capturing the pane's raw stream with `pipe-pane` (method in its docs). It was
+removed once the feature had shipped and been clicked, as a probe whose
+question was answered; `git show fecb01f:examples/osc8_probe.rs` recovers it.
+What it established:
 
 - The "fights ratatui's renderer" objection this paragraph used to make is
   dated: ratatui 0.30 grew the exact hook the feature needs.

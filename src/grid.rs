@@ -479,7 +479,7 @@ impl Grid {
     }
 
     /// Whether the column with this label is being drawn.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn has(&self, label: &str) -> bool {
         self.resolved
             .iter()

@@ -16,8 +16,9 @@
 //! close on the last) breaks the moment the diff rewrites a subset: a
 //! middle-only change rewrites cells with no link active, and a re-emitted
 //! opener without its closer leaks link state onto everything printed after
-//! it. `examples/osc8_probe.rs` demonstrates both on a captured byte
-//! stream. With every cell self-contained, any subset the diff picks is
+//! it. The prototype that demonstrated both on a captured byte stream,
+//! `examples/osc8_probe.rs`, is in git history at `fecb01f`. With every cell
+//! self-contained, any subset the diff picks is
 //! consistent by construction.
 //!
 //! The URL rides *inside* an escape sequence, and the URLs mirador links to
