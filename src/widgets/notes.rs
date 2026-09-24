@@ -21,32 +21,151 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use crate::config::NotesConfig;
 use crate::frame::Binding;
 use crate::grid::{Column, Grid, wrapped_height};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::note::{Note, NoteStore};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::textarea::TextArea;
 use crate::textfield::TextField;
 use crate::theme::Theme;
 
-/// Every key the list responds to.
+/// What the list's keys do. The editor, the search box and the delete
+/// question keep their own keys: they capture input, and a key moved there
+/// could never be typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotesAction {
+    New,
+    Edit,
+    Delete,
+    Up,
+    Down,
+    First,
+    Last,
+    ScrollUp,
+    ScrollDown,
+    Search,
+    ShowPath,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// Every key the list responds to, under `[notes.keys]`.
 ///
-/// One declaration feeds the border hint, the status bar and the help overlay,
-/// and `every_documented_key_works_and_every_working_key_is_documented` fails
-/// if this list and the code drift apart.
-const LIST_BINDINGS: &[Binding] = &[
-    Binding::primary("a", "new"),
-    Binding::primary("↵", "edit"),
-    Binding::primary("d", "delete"),
-    Binding::extra("↑ / ↓", "move selection"),
-    Binding::extra("j / k", "move selection"),
-    Binding::extra("g / G", "first / last"),
-    Binding::extra("Home / End", "first / last"),
-    Binding::extra("PgUp / PgDn", "scroll the note"),
-    Binding::extra("e", "edit"),
-    Binding::extra("n", "new"),
-    Binding::extra("/", "search"),
-    Binding::extra("Esc", "clear search"),
-    Binding::extra("o", "show file path"),
+/// One declaration feeds the border hint, the status bar and the help
+/// overlay, since the hints are derived from it.
+pub const ACTIONS: &[Meta<NotesAction>] = &[
+    Meta {
+        action: NotesAction::New,
+        name: "new",
+        defaults: &[(KeyCode::Char('a'), NONE), (KeyCode::Char('n'), NONE)],
+        label: "new",
+        primary: true,
+        joins: false,
+        about: "write a new note",
+    },
+    Meta {
+        action: NotesAction::Edit,
+        name: "edit",
+        defaults: &[(KeyCode::Enter, NONE), (KeyCode::Char('e'), NONE)],
+        label: "edit",
+        primary: true,
+        joins: false,
+        about: "open the selected note",
+    },
+    Meta {
+        action: NotesAction::Delete,
+        name: "delete",
+        defaults: &[(KeyCode::Char('d'), NONE)],
+        label: "delete",
+        primary: true,
+        joins: false,
+        about: "delete the selected note, after asking",
+    },
+    Meta {
+        action: NotesAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "move selection",
+        primary: false,
+        joins: false,
+        about: "select the note above",
+    },
+    Meta {
+        action: NotesAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "move selection",
+        primary: false,
+        joins: true,
+        about: "select the note below",
+    },
+    Meta {
+        action: NotesAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Char('g'), NONE), (KeyCode::Home, NONE)],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "select the first note",
+    },
+    Meta {
+        action: NotesAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::Char('G'), NONE), (KeyCode::End, NONE)],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "select the last note",
+    },
+    Meta {
+        action: NotesAction::ScrollUp,
+        name: "scroll_up",
+        defaults: &[(KeyCode::PageUp, NONE)],
+        label: "scroll the note",
+        primary: false,
+        joins: false,
+        about: "scroll the note's body up",
+    },
+    Meta {
+        action: NotesAction::ScrollDown,
+        name: "scroll_down",
+        defaults: &[(KeyCode::PageDown, NONE)],
+        label: "scroll the note",
+        primary: false,
+        joins: true,
+        about: "scroll the note's body down",
+    },
+    Meta {
+        action: NotesAction::Search,
+        name: "search",
+        defaults: &[(KeyCode::Char('/'), NONE)],
+        label: "search",
+        primary: false,
+        joins: false,
+        about: "search titles and bodies",
+    },
+    Meta {
+        action: NotesAction::ShowPath,
+        name: "show_path",
+        defaults: &[(KeyCode::Char('o'), NONE)],
+        label: "show file path",
+        primary: false,
+        joins: false,
+        about: "show where the notes are saved",
+    },
 ];
+
+/// Hints for the list's keys that no table moves.
+const FIXED: &[Binding] = &[Binding::extra("Esc", "clear search")];
+
+/// `[notes.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<NotesAction>, String> {
+    PanelKeymap::new("notes", ACTIONS, keys).map(|map| map.with_fixed(FIXED))
+}
+
+/// What the panel builds itself with; see [`PanelKeymap::or_defaults`].
+fn list_keys(keys: &KeysConfig) -> PanelKeymap<NotesAction> {
+    PanelKeymap::or_defaults("notes", ACTIONS, keys).with_fixed(FIXED)
+}
 
 /// Editing has a different vocabulary from browsing. Keeping it separate puts
 /// the scratchpad's selection and clipboard actions in the border while the
@@ -157,6 +276,8 @@ struct WrappedBody {
 pub struct NotesPanel {
     store: NoteStore,
     config: NotesConfig,
+    /// `[notes.keys]` over the defaults, for the list.
+    keys: PanelKeymap<NotesAction>,
     filter: String,
     mode: Mode,
     /// Note ids in display order, recomputed whenever the list changes.
@@ -187,6 +308,7 @@ impl NotesPanel {
         let store = NoteStore::load_or_seed(path, today)?;
         let mut panel = Self {
             store,
+            keys: list_keys(&config.keys),
             config,
             filter: String::new(),
             mode: Mode::List,
@@ -418,29 +540,42 @@ impl NotesPanel {
     }
 
     fn handle_list_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.select_down(1),
-            KeyCode::Char('k') | KeyCode::Up => self.select_up(1),
-            KeyCode::Char('g') | KeyCode::Home => self.select_up(usize::MAX),
-            KeyCode::Char('G') | KeyCode::End => self.select_down(usize::MAX),
+        // Esc is not in the map: it always backs out, here of a search.
+        if key.code == KeyCode::Esc {
+            if self.filter.is_empty() {
+                return KeyOutcome::Ignored;
+            }
+            self.filter.clear();
+            self.set_status("search cleared");
+            self.refresh_view();
+            return KeyOutcome::Consumed;
+        }
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            NotesAction::Down => self.select_down(1),
+            NotesAction::Up => self.select_up(1),
+            NotesAction::First => self.select_up(usize::MAX),
+            NotesAction::Last => self.select_down(usize::MAX),
 
             // The list is usually short and the body usually is not, so the
             // paging keys move the note rather than the selection — the
             // opposite of the task list, where the rows are the long thing.
-            KeyCode::PageDown => self.scroll_body(5),
-            KeyCode::PageUp => self.scroll_body(-5),
+            NotesAction::ScrollDown => self.scroll_body(5),
+            NotesAction::ScrollUp => self.scroll_body(-5),
 
-            KeyCode::Char('a' | 'n') => {
+            NotesAction::New => {
                 self.mode = Mode::Edit(Box::new(EditForm::blank()));
             }
 
-            KeyCode::Enter | KeyCode::Char('e') => {
+            NotesAction::Edit => {
                 if let Some(note) = self.selected() {
                     self.mode = Mode::Edit(Box::new(EditForm::from_note(note)));
                 }
             }
 
-            KeyCode::Char('d') => {
+            NotesAction::Delete => {
                 if let Some(note) = self.selected() {
                     self.mode = Mode::ConfirmDelete {
                         id: note.id,
@@ -449,22 +584,14 @@ impl NotesPanel {
                 }
             }
 
-            KeyCode::Char('/') => {
+            NotesAction::Search => {
                 self.mode = Mode::Search(TextField::with_value(self.filter.clone()));
             }
 
-            KeyCode::Char('o') => {
+            NotesAction::ShowPath => {
                 let path = self.store.path().display().to_string();
                 self.set_status(path);
             }
-
-            KeyCode::Esc if !self.filter.is_empty() => {
-                self.filter.clear();
-                self.set_status("search cleared");
-                self.refresh_view();
-            }
-
-            _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
     }
@@ -924,13 +1051,17 @@ impl Panel for NotesPanel {
         }
     }
 
-    fn bindings(&self) -> &'static [Binding] {
+    fn bindings(&self) -> &[Binding] {
         match &self.mode {
             Mode::Edit(form) if form.body.has_selection() => SELECTION_BINDINGS,
             Mode::Edit(form) if form.field == Field::Body => BODY_EDIT_BINDINGS,
             Mode::Edit(_) => TITLE_EDIT_BINDINGS,
-            _ => LIST_BINDINGS,
+            _ => self.keys.bindings(),
         }
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = list_keys(&config.notes.keys);
     }
 
     fn refresh_interval(&self) -> std::time::Duration {
@@ -1763,46 +1894,60 @@ mod tests {
         assert_eq!(p.counter(), Some("1/2".to_string()));
     }
 
-    /// Every key list mode responds to, paired with the binding documenting it.
-    const DOCUMENTED_LIST_KEYS: &[(KeyCode, &str)] = &[
-        (KeyCode::Char('a'), "a"),
-        (KeyCode::Char('n'), "n"),
-        (KeyCode::Enter, "↵"),
-        (KeyCode::Char('e'), "e"),
-        (KeyCode::Char('d'), "d"),
-        (KeyCode::Down, "↑ / ↓"),
-        (KeyCode::Up, "↑ / ↓"),
-        (KeyCode::Char('j'), "j / k"),
-        (KeyCode::Char('k'), "j / k"),
-        (KeyCode::Char('g'), "g / G"),
-        (KeyCode::Char('G'), "g / G"),
-        (KeyCode::Home, "Home / End"),
-        (KeyCode::End, "Home / End"),
-        (KeyCode::PageUp, "PgUp / PgDn"),
-        (KeyCode::PageDown, "PgUp / PgDn"),
-        (KeyCode::Char('/'), "/"),
-        (KeyCode::Char('o'), "o"),
-    ];
-
+    /// Every key in the map works at its default, and every one is
+    /// advertised; the hints are derived from the map, so the check that
+    /// can fail is the first — that the list answers every action.
     #[test]
-    fn every_documented_key_works_and_every_working_key_is_documented() {
-        for (code, key) in DOCUMENTED_LIST_KEYS {
-            assert!(
-                LIST_BINDINGS.iter().any(|b| b.key == *key),
-                "`{key}` is handled but missing from BINDINGS, so nothing tells the user it exists"
-            );
-
-            let (mut p, _g) = panel("keymap");
-            add_note(&mut p, "a note", "body");
-            assert!(matches!(p.mode, Mode::List));
-
-            let outcome = p.handle_key(KeyEvent::new(*code, KeyModifiers::NONE));
-            assert_eq!(
-                outcome,
-                KeyOutcome::Consumed,
-                "`{key}` is documented but the list ignores it"
-            );
+    fn every_key_in_the_map_works_and_is_advertised() {
+        let map = keymap(&KeysConfig::default()).expect("valid");
+        let advertised: Vec<String> = map
+            .bindings()
+            .iter()
+            .flat_map(|b| b.key.split(" / ").map(str::to_string).collect::<Vec<_>>())
+            .collect();
+        for meta in ACTIONS {
+            for &(code, modifiers) in meta.defaults {
+                let key = crate::keymap::Key::new(code, modifiers);
+                assert!(
+                    advertised.contains(&key.to_string()),
+                    "`{key}` ({}) is handled but not advertised: {advertised:?}",
+                    meta.name
+                );
+                let (mut p, _g) = panel("keymap");
+                add_note(&mut p, "a note", "body");
+                assert!(matches!(p.mode, Mode::List));
+                assert_eq!(
+                    p.handle_key(KeyEvent::new(code, modifiers)),
+                    KeyOutcome::Consumed,
+                    "`{key}` ({}) is in the map but the list ignores it",
+                    meta.name
+                );
+            }
         }
+    }
+
+    /// A moved key takes the action with it, the border follows, and Esc —
+    /// never in the map — still clears a search.
+    #[test]
+    fn a_moved_list_key_works_and_the_old_one_does_not() {
+        let (mut p, _g) = panel("moved");
+        add_note(&mut p, "a note", "body");
+        p.keys = keymap(&toml::from_str("new = \"+\"").expect("a table")).expect("valid");
+        assert_eq!(
+            p.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+            KeyOutcome::Ignored
+        );
+        assert!(
+            p.bindings()
+                .iter()
+                .any(|b| b.primary && b.key == "+" && b.action == "new")
+        );
+        press(&mut p, KeyCode::Char('+'));
+        assert!(matches!(p.mode, Mode::Edit(_)), "+ writes a new note");
+        press(&mut p, KeyCode::Esc);
+        p.filter = "note".into();
+        press(&mut p, KeyCode::Esc);
+        assert!(p.filter.is_empty());
     }
 
     /// A note is prose somebody wrote, and prose contains emoji. Handing that

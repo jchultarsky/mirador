@@ -546,9 +546,11 @@ mod tests {
     fn every_key_table_in_the_readme_matches_the_bindings_it_describes() {
         let tables = readme_key_tables();
         let global = crate::keymap::Keymap::default();
+        let todo = crate::widgets::todo::keymap(&crate::keymap::KeysConfig::default())
+            .expect("the default task keys are valid");
         let declared: [(&str, &[crate::frame::Binding]); 4] = [
             ("global", global.bindings()),
-            ("todo", crate::widgets::todo::BINDINGS),
+            ("todo", todo.bindings()),
             ("pomodoro", crate::widgets::pomodoro::BINDINGS),
             ("calculator", crate::widgets::calculator::TAPE_BINDINGS),
         ];

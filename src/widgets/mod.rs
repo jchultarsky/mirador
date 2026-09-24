@@ -66,6 +66,18 @@ pub struct KeyScope {
 /// — the order they appear in the shipped config.
 pub const KEY_SCOPES: &[KeyScope] = &[
     KeyScope {
+        widget: "todo",
+        keys: |config| &config.todo.keys,
+        keys_mut: |config| &mut config.todo.keys,
+        listing: |keys| todo::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "notes",
+        keys: |config| &config.notes.keys,
+        keys_mut: |config| &mut config.notes.keys,
+        listing: |keys| notes::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
         widget: "cpu",
         keys: |config| &config.cpu.keys,
         keys_mut: |config| &mut config.cpu.keys,

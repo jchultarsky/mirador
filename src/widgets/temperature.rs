@@ -356,6 +356,7 @@ pub const ACTIONS: &[Meta<TemperatureAction>] = &[Meta {
     defaults: &[(KeyCode::Char('u'), KeyModifiers::NONE)],
     label: "units",
     primary: true,
+    joins: false,
     about: "switch between Celsius and Fahrenheit",
 }];
 

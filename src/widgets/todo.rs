@@ -20,6 +20,7 @@ use crate::config::TodoConfig;
 use crate::dateinput::parse_due;
 use crate::frame::{Binding, centred};
 use crate::grid::{Column, Grid};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::task::{DueState, Priority, SortMode, Task, TaskStore};
 use crate::textfield::TextField;
@@ -59,35 +60,196 @@ impl Counts {
     }
 }
 
-/// Keys this panel responds to.
+/// What the list's keys do. The form, the filter and the delete question
+/// keep their own keys: they capture input, and a key moved there could
+/// never be typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TodoAction {
+    Add,
+    Edit,
+    Done,
+    Delete,
+    Up,
+    Down,
+    First,
+    Last,
+    PageUp,
+    PageDown,
+    PriorityNext,
+    PriorityPrevious,
+    Sort,
+    Completed,
+    Filter,
+    ShowPath,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// Every key the list responds to, under `[todo.keys]`.
 ///
-/// The first few `primary` entries are what fits in the frame hint, so they
-/// are ordered by how often they are actually used, not alphabetically.
-/// Every key the list responds to.
-///
-/// This list is the help overlay, the status bar and the border hint all at
-/// once, so a key missing here is a key nobody can discover.
-/// `every_documented_key_works_and_every_working_key_is_documented` holds the
-/// two halves together.
-pub(crate) const BINDINGS: &[Binding] = &[
-    Binding::primary("a", "add"),
-    Binding::primary("↵", "edit"),
-    Binding::primary("space", "done"),
-    Binding::primary("d", "delete"),
-    Binding::extra("↑ / ↓", "move selection"),
-    Binding::extra("j / k", "move selection"),
-    Binding::extra("g / G", "first / last"),
-    Binding::extra("Home / End", "first / last"),
-    Binding::extra("PgUp / PgDn", "move ten rows"),
-    Binding::extra("e", "edit"),
-    Binding::extra("n", "add"),
-    Binding::extra("p / P", "cycle priority"),
-    Binding::extra("s", "cycle sort"),
-    Binding::extra("c", "show completed"),
-    Binding::extra("/", "filter"),
-    Binding::extra("Esc", "clear filter"),
-    Binding::extra("o", "show file path"),
+/// The hints — help overlay, status bar and border at once — are derived
+/// from this, so a key the list reads is a key it advertises. The primary
+/// entries come first and are what fits in the frame hint, so they are
+/// ordered by how often they are used, not alphabetically.
+pub const ACTIONS: &[Meta<TodoAction>] = &[
+    Meta {
+        action: TodoAction::Add,
+        name: "add",
+        defaults: &[(KeyCode::Char('a'), NONE), (KeyCode::Char('n'), NONE)],
+        label: "add",
+        primary: true,
+        joins: false,
+        about: "add a task",
+    },
+    Meta {
+        action: TodoAction::Edit,
+        name: "edit",
+        defaults: &[(KeyCode::Enter, NONE), (KeyCode::Char('e'), NONE)],
+        label: "edit",
+        primary: true,
+        joins: false,
+        about: "edit the selected task",
+    },
+    Meta {
+        action: TodoAction::Done,
+        name: "done",
+        defaults: &[(KeyCode::Char(' '), NONE)],
+        label: "done",
+        primary: true,
+        joins: false,
+        about: "mark the selected task done, or not",
+    },
+    Meta {
+        action: TodoAction::Delete,
+        name: "delete",
+        defaults: &[(KeyCode::Char('d'), NONE)],
+        label: "delete",
+        primary: true,
+        joins: false,
+        about: "delete the selected task, after asking",
+    },
+    Meta {
+        action: TodoAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "move selection",
+        primary: false,
+        joins: false,
+        about: "select the task above",
+    },
+    Meta {
+        action: TodoAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "move selection",
+        primary: false,
+        joins: true,
+        about: "select the task below",
+    },
+    Meta {
+        action: TodoAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Char('g'), NONE), (KeyCode::Home, NONE)],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "select the first task",
+    },
+    Meta {
+        action: TodoAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::Char('G'), NONE), (KeyCode::End, NONE)],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "select the last task",
+    },
+    Meta {
+        action: TodoAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, NONE)],
+        label: "move ten rows",
+        primary: false,
+        joins: false,
+        about: "select ten tasks up",
+    },
+    Meta {
+        action: TodoAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, NONE)],
+        label: "move ten rows",
+        primary: false,
+        joins: true,
+        about: "select ten tasks down",
+    },
+    Meta {
+        action: TodoAction::PriorityNext,
+        name: "priority_next",
+        defaults: &[(KeyCode::Char('p'), NONE)],
+        label: "cycle priority",
+        primary: false,
+        joins: false,
+        about: "lower the selected task's priority, round to the top",
+    },
+    Meta {
+        action: TodoAction::PriorityPrevious,
+        name: "priority_previous",
+        defaults: &[(KeyCode::Char('P'), NONE)],
+        label: "cycle priority",
+        primary: false,
+        joins: true,
+        about: "raise the selected task's priority, round to the bottom",
+    },
+    Meta {
+        action: TodoAction::Sort,
+        name: "sort",
+        defaults: &[(KeyCode::Char('s'), NONE)],
+        label: "cycle sort",
+        primary: false,
+        joins: false,
+        about: "sort by the next order",
+    },
+    Meta {
+        action: TodoAction::Completed,
+        name: "completed",
+        defaults: &[(KeyCode::Char('c'), NONE)],
+        label: "show completed",
+        primary: false,
+        joins: false,
+        about: "show or hide completed tasks",
+    },
+    Meta {
+        action: TodoAction::Filter,
+        name: "filter",
+        defaults: &[(KeyCode::Char('/'), NONE)],
+        label: "filter",
+        primary: false,
+        joins: false,
+        about: "filter the list by text",
+    },
+    Meta {
+        action: TodoAction::ShowPath,
+        name: "show_path",
+        defaults: &[(KeyCode::Char('o'), NONE)],
+        label: "show file path",
+        primary: false,
+        joins: false,
+        about: "show where the tasks are saved",
+    },
 ];
+
+/// Hints for the list's keys that no table moves.
+const FIXED: &[Binding] = &[Binding::extra("Esc", "clear filter")];
+
+/// `[todo.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<TodoAction>, String> {
+    PanelKeymap::new("todo", ACTIONS, keys).map(|map| map.with_fixed(FIXED))
+}
+
+/// What the panel builds itself with; see [`PanelKeymap::or_defaults`].
+fn list_keys(keys: &KeysConfig) -> PanelKeymap<TodoAction> {
+    PanelKeymap::or_defaults("todo", ACTIONS, keys).with_fixed(FIXED)
+}
 
 /// Columns of the task list.
 ///
@@ -224,6 +386,8 @@ enum Mode {
 pub struct TodoPanel {
     store: TaskStore,
     config: TodoConfig,
+    /// `[todo.keys]` over the defaults, for the list.
+    keys: PanelKeymap<TodoAction>,
     sort: SortMode,
     show_completed: bool,
     filter: String,
@@ -254,6 +418,7 @@ impl TodoPanel {
 
         let mut panel = Self {
             store,
+            keys: list_keys(&config.keys),
             config,
             sort,
             show_completed,
@@ -397,16 +562,28 @@ impl TodoPanel {
 
     /// Keys handled while browsing the list.
     fn handle_list_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.select_down(1),
-            KeyCode::Char('k') | KeyCode::Up => self.select_up(1),
-            KeyCode::Char('g') | KeyCode::Home => self.select_up(usize::MAX),
-            KeyCode::Char('G') | KeyCode::End => self.select_down(usize::MAX),
-            KeyCode::PageDown => self.select_down(10),
-            KeyCode::PageUp => self.select_up(10),
+        // Esc is not in the map: it always backs out, here of a filter.
+        if key.code == KeyCode::Esc {
+            if self.filter.is_empty() {
+                return KeyOutcome::Ignored;
+            }
+            self.filter.clear();
+            self.set_status("filter cleared");
+            self.refresh_view();
+            return KeyOutcome::Consumed;
+        }
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            TodoAction::Down => self.select_down(1),
+            TodoAction::Up => self.select_up(1),
+            TodoAction::First => self.select_up(usize::MAX),
+            TodoAction::Last => self.select_down(usize::MAX),
+            TodoAction::PageDown => self.select_down(10),
+            TodoAction::PageUp => self.select_up(10),
 
-            KeyCode::Char(' ') => {
+            TodoAction::Done => {
                 let Some(id) = self.selected_id() else {
                     return KeyOutcome::Consumed;
                 };
@@ -418,7 +595,7 @@ impl TodoPanel {
                 self.persist();
             }
 
-            KeyCode::Char('a' | 'n') => {
+            TodoAction::Add => {
                 self.mode = Mode::Edit(Box::new(EditForm::blank()));
             }
 
@@ -426,13 +603,13 @@ impl TodoPanel {
             // task for editing. It used to toggle done, which made the most
             // reflexive key in the list a destructive-looking state change on
             // the wrong row. Toggling is `space`, which reads as a checkbox.
-            KeyCode::Enter | KeyCode::Char('e') => {
+            TodoAction::Edit => {
                 if let Some(task) = self.selected_id().and_then(|id| self.store.get(id)) {
                     self.mode = Mode::Edit(Box::new(EditForm::from_task(task)));
                 }
             }
 
-            KeyCode::Char('d') => {
+            TodoAction::Delete => {
                 if let Some(task) = self.selected_id().and_then(|id| self.store.get(id)) {
                     self.mode = Mode::ConfirmDelete {
                         id: task.id,
@@ -441,13 +618,13 @@ impl TodoPanel {
                 }
             }
 
-            // Shift+P walks priority back up; p cycles down.
-            KeyCode::Char('p' | 'P') => {
+            // One walks priority down, the other back up.
+            TodoAction::PriorityNext | TodoAction::PriorityPrevious => {
                 let Some(id) = self.selected_id() else {
                     return KeyOutcome::Consumed;
                 };
                 self.store.with_task(id, |t| {
-                    t.priority = if shift {
+                    t.priority = if action == TodoAction::PriorityPrevious {
                         t.priority.prev()
                     } else {
                         t.priority.next()
@@ -462,13 +639,13 @@ impl TodoPanel {
                 self.persist();
             }
 
-            KeyCode::Char('s') => {
+            TodoAction::Sort => {
                 self.sort = self.sort.next();
                 self.set_status(format!("sort: {}", self.sort.label()));
                 self.refresh_view();
             }
 
-            KeyCode::Char('c') => {
+            TodoAction::Completed => {
                 self.show_completed = !self.show_completed;
                 self.set_status(if self.show_completed {
                     "showing completed"
@@ -478,22 +655,14 @@ impl TodoPanel {
                 self.refresh_view();
             }
 
-            KeyCode::Char('/') => {
+            TodoAction::Filter => {
                 self.mode = Mode::Filter(TextField::with_value(self.filter.clone()));
             }
 
-            KeyCode::Char('o') => {
+            TodoAction::ShowPath => {
                 let path = self.store.path().display().to_string();
                 self.set_status(path);
             }
-
-            KeyCode::Esc if !self.filter.is_empty() => {
-                self.filter.clear();
-                self.set_status("filter cleared");
-                self.refresh_view();
-            }
-
-            _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
     }
@@ -1037,8 +1206,12 @@ impl Panel for TodoPanel {
         }
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = list_keys(&config.todo.keys);
     }
 
     #[allow(clippy::too_many_lines)] // Four stacked regions plus two modal
@@ -1482,57 +1655,113 @@ mod tests {
         panel.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
-    /// Every key list mode responds to, paired with the `Binding::key` string
-    /// that documents it.
-    ///
-    /// Keeping the pairing explicit is the point: adding a key here without
-    /// adding it to `BINDINGS` fails the test below, which is how a key stops
-    /// being able to quietly exist without appearing in the help.
-    const DOCUMENTED_LIST_KEYS: &[(KeyCode, &str)] = &[
-        (KeyCode::Char('a'), "a"),
-        (KeyCode::Char('n'), "n"),
-        (KeyCode::Enter, "↵"),
-        (KeyCode::Char('e'), "e"),
-        (KeyCode::Char(' '), "space"),
-        (KeyCode::Char('d'), "d"),
-        (KeyCode::Down, "↑ / ↓"),
-        (KeyCode::Up, "↑ / ↓"),
-        (KeyCode::Char('j'), "j / k"),
-        (KeyCode::Char('k'), "j / k"),
-        (KeyCode::Char('g'), "g / G"),
-        (KeyCode::Char('G'), "g / G"),
-        (KeyCode::Home, "Home / End"),
-        (KeyCode::End, "Home / End"),
-        (KeyCode::PageUp, "PgUp / PgDn"),
-        (KeyCode::PageDown, "PgUp / PgDn"),
-        (KeyCode::Char('p'), "p / P"),
-        (KeyCode::Char('P'), "p / P"),
-        (KeyCode::Char('s'), "s"),
-        (KeyCode::Char('c'), "c"),
-        (KeyCode::Char('/'), "/"),
-        (KeyCode::Char('o'), "o"),
-    ];
-
+    /// Every key in the map works, and every one is advertised. The hints
+    /// are derived from the map, so the second half holds by construction —
+    /// this checks the first, that `handle_list_key` answers every action
+    /// the map can send it, at every default key.
     #[test]
-    fn every_documented_key_works_and_every_working_key_is_documented() {
-        for (code, key) in DOCUMENTED_LIST_KEYS {
-            assert!(
-                BINDINGS.iter().any(|b| b.key == *key),
-                "`{key}` is handled but missing from BINDINGS, so nothing tells the user it exists"
-            );
-
-            let (mut p, _guard) = panel("keymap");
-            add_task(&mut p, "a task");
-            // Back to the list after the add form.
-            assert!(matches!(p.mode, Mode::List));
-
-            let outcome = p.handle_key(KeyEvent::new(*code, KeyModifiers::NONE));
-            assert_eq!(
-                outcome,
-                KeyOutcome::Consumed,
-                "`{key}` is documented but the list ignores it"
-            );
+    fn every_key_in_the_map_works_and_is_advertised() {
+        let map = keymap(&KeysConfig::default()).expect("valid");
+        let advertised: Vec<String> = map
+            .bindings()
+            .iter()
+            .flat_map(|b| b.key.split(" / ").map(str::to_string).collect::<Vec<_>>())
+            .collect();
+        for meta in ACTIONS {
+            for key in meta.default_keys() {
+                assert!(
+                    advertised.contains(&key.to_string()),
+                    "`{key}` ({}) is handled but not advertised: {advertised:?}",
+                    meta.name
+                );
+                let (mut p, _guard) = panel("keymap");
+                add_task(&mut p, "a task");
+                assert!(matches!(p.mode, Mode::List));
+                let (code, modifiers) = meta
+                    .defaults
+                    .iter()
+                    .copied()
+                    .find(|&(code, modifiers)| crate::keymap::Key::new(code, modifiers) == key)
+                    .expect("a default");
+                assert_eq!(
+                    p.handle_key(KeyEvent::new(code, modifiers)),
+                    KeyOutcome::Consumed,
+                    "`{key}` ({}) is in the map but the list ignores it",
+                    meta.name
+                );
+            }
         }
+    }
+
+    /// A moved key takes the action with it: the new key works, the old one
+    /// is free, and the border says the new one.
+    #[test]
+    fn a_moved_list_key_works_and_the_old_one_does_not() {
+        let (mut p, _guard) = panel("moved");
+        add_task(&mut p, "a task");
+        p.keys = keymap(&toml::from_str("delete = \"x\"").expect("a table")).expect("valid");
+        assert_eq!(
+            press_outcome(&mut p, KeyCode::Char('d')),
+            KeyOutcome::Ignored
+        );
+        assert_eq!(
+            press_outcome(&mut p, KeyCode::Char('x')),
+            KeyOutcome::Consumed
+        );
+        assert!(
+            matches!(p.mode, Mode::ConfirmDelete { .. }),
+            "x asks to delete"
+        );
+        press(&mut p, KeyCode::Char('n'));
+        assert!(
+            p.bindings()
+                .iter()
+                .any(|b| b.primary && b.key == "x" && b.action == "delete")
+        );
+        // Esc is not in the map and still clears a filter.
+        p.filter = "task".into();
+        assert_eq!(press_outcome(&mut p, KeyCode::Esc), KeyOutcome::Consumed);
+        assert!(p.filter.is_empty());
+    }
+
+    fn press_outcome(panel: &mut TodoPanel, code: KeyCode) -> KeyOutcome {
+        panel.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    /// The hints read as they did before the keys could move: paired keys
+    /// share a line, and nothing the help overlay listed has gone.
+    #[test]
+    fn the_default_hints_are_the_ones_the_list_always_drew() {
+        let map = keymap(&KeysConfig::default()).expect("valid");
+        let drawn: Vec<(String, String, bool)> = map
+            .bindings()
+            .iter()
+            .map(|b| (b.key.to_string(), b.action.to_string(), b.primary))
+            .collect();
+        let expected = [
+            ("a", "add", true),
+            ("↵", "edit", true),
+            ("space", "done", true),
+            ("d", "delete", true),
+            ("↑ / ↓", "move selection", false),
+            ("g / G", "first / last", false),
+            ("PgUp / PgDn", "move ten rows", false),
+            ("p / P", "cycle priority", false),
+            ("s", "cycle sort", false),
+            ("c", "show completed", false),
+            ("/", "filter", false),
+            ("o", "show file path", false),
+            ("n", "add", false),
+            ("e", "edit", false),
+            ("k / j", "move selection", false),
+            ("Home / End", "first / last", false),
+            ("Esc", "clear filter", false),
+        ];
+        let expected: Vec<(String, String, bool)> = expected
+            .iter()
+            .map(|(k, a, p)| ((*k).to_string(), (*a).to_string(), *p))
+            .collect();
+        assert_eq!(drawn, expected);
     }
 
     #[test]

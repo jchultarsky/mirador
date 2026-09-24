@@ -128,6 +128,9 @@ pub struct TodoConfig {
     pub date_format: String,
     /// Hide tasks whose due date is more than this many days out. 0 disables.
     pub horizon_days: u32,
+    /// The list's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for TodoConfig {
@@ -138,6 +141,7 @@ impl Default for TodoConfig {
             sort: "smart".into(),
             date_format: "%a %d %b".into(),
             horizon_days: 0,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -198,6 +202,9 @@ pub struct NotesConfig {
     /// for prose — where stacking gives each the full width and trades only
     /// height, which is the cheaper axis for both.
     pub preview: String,
+    /// The list's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for NotesConfig {
@@ -206,6 +213,7 @@ impl Default for NotesConfig {
             file: None,
             date_format: "%d %b".to_string(),
             preview: "below".to_string(),
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }

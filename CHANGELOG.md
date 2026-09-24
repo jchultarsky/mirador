@@ -9,16 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Panels' own keys can be changed, starting with four** (#284). The cpu,
-  memory, disk and temperature panels read their key from a table under
-  their own section — `[cpu.keys] per_core = "p"` — and their border and the
-  help overlay show the key you chose. The same rules as `[keys]` apply, and a
+- **Panels' own keys can be changed, starting with six** (#284). The task
+  and note lists, and the cpu, memory, disk and temperature panels, read
+  their keys from a table under their own section — `[todo.keys] delete =
+  "x"`, `[cpu.keys] per_core = "p"` — and their border and the help overlay
+  show the keys you chose. In the lists it is the list's keys that move; the
+  forms and search boxes keep theirs, and `Esc` still clears a filter. The same rules as `[keys]` apply, and a
   panel key may be one the dashboard also uses, winning while that panel is
   focused, but not a resize key, which the panel would never see.
 - **The key map lists them**, each panel under the heading of the table its
   keys are written in. `r` reloads the panel tables along with `[keys]`,
   handing the new keys to panels already on screen, and `d` and
   `mirador --reset-keys` reset them too.
+
+### Changed
+
+- **`Enter` is drawn `↵` wherever a key is named**, as the task and note
+  borders always drew it, and a config may write it either way. In the help
+  overlay the paired list keys read `k / j` where they read `j / k`, since
+  each pair now follows its actions' order, up before down.
+
+### Fixed
+
+- The README said `PageUp` and `PageDown` move the task list a screen at a
+  time; they move it ten rows, as the help overlay says.
 
 ## [1.17.0] - 2026-09-24
 

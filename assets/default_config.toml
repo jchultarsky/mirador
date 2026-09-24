@@ -262,6 +262,27 @@ sort           = "smart"       # smart | due | priority | created | title
 date_format    = "%a %d %b"
 horizon_days   = 0             # hide tasks due further out than this; 0 = show all
 
+# The list's own keys, written as under [keys] at the end of this file. The
+# form, the filter and the delete question keep theirs, and Esc always clears
+# a filter.
+[todo.keys]
+# add               = ["a", "n"]
+# edit              = ["enter", "e"]
+# done              = "space"
+# delete            = "d"
+# up                = ["up", "k"]
+# down              = ["down", "j"]
+# first             = ["g", "home"]
+# last              = ["G", "end"]
+# page_up           = "pageup"
+# page_down         = "pagedown"
+# priority_next     = "p"
+# priority_previous = "P"
+# sort              = "s"
+# completed         = "c"
+# filter            = "/"
+# show_path         = "o"
+
 # ---------------------------------------------------------------------------
 # Notes
 #
@@ -279,6 +300,22 @@ horizon_days   = 0             # hide tasks due further out than this; 0 = show 
 # file      = "~/notes/notes.toml"
 date_format = "%d %b"
 preview     = "below"        # below | beside
+
+# The list's own keys, written as under [keys] at the end of this file. The
+# editor, the search box and the delete question keep theirs, and Esc always
+# clears a search.
+[notes.keys]
+# new         = ["a", "n"]
+# edit        = ["enter", "e"]
+# delete      = "d"
+# up          = ["up", "k"]
+# down        = ["down", "j"]
+# first       = ["g", "home"]
+# last        = ["G", "end"]
+# scroll_up   = "pageup"
+# scroll_down = "pagedown"
+# search      = "/"
+# show_path   = "o"
 
 # ---------------------------------------------------------------------------
 # Stock watchlist
@@ -580,9 +617,10 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # actions is refused at startup, with the line to change.
 #
 # Some panels' own keys move the same way, in a table under the panel's
-# section: [cpu.keys], [memory.keys], [disk.keys] and [temperature.keys]. A
-# panel key may be one the dashboard also uses, and wins while that panel is
-# focused, but not a resize key, which the panel would never see.
+# section: [todo.keys], [notes.keys], [cpu.keys], [memory.keys], [disk.keys]
+# and [temperature.keys]. A panel key may be one the dashboard also uses, and
+# wins while that panel is focused, but not a resize key, which the panel
+# would never see.
 #
 # Press ? twice in mirador to see every key with its default, load an edit
 # here or in a panel's table without restarting (r), or put every key back to

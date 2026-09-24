@@ -165,6 +165,7 @@ pub const ACTIONS: &[Meta<MemoryAction>] = &[Meta {
     defaults: &[(KeyCode::Char('s'), KeyModifiers::NONE)],
     label: "swap",
     primary: true,
+    joins: false,
     about: "show or hide the swap row",
 }];
 

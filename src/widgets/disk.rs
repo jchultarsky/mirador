@@ -423,6 +423,7 @@ pub const ACTIONS: &[Meta<DiskAction>] = &[Meta {
     defaults: &[(KeyCode::Char('i'), KeyModifiers::NONE)],
     label: "i/o",
     primary: true,
+    joins: false,
     about: "show or hide the I/O graphs",
 }];
 

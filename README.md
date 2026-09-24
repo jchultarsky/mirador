@@ -407,7 +407,9 @@ it turns "glance at the dashboard" into "operate the dashboard". `/` searches
 bodies as well as titles, because the title you wrote in a hurry is often not
 what you later search for.
 
-Open a note with `Enter`, then move to its body with `Tab`. `Shift` plus the
+The list's keys can be moved in `[notes.keys]` — see
+[Changing a panel's keys](#changing-a-panels-keys). Open a note with `Enter`,
+then move to its body with `Tab`. `Shift` plus the
 arrow keys (or `Home`/`End`) selects text, and `Ctrl+A` selects the whole body.
 `Ctrl+C` sends that selection to the terminal clipboard and also keeps an
 in-Mirador copy; `Ctrl+V` pastes that copy at the cursor or replaces the next
@@ -924,19 +926,31 @@ change.
 ### Changing a panel's keys
 
 Some panels' own keys move the same way, in a table under the panel's
-section. So far that is the four with one key each:
+section. The shipped config lists every action in each table with its
+default, and the key map below shows them too:
 
-| Table | Action | Default | Does |
-| --- | --- | --- | --- |
-| `[cpu.keys]` | `per_core` | `c` | Show or hide the per-core meters |
-| `[memory.keys]` | `swap` | `s` | Show or hide the swap row |
-| `[disk.keys]` | `io` | `i` | Show or hide the I/O graphs |
-| `[temperature.keys]` | `units` | `u` | Switch between Celsius and Fahrenheit |
+| Table | Actions |
+| --- | --- |
+| `[todo.keys]` | `add` `edit` `done` `delete` `up` `down` `first` `last` `page_up` `page_down` `priority_next` `priority_previous` `sort` `completed` `filter` `show_path` |
+| `[notes.keys]` | `new` `edit` `delete` `up` `down` `first` `last` `scroll_up` `scroll_down` `search` `show_path` |
+| `[cpu.keys]` | `per_core` |
+| `[memory.keys]` | `swap` |
+| `[disk.keys]` | `io` |
+| `[temperature.keys]` | `units` |
 
 ```toml
+[todo.keys]
+delete = "x"
+up     = ["up", "k", "i"]   # a list gives an action several keys
+
 [cpu.keys]
 per_core = "p"
 ```
+
+In the task and note lists it is the list's keys that move. The form, the
+editor, the search box and the delete question keep theirs, because they
+take typing and a key moved there could never be typed; `Esc` still clears a
+filter or a search.
 
 The same rules hold, with one difference. A panel key may be one the
 dashboard also uses — it wins while that panel is focused, the way the
@@ -994,7 +1008,7 @@ In the task panel:
 | --- | --- |
 | `j` / `k`, `↑` / `↓` | Move the selection |
 | `g` / `G`, `Home` / `End` | Jump to first / last |
-| `PageUp` / `PageDown` | Move a screen at a time |
+| `PageUp` / `PageDown` | Move ten rows at a time |
 | `Space` | Toggle done |
 | `a` / `n` | Add a task |
 | `e` / `Enter` | Edit the selected task |
@@ -1005,7 +1019,8 @@ In the task panel:
 | `/` | Filter by title, tag or notes |
 | `o` | Show the task file path |
 
-In the add/edit form, `Tab` and `Shift+Tab` move between fields, `Enter` saves
+Every key in this table can be moved in `[todo.keys]` — see
+[Changing a panel's keys](#changing-a-panels-keys). In the add/edit form, `Tab` and `Shift+Tab` move between fields, `Enter` saves
 and `Esc` cancels. While a form is open, global keys are suppressed, so typing
 a `q` into a task title does not quit the dashboard.
 

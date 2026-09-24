@@ -125,6 +125,7 @@ pub const ACTIONS: &[Meta<CpuAction>] = &[Meta {
     defaults: &[(KeyCode::Char('c'), KeyModifiers::NONE)],
     label: "per-core",
     primary: true,
+    joins: false,
     about: "show or hide the per-core meters",
 }];
 

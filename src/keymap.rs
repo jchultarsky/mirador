@@ -101,11 +101,15 @@ impl Key {
     /// The key without its modifiers, as a hint spells it.
     fn code_name(code: KeyCode) -> String {
         match code {
-            KeyCode::Char(' ') => "Space".into(),
+            // Lower case, as the task list always wrote it beside its
+            // capitalised neighbours; `FromStr` reads either.
+            KeyCode::Char(' ') => "space".into(),
             KeyCode::Char(c) => c.to_string(),
             KeyCode::Tab => "Tab".into(),
             KeyCode::BackTab => "Shift+Tab".into(),
-            KeyCode::Enter => "Enter".into(),
+            // Drawn, the way the arrows are: a hint has a small budget, and
+            // `↵` is what the panels always showed.
+            KeyCode::Enter => "↵".into(),
             KeyCode::Esc => "Esc".into(),
             KeyCode::Backspace => "Backspace".into(),
             KeyCode::Delete => "Del".into(),
@@ -197,6 +201,7 @@ impl FromStr for Key {
                 '→' => KeyCode::Right,
                 '↑' => KeyCode::Up,
                 '↓' => KeyCode::Down,
+                '↵' => KeyCode::Enter,
                 c if c.is_control() => {
                     return Err(format!("`{text}` is a control character, not a key"));
                 }
@@ -282,6 +287,11 @@ pub struct Meta<A: 'static> {
     pub label: &'static str,
     /// Whether the hint is shown without pressing `?`.
     pub primary: bool,
+    /// Whether this action's hint is drawn joined to the one before it, key
+    /// by key — `↑ / ↓`, `g / G` — rather than on a line of its own. Two
+    /// halves of one idea read as one idea; the labels are joined with ` / `
+    /// where they differ, and shared where they do not.
+    pub joins: bool,
     /// What it does, for the key map dialog, in the imperative.
     pub about: &'static str,
 }
@@ -308,6 +318,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Tab, KeyModifiers::NONE)],
         label: "focus",
         primary: true,
+        joins: false,
         about: "move focus to the next panel",
     },
     Meta {
@@ -316,6 +327,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Char('?'), KeyModifiers::NONE)],
         label: "keys",
         primary: true,
+        joins: false,
         about: "show the keys, then the key map",
     },
     Meta {
@@ -324,6 +336,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Char('q'), KeyModifiers::NONE)],
         label: "quit",
         primary: true,
+        joins: false,
         about: "quit mirador",
     },
     // After `quit` deliberately. On a narrow terminal knowing how to get out
@@ -336,6 +349,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Char('w'), KeyModifiers::NONE)],
         label: "panels",
         primary: true,
+        joins: false,
         about: "choose which panels are shown",
     },
     // Last of the single-key primaries, so it is the first to go when the
@@ -348,6 +362,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Char('m'), KeyModifiers::NONE)],
         label: "arrange",
         primary: true,
+        joins: false,
         about: "rearrange the panels",
     },
     // Behind `m` for the same reason `m` is behind `w`, and a primary for the
@@ -359,6 +374,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Char('t'), KeyModifiers::NONE)],
         label: "theme",
         primary: true,
+        joins: false,
         about: "choose a theme",
     },
     // The four resize actions are advertised as one hint when they can be —
@@ -369,6 +385,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Right, KeyModifiers::CONTROL)],
         label: "wider",
         primary: true,
+        joins: false,
         about: "widen the focused panel",
     },
     Meta {
@@ -377,6 +394,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Left, KeyModifiers::CONTROL)],
         label: "narrower",
         primary: true,
+        joins: false,
         about: "narrow the focused panel",
     },
     Meta {
@@ -385,6 +403,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Down, KeyModifiers::CONTROL)],
         label: "taller",
         primary: true,
+        joins: false,
         about: "make the focused panel taller",
     },
     Meta {
@@ -393,6 +412,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::Up, KeyModifiers::CONTROL)],
         label: "shorter",
         primary: true,
+        joins: false,
         about: "make the focused panel shorter",
     },
     Meta {
@@ -401,6 +421,7 @@ const ACTIONS: &[Meta<Action>] = &[
         defaults: &[(KeyCode::BackTab, KeyModifiers::NONE)],
         label: "focus back",
         primary: false,
+        joins: false,
         about: "move focus to the previous panel",
     },
 ];
@@ -895,18 +916,44 @@ fn check_resize_key(meta: &Meta<Action>, key: Key) -> Result<(), String> {
 }
 
 /// The hints for a scope's keys: each action's first key where its label
-/// says, then every further key as an alias the help overlay lists.
-fn hints<'a, A: 'static>(
-    entries: impl Iterator<Item = (&'a Meta<A>, &'a [Key])>,
-) -> (Vec<Binding>, Vec<Binding>) {
+/// says, then every further key as an alias the help overlay lists — with an
+/// action that [`Meta::joins`] the one before it drawn on the same hints,
+/// key by key.
+fn hints<A: 'static>(entries: &[(&Meta<A>, &[Key])]) -> (Vec<Binding>, Vec<Binding>) {
     let mut bindings = Vec::new();
     let mut aliases = Vec::new();
-    for (meta, keys) in entries {
-        let mut keys = keys.iter();
-        if let Some(key) = keys.next() {
-            bindings.push(Binding::owned(key.to_string(), meta.label, meta.primary));
+    let mut index = 0;
+    while index < entries.len() {
+        let (meta, keys) = entries[index];
+        let joined = entries.get(index + 1).filter(|(next, _)| next.joins);
+        let (next, next_keys): (Option<&Meta<A>>, &[Key]) =
+            joined.map_or((None, &[]), |(next, keys)| (Some(*next), *keys));
+        let label = match next {
+            Some(next) if next.label != meta.label => format!("{} / {}", meta.label, next.label),
+            _ => meta.label.to_string(),
+        };
+        for position in 0..keys.len().max(next_keys.len()) {
+            let binding = match (keys.get(position), next_keys.get(position), next) {
+                (Some(key), Some(other), _) => Binding::owned(
+                    format!("{key} / {other}"),
+                    label.clone(),
+                    meta.primary && position == 0,
+                ),
+                (Some(key), None, _) => {
+                    Binding::owned(key.to_string(), meta.label, meta.primary && position == 0)
+                }
+                (None, Some(other), Some(next)) => {
+                    Binding::owned(other.to_string(), next.label, next.primary && position == 0)
+                }
+                (None, _, _) => continue,
+            };
+            if position == 0 {
+                bindings.push(binding);
+            } else {
+                aliases.push(binding);
+            }
         }
-        aliases.extend(keys.map(|key| Binding::owned(key.to_string(), meta.label, false)));
+        index += if next.is_some() { 2 } else { 1 };
     }
     (bindings, aliases)
 }
@@ -991,7 +1038,9 @@ impl<A: Copy + PartialEq> PanelKeymap<A> {
             keys.push(list);
         }
 
-        let (mut bindings, aliases) = hints(actions.iter().zip(keys.iter().map(Vec::as_slice)));
+        let entries: Vec<(&Meta<A>, &[Key])> =
+            actions.iter().zip(keys.iter().map(Vec::as_slice)).collect();
+        let (mut bindings, aliases) = hints(&entries);
         bindings.extend(aliases);
         Ok(Self {
             actions,
@@ -1022,6 +1071,14 @@ impl<A: Copy + PartialEq> PanelKeymap<A> {
             .zip(&self.keys)
             .find(|(_, keys)| keys.contains(&key))
             .map(|(meta, _)| meta.action)
+    }
+
+    /// The same map with hints for keys that are not in it appended — a
+    /// key the panel reads that no table can move, such as Esc.
+    #[must_use]
+    pub fn with_fixed(mut self, fixed: &[Binding]) -> Self {
+        self.bindings.extend_from_slice(fixed);
+        self
     }
 
     /// The panel's hints, for its border, the status bar and the help
