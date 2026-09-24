@@ -272,6 +272,11 @@ pub trait Panel {
     /// padding.
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: RenderContext<'_>);
 
+    /// Take this panel's keys from `config` again, after the key map
+    /// reloaded or reset them. Only panels in [`crate::widgets::KEY_SCOPES`]
+    /// have keys a config can move.
+    fn set_keys(&mut self, _config: &crate::config::Config) {}
+
     /// Handle a key event while focused.
     fn handle_key(&mut self, _key: KeyEvent) -> KeyOutcome {
         KeyOutcome::Ignored

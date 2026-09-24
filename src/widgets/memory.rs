@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -22,11 +23,14 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use crate::chart::{BrailleGraph, meter_spans};
 use crate::config::MemoryConfig;
 use crate::frame::Binding;
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext};
 
 /// The memory panel.
 pub struct MemoryPanel {
     config: MemoryConfig,
+    /// `[memory.keys]` over the defaults.
+    keys: PanelKeymap<MemoryAction>,
     system: System,
     /// Recent used-percentage samples, oldest first.
     history: VecDeque<u64>,
@@ -97,6 +101,7 @@ impl MemoryPanel {
 
         Self {
             history: VecDeque::with_capacity(config.history.max(1)),
+            keys: PanelKeymap::or_defaults("memory", ACTIONS, &config.keys),
             config,
             system,
             reading,
@@ -147,8 +152,26 @@ impl MemoryPanel {
     }
 }
 
-/// Keys this panel responds to.
-const BINDINGS: &[Binding] = &[Binding::primary("s", "swap")];
+/// What this panel's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryAction {
+    Swap,
+}
+
+/// This panel's keys, under `[memory.keys]`.
+pub const ACTIONS: &[Meta<MemoryAction>] = &[Meta {
+    action: MemoryAction::Swap,
+    name: "swap",
+    defaults: &[(KeyCode::Char('s'), KeyModifiers::NONE)],
+    label: "swap",
+    primary: true,
+    about: "show or hide the swap row",
+}];
+
+/// `[memory.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<MemoryAction>, String> {
+    PanelKeymap::new("memory", ACTIONS, keys)
+}
 
 impl Panel for MemoryPanel {
     fn title(&self) -> String {
@@ -162,8 +185,12 @@ impl Panel for MemoryPanel {
         (self.reading.total > 0).then(|| format!("{} GB", whole_gib(self.reading.total)))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("memory", ACTIONS, &config.memory.keys);
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -175,8 +202,7 @@ impl Panel for MemoryPanel {
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
-        use ratatui::crossterm::event::KeyCode;
-        if matches!(key.code, KeyCode::Char('s')) {
+        if self.keys.action(key) == Some(MemoryAction::Swap) {
             self.config.show_swap = !self.config.show_swap;
             return crate::panel::KeyOutcome::Consumed;
         }
@@ -390,7 +416,7 @@ mod tests {
         assert_eq!(outcome, crate::panel::KeyOutcome::Consumed);
         assert_ne!(panel.config.show_swap, before);
         assert!(
-            BINDINGS.iter().any(|b| b.key == "s"),
+            panel.bindings().iter().any(|b| b.key == "s"),
             "the key the panel takes is the key it advertises"
         );
     }

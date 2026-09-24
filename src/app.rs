@@ -316,7 +316,9 @@ impl App {
     /// Build every panel named in the layout, in row-major order.
     pub fn new(config: Config) -> Result<Self> {
         let (slots, positions) = Self::build_slots(&config)?;
-        let keymap = crate::keymap::Keymap::new(&config.keys).map_err(anyhow::Error::msg)?;
+        let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
+            .check()
+            .map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
@@ -919,7 +921,7 @@ impl App {
         used
     }
 
-    /// Read `[keys]` from the config again, for the key map's `r`.
+    /// Read every key table from the config again, for the key map's `r`.
     ///
     /// A keymap that does not check out is reported and not applied: the keys
     /// in force stay in force, so a half-finished edit cannot take away the
@@ -930,14 +932,11 @@ impl App {
             None => Err("there is no config file to read keys from".into()),
         };
         let report = match result {
-            Ok((keys, keymap)) => {
-                let changed = Action::LISTED
-                    .iter()
-                    .filter(|action| !keymap.is_default(**action))
-                    .count();
+            Ok((tables, keymap)) => {
+                tables.apply(&mut self.config);
                 self.keymap = keymap;
-                self.config.keys = keys;
-                let text = match changed {
+                self.rebind_panels();
+                let text = match self.keys_changed() {
                     0 => "Loaded. Every key is its default.".to_string(),
                     1 => "Loaded. One key differs from its default.".to_string(),
                     n => format!("Loaded. {n} keys differ from their defaults."),
@@ -951,8 +950,39 @@ impl App {
         }
     }
 
-    /// Comment out `[keys]` in the config and go back to the defaults, for
-    /// the key map's `d` once the reader has said yes.
+    /// How many actions, the shell's and every panel's, are not on their
+    /// default keys.
+    fn keys_changed(&self) -> usize {
+        let shell = Action::LISTED
+            .iter()
+            .filter(|action| !self.keymap.is_default(**action))
+            .count();
+        let panels = self
+            .panel_keys()
+            .iter()
+            .flat_map(|(_, listing)| listing)
+            .filter(|listed| !listed.is_default())
+            .count();
+        shell + panels
+    }
+
+    /// Every panel scope's keys as the key map lists them.
+    fn panel_keys(&self) -> crate::keymap::PanelListing {
+        crate::keymap::KeyTables::from_config(&self.config)
+            .check()
+            .map(|(_, panels)| panels)
+            .unwrap_or_default()
+    }
+
+    /// Hand every live panel its keys from the config again.
+    fn rebind_panels(&mut self) {
+        for slot in &mut self.slots {
+            slot.panel.set_keys(&self.config);
+        }
+    }
+
+    /// Comment out every key table in the config and go back to the
+    /// defaults, for the key map's `d` once the reader has said yes.
     fn reset_keys(&mut self) {
         let result = match self.config_path.as_deref() {
             Some(path) => crate::keymap::reset_file(path),
@@ -961,9 +991,10 @@ impl App {
         let report = match result {
             Ok(edited) => {
                 self.keymap = crate::keymap::Keymap::default();
-                self.config.keys = crate::keymap::KeysConfig::default();
+                crate::keymap::KeyTables::default().apply(&mut self.config);
+                self.rebind_panels();
                 let text = if edited {
-                    "Every key is back to its default. Your old [keys] lines are \
+                    "Every key is back to its default. Your old key lines are \
                      still in the config, commented out."
                 } else {
                     "The config sets no keys, so every key is its default."
@@ -1634,11 +1665,19 @@ impl App {
         if self.show_help {
             self.render_help(frame, area);
         }
+        // Listed only while the key map is open; the draw pays for nothing
+        // otherwise.
+        let panel_keys = if self.keymap_dialog.is_some() {
+            self.panel_keys()
+        } else {
+            Vec::new()
+        };
         if let Some(dialog) = self.keymap_dialog.as_mut() {
             dialog.render(
                 frame,
                 area,
                 &self.keymap,
+                &panel_keys,
                 self.config_path.as_deref(),
                 &self.config.theme,
             );
@@ -3860,6 +3899,67 @@ mod tests {
             Some(Action::Quit),
             "a clash is refused and x still quits"
         );
+    }
+
+    /// A panel's keys reload and reset with the shell's, and the panel that
+    /// is already on screen takes them at once — it is carried across, not
+    /// rebuilt, so nothing but [`Panel::set_keys`] would ever tell it.
+    #[test]
+    fn a_live_panel_takes_its_keys_from_a_reload_and_gives_them_back_on_reset() {
+        use crate::panel::KeyOutcome;
+        let file = KeysFile::new(
+            "panel",
+            "[cpu]\nhistory = 5\n\n[cpu.keys]\nper_core = \"p\"\n",
+        );
+        let mut app = App::new(config_with(&["cpu"])).unwrap();
+        app.write_layout_to(file.0.clone());
+        let press = |app: &mut App, c| {
+            app.slots[0]
+                .panel
+                .handle_key(KeyEvent::from(KeyCode::Char(c)))
+        };
+        let hinted =
+            |app: &App, key: &str| app.slots[0].panel.bindings().iter().any(|b| b.key == key);
+        assert!(hinted(&app, "c"));
+
+        open_key_map(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert_eq!(
+            press(&mut app, 'p'),
+            KeyOutcome::Consumed,
+            "the new key is live"
+        );
+        assert_eq!(
+            press(&mut app, 'c'),
+            KeyOutcome::Ignored,
+            "the old one is gone"
+        );
+        assert!(
+            hinted(&app, "p") && !hinted(&app, "c"),
+            "and the hint follows"
+        );
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+        let text = file.text();
+        assert!(text.contains("\n# per_core = \"p\""), "{text}");
+        assert!(text.starts_with("[cpu]\nhistory = 5\n"), "{text}");
+        assert_eq!(
+            press(&mut app, 'c'),
+            KeyOutcome::Consumed,
+            "the default is back"
+        );
+        assert!(hinted(&app, "c"));
+    }
+
+    #[test]
+    fn a_panel_keymap_that_does_not_check_out_does_not_start() {
+        let mut config = config_with(&["cpu"]);
+        config.cpu.keys = toml::from_str("per_core = \"1\"").expect("a table");
+        let Err(error) = App::new(config) else {
+            panic!("a panel key on a jump key was accepted");
+        };
+        assert!(error.to_string().contains("[cpu.keys]"), "{error}");
     }
 
     /// `d`, then `y`: the file's `[keys]` lines are commented out and the

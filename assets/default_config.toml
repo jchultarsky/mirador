@@ -464,6 +464,10 @@ show_per_core = true
 warn_pct      = 70.0
 critical_pct  = 90.0
 
+# The panel's own keys, written as under [keys] at the end of this file.
+[cpu.keys]
+# per_core = "c"
+
 # ---------------------------------------------------------------------------
 # Memory
 #
@@ -474,6 +478,10 @@ critical_pct  = 90.0
 history     = 120             # a floor, not a cap — see the note under [cpu]
 sample_secs = 2               # see the note under [cpu]
 show_swap   = true
+
+# The panel's own keys, written as under [keys] at the end of this file.
+[memory.keys]
+# swap = "s"
 
 # ---------------------------------------------------------------------------
 # Disk
@@ -494,6 +502,10 @@ history         = 120         # a floor, not a cap — see the note under [cpu]
 show_io         = true
 warn_above_pct  = 80
 alert_above_pct = 95
+
+# The panel's own keys, written as under [keys] at the end of this file.
+[disk.keys]
+# io = "i"
 
 # ---------------------------------------------------------------------------
 # Battery
@@ -525,6 +537,10 @@ history       = 120           # a floor, not a cap — see the note under [cpu]
 sample_secs   = 5
 units         = "celsius"     # or "fahrenheit"
 alert_above_c = 95            # the status bar says so above this; 0 disables
+
+# The panel's own keys, written as under [keys] at the end of this file.
+[temperature.keys]
+# units = "u"
 
 # ---------------------------------------------------------------------------
 # Network
@@ -563,8 +579,14 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # of whatever is open. 1-9 still jump straight to a panel. A key given to two
 # actions is refused at startup, with the line to change.
 #
+# Some panels' own keys move the same way, in a table under the panel's
+# section: [cpu.keys], [memory.keys], [disk.keys] and [temperature.keys]. A
+# panel key may be one the dashboard also uses, and wins while that panel is
+# focused, but not a resize key, which the panel would never see.
+#
 # Press ? twice in mirador to see every key with its default, load an edit
-# here without restarting (r), or put every key back to its default (d).
+# here or in a panel's table without restarting (r), or put every key back to
+# its default (d).
 # If a mistake here stops mirador starting, `mirador --reset-keys` does the
 # same from the command line. Either way your lines are commented out, not
 # deleted.

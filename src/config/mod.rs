@@ -261,7 +261,9 @@ impl Config {
     /// however mangled, can produce a config that would have been rejected had
     /// it come from the file.
     pub(crate) fn validate(&self) -> Result<()> {
-        crate::keymap::Keymap::new(&self.keys).map_err(anyhow::Error::msg)?;
+        crate::keymap::KeyTables::from_config(self)
+            .check()
+            .map_err(anyhow::Error::msg)?;
 
         let mut plugin_ids = std::collections::HashSet::new();
         for plugin in &self.plugins {

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Panels' own keys can be changed, starting with four** (#284). The cpu,
+  memory, disk and temperature panels read their key from a table under
+  their own section — `[cpu.keys] per_core = "p"` — and their border and the
+  help overlay show the key you chose. The same rules as `[keys]` apply, and a
+  panel key may be one the dashboard also uses, winning while that panel is
+  focused, but not a resize key, which the panel would never see.
+- **The key map lists them**, each panel under the heading of the table its
+  keys are written in. `r` reloads the panel tables along with `[keys]`,
+  handing the new keys to panels already on screen, and `d` and
+  `mirador --reset-keys` reset them too.
+
 ## [1.17.0] - 2026-09-24
 
 ### Added

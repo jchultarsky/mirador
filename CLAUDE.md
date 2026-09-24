@@ -141,9 +141,10 @@ main.rs      CLI parsing, terminal setup
 app.rs       event loop, focus ring, grid geometry, help overlay, status bar
 panel.rs     the Panel trait — the seam every widget goes through (in-tree)
 frame.rs     panel frames, Binding type, key hints punched into borders
-keymap.rs    the shell's keys by name: `Key` parsed from and printed as words,
-             one `Action` per global key, `[keys]` laid over the defaults,
-             and the hints derived from the result
+keymap.rs    keys by name: `Key` parsed from and printed as words, one
+             `Action` per global key, `[keys]` laid over the defaults, a
+             `PanelKeymap` for each panel's `[<widget>.keys]`, and the hints
+             derived from the result
 grid.rs      shared column grid with named headers
 chart.rs     braille graphs + baked colour gradients
 glyphs.rs    block numerals, bold-uppercase labels, weather art
@@ -156,8 +157,9 @@ plugin/      mod.rs: external Panel adapter, bounded input and rendering;
              process.rs: JSON-lines workers, limits and child lifecycle
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
-keymap_dialog.rs the key map, `?` pressed twice — every shell key, its default
-             and what it does; reloads `[keys]` and resets it to the defaults
+keymap_dialog.rs the key map, `?` pressed twice — every shell key and movable
+             panel key, its default and what it does; reloads the key tables
+             and resets them to the defaults
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
 prompt.rs    the one-line question a panel asks for a path, place or zone,
              with an optional list to choose from
@@ -290,7 +292,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 408 of them, including the ones mirador
+    trip through `toml` discards all 422 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.

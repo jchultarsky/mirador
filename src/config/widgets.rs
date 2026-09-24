@@ -363,6 +363,9 @@ pub struct CpuConfig {
     pub warn_pct: f32,
     /// Percentage above which the readout turns the error colour.
     pub critical_pct: f32,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for CpuConfig {
@@ -373,6 +376,7 @@ impl Default for CpuConfig {
             show_per_core: true,
             warn_pct: 70.0,
             critical_pct: 90.0,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -387,6 +391,9 @@ pub struct MemoryConfig {
     pub sample_secs: u64,
     /// Draw a swap row under the graph, when the machine has any.
     pub show_swap: bool,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for MemoryConfig {
@@ -395,6 +402,7 @@ impl Default for MemoryConfig {
             history: 120,
             sample_secs: 2,
             show_swap: true,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -434,6 +442,9 @@ pub struct TemperatureConfig {
     pub units: String,
     /// Above this, in Celsius, the hottest sensor is an alert. Zero disables.
     pub alert_above_c: u16,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for TemperatureConfig {
@@ -443,6 +454,7 @@ impl Default for TemperatureConfig {
             sample_secs: 5,
             units: "celsius".into(),
             alert_above_c: 95,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -467,6 +479,9 @@ pub struct DiskConfig {
     /// At or above this percentage used, a volume's figures turn red and the
     /// status bar says so. Zero disables.
     pub alert_above_pct: u16,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for DiskConfig {
@@ -478,6 +493,7 @@ impl Default for DiskConfig {
             show_io: true,
             warn_above_pct: 80,
             alert_above_pct: 95,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }

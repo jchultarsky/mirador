@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -26,6 +27,7 @@ use crate::chart::BrailleGraph;
 use crate::config::TemperatureConfig;
 use crate::frame::Binding;
 use crate::grid::{Column, Grid};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext};
 
 /// The table under the graph: every sensor group, hottest first.
@@ -78,6 +80,8 @@ pub(crate) struct Sensor {
 /// The temperature panel.
 pub struct TemperaturePanel {
     config: TemperatureConfig,
+    /// `[temperature.keys]` over the defaults.
+    keys: PanelKeymap<TemperatureAction>,
     components: Option<sysinfo::Components>,
     /// Hottest first.
     sensors: Vec<Sensor>,
@@ -106,6 +110,7 @@ impl TemperaturePanel {
         let mut panel = Self {
             celsius: config.units != "fahrenheit",
             history: VecDeque::with_capacity(config.history.max(1)),
+            keys: PanelKeymap::or_defaults("temperature", ACTIONS, &config.keys),
             config,
             components: Some(sysinfo::Components::new_with_refreshed_list()),
             sensors: Vec::new(),
@@ -127,6 +132,7 @@ impl TemperaturePanel {
         Self {
             celsius: config.units != "fahrenheit",
             history: history.iter().copied().collect(),
+            keys: PanelKeymap::or_defaults("temperature", ACTIONS, &config.keys),
             config,
             components: None,
             sensors,
@@ -337,8 +343,26 @@ fn strip_suffix_ci<'a>(text: &'a str, suffix: &str) -> &'a str {
     text
 }
 
-/// Keys this panel responds to.
-const BINDINGS: &[Binding] = &[Binding::primary("u", "units")];
+/// What this panel's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemperatureAction {
+    Units,
+}
+
+/// This panel's keys, under `[temperature.keys]`.
+pub const ACTIONS: &[Meta<TemperatureAction>] = &[Meta {
+    action: TemperatureAction::Units,
+    name: "units",
+    defaults: &[(KeyCode::Char('u'), KeyModifiers::NONE)],
+    label: "units",
+    primary: true,
+    about: "switch between Celsius and Fahrenheit",
+}];
+
+/// `[temperature.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<TemperatureAction>, String> {
+    PanelKeymap::new("temperature", ACTIONS, keys)
+}
 
 impl Panel for TemperaturePanel {
     fn title(&self) -> String {
@@ -353,8 +377,12 @@ impl Panel for TemperaturePanel {
         }
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("temperature", ACTIONS, &config.temperature.keys);
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -366,8 +394,7 @@ impl Panel for TemperaturePanel {
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
-        use ratatui::crossterm::event::KeyCode;
-        if matches!(key.code, KeyCode::Char('u')) {
+        if self.keys.action(key) == Some(TemperatureAction::Units) {
             self.celsius = !self.celsius;
             return crate::panel::KeyOutcome::Consumed;
         }
@@ -639,7 +666,7 @@ mod tests {
         p.remember(&mut state);
         assert_eq!(state.temperature_units.as_deref(), Some("fahrenheit"));
         assert!(
-            BINDINGS.iter().any(|b| b.key == "u"),
+            p.bindings().iter().any(|b| b.key == "u"),
             "the key is documented in the frame"
         );
     }

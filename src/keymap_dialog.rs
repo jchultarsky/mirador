@@ -1,16 +1,18 @@
-//! The key map: every key the shell reads, what it does, where it came from,
-//! and how to change it — reached by pressing the help key a second time.
+//! The key map: every key the shell reads and every panel key a config can
+//! move, what each does, where it came from, and how to change it — reached
+//! by pressing the help key a second time.
 //!
 //! Same shape as [`crate::theme_picker`]: it owns its scroll position and its
 //! drawing, and reports what it wants as a [`Request`] so the shell keeps the
 //! decisions. Reading the config and rewriting it are the shell's to do,
 //! because the shell is what holds the path and the live keymap.
 //!
-//! Two requests make this more than a table. **Reload** reads `[keys]` again,
+//! Two requests make this more than a table. **Reload** reads the key tables
+//! again — `[keys]` and each panel's `[<widget>.keys]` —
 //! so a reader can edit the config in another pane and try the result without
 //! restarting — and a mistake is shown here, with the keys they had still in
 //! force, rather than at the next launch as a dashboard that will not start.
-//! **Defaults** comments out their `[keys]` lines, after asking, for the
+//! **Defaults** comments out their key lines, after asking, for the
 //! reader who has lost track of what they changed. The same reset is
 //! `mirador --reset-keys` for the case this dialog cannot reach: a keymap so
 //! broken that mirador refuses to start.
@@ -27,7 +29,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
 use crate::grid::{Column, Grid};
-use crate::keymap::{Action, Keymap};
+use crate::keymap::{Action, Key, Keymap, Listed};
 use crate::theme::Theme;
 
 /// What a keypress asked the shell to do.
@@ -45,7 +47,7 @@ pub enum Request {
 }
 
 /// The key table. The action column is sized to its longest name,
-/// `resize_narrower`, since that is the word a reader copies into `[keys]`;
+/// `resize_narrower`, since that is the word a reader copies into a key table;
 /// the explanation goes first when the dialog is squeezed, then the defaults.
 pub const COLUMNS: &[Column] = &[
     Column::fixed("action", 15),
@@ -57,6 +59,72 @@ pub const COLUMNS: &[Column] = &[
 /// The widest the dialog draws. Wide enough for every column at ordinary
 /// terminal widths; wider would only stretch the explanations.
 const WIDTH: u16 = 84;
+
+/// The key table: a header, the shell's keys, then each panel's under the
+/// heading of the table its keys are written in, since that heading is the
+/// one thing the reader has to copy.
+fn table(
+    keymap: &Keymap,
+    panels: &[(&'static str, Vec<Listed>)],
+    theme: &Theme,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let body = Style::default().fg(theme.text);
+    let muted = Style::default().fg(theme.muted);
+    let changed = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let heading = Style::default()
+        .fg(theme.label)
+        .add_modifier(Modifier::BOLD);
+    let words = |keys: &[Key]| {
+        if keys.is_empty() {
+            // Never a blank cell: an unbound action says so.
+            "none".to_string()
+        } else {
+            keys.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    };
+    let grid = Grid::new(COLUMNS, width);
+    let row = |name: &'static str, keys: &[Key], defaults: &[Key], about: &'static str| {
+        let default = keys == defaults;
+        grid.row(&[
+            Span::styled(name, body),
+            Span::styled(words(keys), if default { body } else { changed }),
+            Span::styled(words(defaults), muted),
+            Span::styled(about, muted),
+        ])
+    };
+
+    let mut lines = vec![grid.header(theme)];
+    for action in Action::LISTED {
+        lines.push(row(
+            action.name(),
+            keymap.keys(action),
+            &action.defaults(),
+            action.about(),
+        ));
+    }
+    for (widget, listing) in panels {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            crate::grid::truncate(&format!("[{widget}.keys]"), usize::from(width)),
+            heading,
+        )));
+        for listed in listing {
+            lines.push(row(
+                listed.name,
+                &listed.keys,
+                &listed.defaults,
+                listed.about,
+            ));
+        }
+    }
+    lines
+}
 
 /// A line to show under the instructions until the next keypress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,40 +210,14 @@ impl KeymapDialog {
     fn lines(
         &self,
         keymap: &Keymap,
+        panels: &[(&'static str, Vec<Listed>)],
         config: Option<&Path>,
         theme: &Theme,
         width: u16,
     ) -> Vec<Line<'static>> {
-        let body = Style::default().fg(theme.text);
         let muted = Style::default().fg(theme.muted);
-        let changed = Style::default()
-            .fg(theme.accent)
-            .add_modifier(Modifier::BOLD);
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
-        let words = |keys: &[crate::keymap::Key]| {
-            if keys.is_empty() {
-                // Never a blank cell: an unbound action says so.
-                "none".to_string()
-            } else {
-                keys.iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            }
-        };
-
-        let grid = Grid::new(COLUMNS, width);
-        let mut lines = vec![grid.header(theme)];
-        for action in Action::LISTED {
-            let current = keymap.keys(action);
-            let is_default = keymap.is_default(action);
-            lines.push(grid.row(&[
-                Span::styled(action.name(), body),
-                Span::styled(words(current), if is_default { body } else { changed }),
-                Span::styled(words(&action.defaults()), muted),
-                Span::styled(action.about(), muted),
-            ]));
-        }
+        let mut lines = table(keymap, panels, theme, width);
 
         lines.push(Line::default());
         lines.push(crate::grid::assemble(
@@ -203,10 +245,12 @@ impl KeymapDialog {
             |path| path.display().to_string(),
         );
         let how = format!(
-            "To change a key, edit [keys] in {file} and press r here to load it; \
-             no restart needed. Keys are written in words, as in \
-             resize_wider = \"alt+right\". A list gives an action several keys \
-             and [] gives it none."
+            "To change a key, edit [keys] in {file} — or the panel's own table, \
+             as headed above — and press r here to load it; no restart needed. \
+             Keys are written in words, as in resize_wider = \"alt+right\". A \
+             list gives an action several keys and [] gives it none. A panel \
+             key is offered to that panel first, so it wins while the panel is \
+             focused."
         );
         let prose = |text: &str, style: Style, lines: &mut Vec<Line<'static>>| {
             lines.extend(
@@ -220,7 +264,7 @@ impl KeymapDialog {
         if self.confirming {
             lines.push(Line::default());
             prose(
-                "Put every key back to its default? Your [keys] lines stay in the \
+                "Put every key back to its default? Your key lines stay in the \
                  config, commented out. y resets, any other key keeps them.",
                 Style::default()
                     .fg(theme.warning)
@@ -275,12 +319,13 @@ impl KeymapDialog {
         frame: &mut ratatui::Frame,
         area: Rect,
         keymap: &Keymap,
+        panels: &[(&'static str, Vec<Listed>)],
         config: Option<&Path>,
         theme: &Theme,
     ) {
         let width = WIDTH.min(area.width);
         let text_width = width.saturating_sub(crate::frame::FRAME_WIDTH).max(1);
-        let lines = self.lines(keymap, config, theme, text_width);
+        let lines = self.lines(keymap, panels, config, theme, text_width);
         let text_height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
 
         // Borders, a blank row and the footer.
@@ -357,6 +402,16 @@ mod tests {
         Keymap::new(&tables.remove("keys").unwrap_or_default()).expect("valid keymap")
     }
 
+    /// Every panel's keys as the dialog lists them, from a config's text.
+    fn panel_keys(toml_text: &str) -> crate::keymap::PanelListing {
+        let mut config: crate::config::Config = toml::from_str(toml_text).expect("valid config");
+        config.theme = Theme::default();
+        crate::keymap::KeyTables::from_config(&config)
+            .check()
+            .expect("valid keys")
+            .1
+    }
+
     /// The dialog drawn at `width` x `height`, one string per row.
     fn drawn(dialog: &mut KeymapDialog, keymap: &Keymap, width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -368,6 +423,7 @@ mod tests {
                     frame,
                     area,
                     keymap,
+                    &panel_keys(""),
                     Some(Path::new("/home/me/.config/mirador/config.toml")),
                     &theme,
                 );
@@ -402,6 +458,49 @@ mod tests {
         assert!(screen.contains("config.toml"), "names the file to edit");
     }
 
+    /// Each panel whose keys can move is listed under the heading of the
+    /// table they are written in, with a moved key drawn as changed.
+    #[test]
+    fn panel_keys_are_listed_under_the_table_they_are_written_in() {
+        let panels = panel_keys("[memory.keys]\nswap = \"w\"");
+        let theme = Theme::default();
+        let lines = KeymapDialog::new().lines(&Keymap::default(), &panels, None, &theme, 80);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        for scope in crate::widgets::KEY_SCOPES {
+            let heading = format!("[{}.keys]", scope.widget);
+            assert!(text.contains(&heading), "{heading}: {text:#?}");
+        }
+        let at = |name: &str| {
+            text.iter()
+                .position(|row| row.starts_with(name))
+                .unwrap_or_else(|| panic!("{name}: {text:#?}"))
+        };
+        let swap = at("swap");
+        assert!(at("[memory.keys]") < swap && swap < at("[disk.keys]"));
+        assert!(
+            text[swap].contains('w') && text[swap].contains('s'),
+            "{}",
+            text[swap]
+        );
+        let keys_style = |row: usize| {
+            lines[row]
+                .spans
+                .iter()
+                .filter(|s| !s.content.trim().is_empty())
+                .nth(1)
+                .map(|s| s.style)
+                .expect("a keys cell")
+        };
+        assert_ne!(
+            keys_style(swap),
+            keys_style(at("per_core")),
+            "a moved key stands out"
+        );
+    }
+
     /// A changed key is the one thing a reader opening this after a bad edit
     /// is looking for, so it must not look like the others.
     #[test]
@@ -409,7 +508,7 @@ mod tests {
         let map = keymap("[keys]\nquit = \"x\"");
         let theme = Theme::default();
         let dialog = KeymapDialog::new();
-        let lines = dialog.lines(&map, None, &theme, 80);
+        let lines = dialog.lines(&map, &[], None, &theme, 80);
         let style_of = |name: &str| {
             let line = lines
                 .iter()
@@ -514,6 +613,7 @@ mod tests {
             for line in dialog
                 .lines(
                     &map,
+                    &panel_keys("[cpu.keys]\nper_core = [\"p\", \"ctrl+alt+shift+f11\"]"),
                     Some(Path::new("/a/long/path/to/config.toml")),
                     &theme,
                     width,

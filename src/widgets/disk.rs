@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -45,6 +46,7 @@ use ratatui::widgets::Paragraph;
 use crate::chart::{BrailleGraph, meter_line};
 use crate::config::DiskConfig;
 use crate::frame::{Binding, FRAME_HEIGHT};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext};
 use crate::widgets::network::format_rate;
 
@@ -250,6 +252,8 @@ const SCALE_FLOOR: u64 = 1 << 20;
 #[derive(Debug)]
 pub struct DiskPanel {
     config: DiskConfig,
+    /// `[disk.keys]` over the defaults.
+    keys: PanelKeymap<DiskAction>,
     /// The reader's latest list; `None` until the first read lands.
     shared: Arc<Mutex<Option<Vec<Device>>>>,
     /// Bumped by the reader each time it replaces the list.
@@ -300,6 +304,7 @@ impl DiskPanel {
             })
             .expect("spawning the disk thread");
         Self {
+            keys: PanelKeymap::or_defaults("disk", ACTIONS, &config.keys),
             config,
             shared,
             generation,
@@ -315,6 +320,7 @@ impl DiskPanel {
     #[cfg(test)]
     pub(crate) fn with_devices(config: DiskConfig, devices: Vec<Device>) -> Self {
         let mut panel = Self {
+            keys: PanelKeymap::or_defaults("disk", ACTIONS, &config.keys),
             config,
             shared: Arc::new(Mutex::new(None)),
             generation: Arc::new(AtomicU64::new(0)),
@@ -404,8 +410,26 @@ impl Drop for DiskPanel {
     }
 }
 
-/// Keys this panel responds to.
-const BINDINGS: &[Binding] = &[Binding::primary("i", "i/o")];
+/// What this panel's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskAction {
+    Io,
+}
+
+/// This panel's keys, under `[disk.keys]`.
+pub const ACTIONS: &[Meta<DiskAction>] = &[Meta {
+    action: DiskAction::Io,
+    name: "io",
+    defaults: &[(KeyCode::Char('i'), KeyModifiers::NONE)],
+    label: "i/o",
+    primary: true,
+    about: "show or hide the I/O graphs",
+}];
+
+/// `[disk.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<DiskAction>, String> {
+    PanelKeymap::new("disk", ACTIONS, keys)
+}
 
 /// Rows a device takes at each spacing: text and meter with a blank between
 /// devices, text and meter, or text alone.
@@ -434,8 +458,12 @@ impl Panel for DiskPanel {
         Some(format!("{} free", human(first.available)))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("disk", ACTIONS, &config.disk.keys);
     }
 
     fn max_height(&self) -> Option<u16> {
@@ -468,8 +496,7 @@ impl Panel for DiskPanel {
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
-        use ratatui::crossterm::event::KeyCode;
-        if matches!(key.code, KeyCode::Char('i')) {
+        if self.keys.action(key) == Some(DiskAction::Io) {
             self.config.show_io = !self.config.show_io;
             return crate::panel::KeyOutcome::Consumed;
         }
@@ -1126,7 +1153,7 @@ mod tests {
         let outcome = p.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         assert_eq!(outcome, crate::panel::KeyOutcome::Consumed);
         assert!(!p.config.show_io);
-        assert!(BINDINGS.iter().any(|b| b.key == "i"));
+        assert!(p.bindings().iter().any(|b| b.key == "i"));
         assert_eq!(
             p.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
             crate::panel::KeyOutcome::Ignored,

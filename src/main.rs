@@ -74,7 +74,7 @@ OPTIONS:
         --config-path      Print the resolved config path and exit
         --migrate-config   Update a config written by an older version
         --reset-config     Replace the config with the defaults, keeping a copy
-        --reset-keys       Put every key back to its default; your [keys]
+        --reset-keys       Put every key back to its default; your key
                            lines are commented out, not deleted
         --factory-reset    Start over: config, preferences, tasks, notes and
                            watchlist all set aside, nothing deleted
@@ -269,7 +269,7 @@ fn reset_keys(path: &Path, assume_yes: bool) -> Result<()> {
         }
         println!(
             "This puts every key back to its default by commenting out the [keys] \
-             lines in {}.",
+             and [<panel>.keys] lines in {}.",
             path.display()
         );
         println!("Nothing else in the file changes.");
@@ -286,7 +286,7 @@ fn reset_keys(path: &Path, assume_yes: bool) -> Result<()> {
     }
     if keymap::reset_file(path).map_err(anyhow::Error::msg)? {
         println!(
-            "Every key is back to its default. Your old [keys] lines are still in \
+            "Every key is back to its default. Your old key lines are still in \
              {}, commented out.",
             path.display()
         );
@@ -299,14 +299,16 @@ fn reset_keys(path: &Path, assume_yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Append the way out to an error about `[keys]`.
+/// Append the way out to an error about a key table.
 ///
 /// A keymap mirador refuses is a dashboard that will not start, so the key
-/// map dialog that could fix it is out of reach. Every such error names
-/// `[keys]`, and each one gets `--reset-keys` appended.
+/// map dialog that could fix it is out of reach. Every such error names the
+/// table — `[keys]` or a panel's `[cpu.keys]` — or, for a key name that
+/// cannot be read, says it was in a key table; each gets `--reset-keys`
+/// appended.
 fn point_at_reset_keys(error: anyhow::Error) -> anyhow::Error {
     let text = format!("{error:#}");
-    if text.contains("[keys]") {
+    if text.contains("[keys]") || text.contains(".keys]") || text.contains("in a key table") {
         anyhow::anyhow!(
             "{text}\n\nTo put every key back to its default, run `mirador --reset-keys`."
         )
@@ -602,6 +604,23 @@ mod tests {
 
     /// `--yes` only ever *removes* a question. On its own it must not be
     /// mistaken for a request to reset anything.
+    /// Every way a key table can stop mirador starting ends by naming the
+    /// flag that undoes it — a panel's table and an unreadable key name
+    /// included, neither of which says `[keys]`.
+    #[test]
+    fn a_key_error_from_any_table_points_at_reset_keys() {
+        for text in [
+            "`quit` cannot use Esc in `[keys]`: …",
+            "`per_core` cannot be `1` in `[cpu.keys]`: …",
+            "TOML parse error at line 3\nin a key table, `cmd+q`: …",
+        ] {
+            let out = point_at_reset_keys(anyhow::anyhow!(text.to_string())).to_string();
+            assert!(out.contains("--reset-keys"), "{out}");
+        }
+        let unrelated = point_at_reset_keys(anyhow::anyhow!("unknown widget `x`")).to_string();
+        assert!(!unrelated.contains("--reset-keys"), "{unrelated}");
+    }
+
     #[test]
     fn yes_on_its_own_resets_nothing() {
         let args = parse(&["--yes"]).unwrap();

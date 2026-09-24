@@ -858,7 +858,7 @@ Every flag is optional; with none of them mirador opens the dashboard.
 | `--print-config` | Print the default config to stdout and exit |
 | `--migrate-config` | Update a config written by an older version |
 | `--reset-config` | Replace the config with the defaults, keeping a copy |
-| `--reset-keys` | Put every key back to its default by commenting out `[keys]` |
+| `--reset-keys` | Put every key back to its default by commenting out `[keys]` and the panels' key tables |
 | `--factory-reset` | Start over: config, preferences, tasks, notes and watchlist all set aside |
 | `--update` | Update through the installer or Cargo and exit |
 | `-y`, `--yes` | Do not ask for confirmation |
@@ -874,8 +874,8 @@ Neither reset deletes anything. Every file they touch is renamed to a numbered
 They are also separate commands rather than degrees of one: `--reset-config` is
 about configuration, `--factory-reset` about everything mirador has written.
 `--reset-keys` is narrower than either: it comments out the lines under
-`[keys]` in the config and changes nothing else, for a keymap mistake that
-stops mirador starting.
+`[keys]` and the panels' own key tables in the config and changes nothing
+else, for a keymap mistake that stops mirador starting.
 
 ## Keys
 
@@ -919,20 +919,45 @@ A few rules keep a keymap from locking you out. `Ctrl+C` always quits and
 keys are read before the focused panel sees them, so each needs `Ctrl` or `Alt`
 held. Every other key is offered to the focused panel first, the way `q` is
 today. And a key given to two actions is refused at startup, naming the line to
-change. The panels' own keys are not configurable yet.
+change.
+
+### Changing a panel's keys
+
+Some panels' own keys move the same way, in a table under the panel's
+section. So far that is the four with one key each:
+
+| Table | Action | Default | Does |
+| --- | --- | --- | --- |
+| `[cpu.keys]` | `per_core` | `c` | Show or hide the per-core meters |
+| `[memory.keys]` | `swap` | `s` | Show or hide the swap row |
+| `[disk.keys]` | `io` | `i` | Show or hide the I/O graphs |
+| `[temperature.keys]` | `units` | `u` | Switch between Celsius and Fahrenheit |
+
+```toml
+[cpu.keys]
+per_core = "p"
+```
+
+The same rules hold, with one difference. A panel key may be one the
+dashboard also uses — it wins while that panel is focused, the way the
+calendar's `t` means "today" there and "theme" everywhere else — but not a
+resize key, which is read before the panel would see it. The panel's border
+and the help overlay show the key you chose. The other panels' keys are not
+configurable yet.
 
 **Press `?` twice** for the key map: every one of these actions with the key it
-has now, its default, and what it does, with the keys you changed picked out.
+has now, its default, and what it does, with the keys you changed picked out,
+followed by each panel's table under its heading.
 It also says which file to edit, and it has three keys of its own:
 
-- `r` reloads `[keys]`, so you can edit the config in another pane and try the
-  result without restarting. A mistake is shown in the dialog and the keys you
-  had stay in force.
-- `d` puts every key back to its default, after asking. Your `[keys]` lines are
+- `r` reloads `[keys]` and the panels' tables, so you can edit the config in
+  another pane and try the result without restarting. A mistake is shown in
+  the dialog and the keys you had stay in force.
+- `d` puts every key back to its default, after asking. Your key lines are
   commented out rather than deleted, with a line above them saying when.
 - `Esc` closes it.
 
-If a mistake in `[keys]` stops mirador starting, the error says so, and
+If a mistake in a key table stops mirador starting, the error says so, and
 `mirador --reset-keys` does the same reset from the command line.
 
 ### Rearranging the dashboard

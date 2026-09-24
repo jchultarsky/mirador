@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -13,11 +14,14 @@ use sysinfo::{CpuRefreshKind, RefreshKind, System};
 use crate::chart::{BrailleGraph, meter_spans};
 use crate::config::CpuConfig;
 use crate::frame::Binding;
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext};
 
 /// The CPU panel.
 pub struct CpuPanel {
     config: CpuConfig,
+    /// `[cpu.keys]` over the defaults.
+    keys: PanelKeymap<CpuAction>,
     system: System,
     /// Recent average-utilisation samples, oldest first.
     history: VecDeque<u64>,
@@ -54,6 +58,7 @@ impl CpuPanel {
 
         Self {
             history: VecDeque::with_capacity(config.history.max(1)),
+            keys: PanelKeymap::or_defaults("cpu", ACTIONS, &config.keys),
             config,
             system,
             per_core: Vec::new(),
@@ -107,8 +112,26 @@ impl CpuPanel {
     }
 }
 
-/// Keys this panel responds to.
-const BINDINGS: &[Binding] = &[Binding::primary("c", "per-core")];
+/// What this panel's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuAction {
+    PerCore,
+}
+
+/// This panel's keys, under `[cpu.keys]`.
+pub const ACTIONS: &[Meta<CpuAction>] = &[Meta {
+    action: CpuAction::PerCore,
+    name: "per_core",
+    defaults: &[(KeyCode::Char('c'), KeyModifiers::NONE)],
+    label: "per-core",
+    primary: true,
+    about: "show or hide the per-core meters",
+}];
+
+/// `[cpu.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<CpuAction>, String> {
+    PanelKeymap::new("cpu", ACTIONS, keys)
+}
 
 impl Panel for CpuPanel {
     fn title(&self) -> String {
@@ -119,8 +142,12 @@ impl Panel for CpuPanel {
         (self.core_count > 0).then(|| format!("{} cores", self.core_count))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("cpu", ACTIONS, &config.cpu.keys);
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -132,8 +159,7 @@ impl Panel for CpuPanel {
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
-        use ratatui::crossterm::event::KeyCode;
-        if matches!(key.code, KeyCode::Char('c')) {
+        if self.keys.action(key) == Some(CpuAction::PerCore) {
             self.config.show_per_core = !self.config.show_per_core;
             return crate::panel::KeyOutcome::Consumed;
         }

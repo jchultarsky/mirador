@@ -48,6 +48,49 @@ pub const WIDGET_NAMES: &[&str] = &[
     "calculator",
 ];
 
+/// A panel whose keys can be moved, under `[<widget>.keys]` in the config.
+///
+/// The shell reaches every such table through this list — to check it at
+/// startup, reload or reset it from the key map, and list it there — so a
+/// panel that moves its keys to a [`crate::keymap::PanelKeymap`] is added
+/// here and nowhere else in the shell.
+pub struct KeyScope {
+    pub widget: &'static str,
+    pub keys: fn(&Config) -> &crate::keymap::KeysConfig,
+    pub keys_mut: fn(&mut Config) -> &mut crate::keymap::KeysConfig,
+    /// Build the panel's keymap from a table and list it, or say why not.
+    pub listing: fn(&crate::keymap::KeysConfig) -> Result<Vec<crate::keymap::Listed>, String>,
+}
+
+/// Every panel whose keys can be moved, in the order the key map lists them
+/// — the order they appear in the shipped config.
+pub const KEY_SCOPES: &[KeyScope] = &[
+    KeyScope {
+        widget: "cpu",
+        keys: |config| &config.cpu.keys,
+        keys_mut: |config| &mut config.cpu.keys,
+        listing: |keys| cpu::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "memory",
+        keys: |config| &config.memory.keys,
+        keys_mut: |config| &mut config.memory.keys,
+        listing: |keys| memory::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "disk",
+        keys: |config| &config.disk.keys,
+        keys_mut: |config| &mut config.disk.keys,
+        listing: |keys| disk::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "temperature",
+        keys: |config| &config.temperature.keys,
+        keys_mut: |config| &mut config.temperature.keys,
+        listing: |keys| temperature::keymap(keys).map(|map| map.listing()),
+    },
+];
+
 /// Whether `name` refers to a widget mirador knows how to build.
 pub fn is_known_widget(name: &str) -> bool {
     WIDGET_NAMES.contains(&name)
