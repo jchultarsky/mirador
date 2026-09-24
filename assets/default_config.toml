@@ -730,3 +730,17 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # resize_narrower = "ctrl+left"
 # resize_taller   = "ctrl+down"
 # resize_shorter  = "ctrl+up"
+
+# Arrange mode's keys, while `m` is on. Esc always cancels the arrangement
+# and 1-9 still pick a panel, so neither is here. The resize keys above keep
+# working in the mode, so none of these may be one of them.
+[arrange.keys]
+# move_left      = ["left", "h"]
+# move_right     = ["right", "l"]
+# move_up        = ["up", "k"]
+# move_down      = ["down", "j"]
+# row_up         = ["shift+up", "K"]
+# row_down       = ["shift+down", "J"]
+# keep           = ["enter", "m", "q"]
+# focus_next     = "tab"
+# focus_previous = "shift+tab"

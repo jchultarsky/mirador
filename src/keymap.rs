@@ -13,8 +13,9 @@
 //! declares its actions as a table of [`Meta`], reads its keys from
 //! `[<widget>.keys]` through a [`PanelKeymap`], and draws its hints from that
 //! — see [`crate::widgets::KEY_SCOPES`] for the ones that have moved so far.
-//! The rest still match their own keys, as do arrange mode, the pickers and
-//! the help overlay; each is a scope of its own to move later.
+//! Arrange mode moved the same way, as `[arrange.keys]` and
+//! [`ArrangeAction`]. The pickers and the help overlay still match their own
+//! keys; each is a scope of its own to move later.
 //!
 //! Two keys are not in the map at all, and cannot be put there: Ctrl+C, which
 //! always quits (invariant 2), and Esc, which always backs out of whatever is
@@ -643,23 +644,13 @@ impl Keymap {
     /// terminal costs is a hint dropped one column early.
     pub fn resize_bindings(&self) -> Vec<Binding> {
         let first = |action| self.keys(action).first().copied();
-        let order = [
-            (Action::ResizeNarrower, KeyCode::Left),
-            (Action::ResizeWider, KeyCode::Right),
-            (Action::ResizeShorter, KeyCode::Up),
-            (Action::ResizeTaller, KeyCode::Down),
-        ];
-        let firsts: Vec<Option<Key>> = order.iter().map(|(action, _)| first(*action)).collect();
-        if let Some(Some(lead)) = firsts.first()
-            && firsts.iter().zip(order).all(|(key, (_, arrow))| {
-                key.is_some_and(|key| key.modifiers == lead.modifiers && key.code == arrow)
-            })
-        {
-            return vec![Binding::owned(
-                format!("{}←→↑↓", Key::modifier_prefix(lead.modifiers)),
-                "resize",
-                true,
-            )];
+        if let Some(text) = arrows_as_one([
+            first(Action::ResizeNarrower),
+            first(Action::ResizeWider),
+            first(Action::ResizeShorter),
+            first(Action::ResizeTaller),
+        ]) {
+            return vec![Binding::owned(text, "resize", true)];
         }
         [
             Action::ResizeWider,
@@ -795,20 +786,28 @@ pub fn reset_file(path: &Path) -> Result<bool, String> {
     }
 }
 
+/// Every section that may hold a `keys` table: arrange mode's, and each
+/// panel's whose keys can move. One list, so the reset's header matching and
+/// its self-check cannot disagree about which tables exist.
+fn key_sections() -> impl Iterator<Item = &'static str> {
+    std::iter::once("arrange").chain(crate::widgets::KEY_SCOPES.iter().map(|scope| scope.widget))
+}
+
 /// Remove every key table from a parsed config — `keys`, and `keys` inside
-/// each panel whose keys can move — and return what was there.
+/// arrange mode's section and each panel's whose keys can move — and return
+/// what was there.
 fn take_key_tables(table: &mut toml::Table) -> Vec<toml::Value> {
     let mut taken: Vec<toml::Value> = table.remove("keys").into_iter().collect();
-    for scope in crate::widgets::KEY_SCOPES {
-        if let Some(toml::Value::Table(section)) = table.get_mut(scope.widget) {
+    for name in key_sections() {
+        if let Some(toml::Value::Table(section)) = table.get_mut(name) {
             taken.extend(section.remove("keys"));
         }
     }
     taken
 }
 
-/// Whether a table header line is `[keys]` or a panel's `[cpu.keys]`,
-/// allowing the spaces and trailing comment TOML allows.
+/// Whether a table header line is `[keys]`, `[arrange.keys]` or a panel's
+/// `[cpu.keys]`, allowing the spaces and trailing comment TOML allows.
 fn is_keys_header(trimmed: &str) -> bool {
     trimmed
         .strip_prefix('[')
@@ -818,10 +817,7 @@ fn is_keys_header(trimmed: &str) -> bool {
             let name = name.trim();
             let named = name == "keys"
                 || name.split_once('.').is_some_and(|(widget, keys)| {
-                    keys.trim() == "keys"
-                        && crate::widgets::KEY_SCOPES
-                            .iter()
-                            .any(|scope| scope.widget == widget.trim())
+                    keys.trim() == "keys" && key_sections().any(|name| name == widget.trim())
                 });
             named && {
                 let after = after.trim_start();
@@ -1100,6 +1096,15 @@ impl<A: Copy + PartialEq> PanelKeymap<A> {
             .map(|(meta, _)| meta.action)
     }
 
+    /// The keys bound to `action`, first the one its hint shows.
+    pub fn keys(&self, action: A) -> &[Key] {
+        self.actions
+            .iter()
+            .zip(&self.keys)
+            .find(|(meta, _)| meta.action == action)
+            .map_or(&[], |(_, keys)| keys.as_slice())
+    }
+
     /// The same map with hints for keys that are not in it appended — a
     /// key the panel reads that no table can move, such as Esc.
     #[must_use]
@@ -1129,11 +1134,211 @@ impl<A: Copy + PartialEq> PanelKeymap<A> {
     }
 }
 
-/// Every key table in a config: `[keys]` for the shell, and a
-/// `[<widget>.keys]` for each panel in [`crate::widgets::KEY_SCOPES`].
+/// What arrange mode's keys do, under `[arrange.keys]`.
+///
+/// Esc and `1`–`9` are not here. Esc cancels the arrangement, which is Esc
+/// backing out as it does everywhere, and the digits pick a panel as they do
+/// outside the mode; neither is in any table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrangeAction {
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    RowUp,
+    RowDown,
+    Keep,
+    FocusNext,
+    FocusPrevious,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// Arrange mode's actions and their default keys: the arrows and the vi
+/// letters to move, Shift to move the whole row — the bare key moves the
+/// small thing and the shifted key the thing it sits in, as in the clock
+/// panel — and `m`, `q` or Enter to keep what you have.
+pub const ARRANGE_ACTIONS: &[Meta<ArrangeAction>] = &[
+    Meta {
+        action: ArrangeAction::MoveLeft,
+        name: "move_left",
+        defaults: &[(KeyCode::Left, NONE), (KeyCode::Char('h'), NONE)],
+        label: "move",
+        primary: true,
+        joins: false,
+        about: "swap the panel with its left neighbour",
+    },
+    Meta {
+        action: ArrangeAction::MoveRight,
+        name: "move_right",
+        defaults: &[(KeyCode::Right, NONE), (KeyCode::Char('l'), NONE)],
+        label: "move",
+        primary: true,
+        joins: true,
+        about: "swap the panel with its right neighbour",
+    },
+    Meta {
+        action: ArrangeAction::MoveUp,
+        name: "move_up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "move",
+        primary: true,
+        joins: false,
+        about: "move the panel up a row, or past the top into a new one",
+    },
+    Meta {
+        action: ArrangeAction::MoveDown,
+        name: "move_down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "move",
+        primary: true,
+        joins: true,
+        about: "move the panel down a row, or past the bottom into a new one",
+    },
+    Meta {
+        action: ArrangeAction::RowUp,
+        name: "row_up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::SHIFT),
+            (KeyCode::Char('K'), NONE),
+        ],
+        label: "move row",
+        primary: true,
+        joins: false,
+        about: "move the panel's whole row up",
+    },
+    Meta {
+        action: ArrangeAction::RowDown,
+        name: "row_down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::SHIFT),
+            (KeyCode::Char('J'), NONE),
+        ],
+        label: "move row",
+        primary: true,
+        joins: true,
+        about: "move the panel's whole row down",
+    },
+    Meta {
+        action: ArrangeAction::Keep,
+        name: "keep",
+        defaults: &[
+            (KeyCode::Enter, NONE),
+            (KeyCode::Char('m'), NONE),
+            (KeyCode::Char('q'), NONE),
+        ],
+        label: "keep",
+        primary: true,
+        joins: false,
+        about: "keep the arrangement and leave the mode",
+    },
+    Meta {
+        action: ArrangeAction::FocusNext,
+        name: "focus_next",
+        defaults: &[(KeyCode::Tab, NONE)],
+        label: "pick panel",
+        primary: false,
+        joins: false,
+        about: "pick the next panel to move, without leaving the mode",
+    },
+    Meta {
+        action: ArrangeAction::FocusPrevious,
+        name: "focus_previous",
+        defaults: &[(KeyCode::BackTab, NONE)],
+        label: "pick panel",
+        primary: false,
+        joins: true,
+        about: "pick the previous panel to move, without leaving the mode",
+    },
+];
+
+/// `[arrange.keys]` laid over [`ARRANGE_ACTIONS`], or why it cannot be.
+pub fn arrange_keymap(keys: &KeysConfig) -> Result<PanelKeymap<ArrangeAction>, String> {
+    PanelKeymap::new("arrange", ARRANGE_ACTIONS, keys)
+}
+
+/// Four arrows under the same modifiers, in the order left, right, up, down,
+/// written as one hint: `←→↑↓`, `Ctrl+←→↑↓`. `None` for anything else — a
+/// collapsed form of keys that are not those four would be a guess at what
+/// the reader meant.
+fn arrows_as_one(keys: [Option<Key>; 4]) -> Option<String> {
+    let arrows = [KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down];
+    let lead = keys[0]?;
+    keys.iter()
+        .zip(arrows)
+        .all(|(key, arrow)| {
+            key.is_some_and(|key| key.modifiers == lead.modifiers && key.code == arrow)
+        })
+        .then(|| format!("{}←→↑↓", Key::modifier_prefix(lead.modifiers)))
+}
+
+/// Two keys as one hint for the legend: `↑↓` and `Shift+↑↓` for two arrows
+/// under the same modifiers, bare ones included — the legend has always drawn
+/// them that way — and `k / j` for anything else.
+fn pair(first: Option<Key>, second: Option<Key>) -> Option<String> {
+    let arrow = |code| {
+        matches!(
+            code,
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+        )
+    };
+    match (first, second) {
+        (Some(a), Some(b)) if a.modifiers == b.modifiers && arrow(a.code) && arrow(b.code) => {
+            Some(format!(
+                "{}{}{}",
+                Key::modifier_prefix(a.modifiers),
+                Key::code_name(a.code),
+                Key::code_name(b.code)
+            ))
+        }
+        (Some(a), Some(b)) => Some(format!("{a} / {b}")),
+        (Some(one), None) | (None, Some(one)) => Some(one.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// The arrange mode legend, from the mode's map and the shell's resize hints.
+///
+/// The order is what survives a narrow terminal, first to last: how to move
+/// a panel, how to keep or abandon the result, then the tricks — moving a
+/// row, resizing, and that a row opens past the last one. The legend is the
+/// only place these keys are written on screen, so it follows the map: a key
+/// moved in `[arrange.keys]` is shown where it went.
+pub fn arrange_legend(map: &PanelKeymap<ArrangeAction>, resize: Vec<Binding>) -> Vec<Binding> {
+    use ArrangeAction as A;
+    let first = |action| map.keys(action).first().copied();
+    let mut legend = Vec::new();
+    let moves = [A::MoveLeft, A::MoveRight, A::MoveUp, A::MoveDown];
+    if let Some(text) = arrows_as_one(moves.map(first)) {
+        legend.push(Binding::owned(text, "move", true));
+    } else {
+        for (action, way) in moves.into_iter().zip(["left", "right", "up", "down"]) {
+            if let Some(key) = first(action) {
+                legend.push(Binding::owned(key.to_string(), format!("move {way}"), true));
+            }
+        }
+    }
+    if let Some(key) = first(A::Keep) {
+        legend.push(Binding::owned(key.to_string(), "keep", true));
+    }
+    legend.push(Binding::primary("Esc", "cancel"));
+    if let Some(keys) = pair(first(A::RowUp), first(A::RowDown)) {
+        legend.push(Binding::owned(keys, "move row", true));
+    }
+    legend.extend(resize);
+    if let Some(keys) = pair(first(A::MoveUp), first(A::MoveDown)) {
+        legend.push(Binding::owned(format!("{keys} at edge"), "new row", true));
+    }
+    legend
+}
+
+/// Every key table in a config: `[keys]` for the shell, `[arrange.keys]` for
+/// arrange mode, and a `[<widget>.keys]` for each panel in
+/// [`crate::widgets::KEY_SCOPES`].
 #[derive(Debug, Clone, Default)]
 pub struct KeyTables {
     pub shell: KeysConfig,
+    pub arrange: KeysConfig,
     /// By widget name. A panel with no table here has its default keys.
     pub panels: BTreeMap<&'static str, KeysConfig>,
 }
@@ -1143,6 +1348,7 @@ impl KeyTables {
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self {
             shell: config.keys.clone(),
+            arrange: config.arrange.keys.clone(),
             panels: crate::widgets::KEY_SCOPES
                 .iter()
                 .map(|scope| (scope.widget, (scope.keys)(config).clone()))
@@ -1150,8 +1356,12 @@ impl KeyTables {
         }
     }
 
-    /// Check every table, returning the shell's keymap and each panel's
-    /// listing when they all hold.
+    /// Check every table, returning the shell's keymap and the listing of
+    /// every other table — arrange mode's first, then each panel's — when
+    /// they all hold.
+    ///
+    /// A key in arrange mode's table or a panel's may not be a resize key:
+    /// resizing is read before either sees a key, so it would never arrive.
     pub fn check(&self) -> Result<(Keymap, PanelListing), String> {
         let shell = Keymap::new(&self.shell)?;
         let resize: Vec<(Key, Action)> = Action::LISTED
@@ -1159,23 +1369,29 @@ impl KeyTables {
             .filter(|action| action.is_resize())
             .flat_map(|action| shell.keys(action).iter().map(move |key| (*key, action)))
             .collect();
-        let empty = KeysConfig::default();
-        let mut panels = Vec::new();
-        for scope in crate::widgets::KEY_SCOPES {
-            let listing = (scope.listing)(self.panels.get(scope.widget).unwrap_or(&empty))?;
-            for entry in &listing {
+        let clash = |table: &str, listing: &[Listed]| -> Result<(), String> {
+            for entry in listing {
                 if let Some((key, action)) = resize.iter().find(|(key, _)| entry.keys.contains(key))
                 {
                     return Err(format!(
-                        "`{}` is `{key}` in `[{}.keys]`, which is `{}` in `[keys]`. \
-                         Resizing is read before the focused panel sees a key, so \
-                         the panel would never get it; give one of them another key.",
+                        "`{}` is `{key}` in `[{table}.keys]`, which is `{}` in `[keys]`. \
+                         Resizing is read before anything else sees a key, so \
+                         `{}` would never get it; give one of them another key.",
                         entry.name,
-                        scope.widget,
                         action.name(),
+                        entry.name,
                     ));
                 }
             }
+            Ok(())
+        };
+        let arrange = arrange_keymap(&self.arrange)?.listing();
+        clash("arrange", &arrange)?;
+        let empty = KeysConfig::default();
+        let mut panels = vec![("arrange", arrange)];
+        for scope in crate::widgets::KEY_SCOPES {
+            let listing = (scope.listing)(self.panels.get(scope.widget).unwrap_or(&empty))?;
+            clash(scope.widget, &listing)?;
             panels.push((scope.widget, listing));
         }
         Ok((shell, panels))
@@ -1183,8 +1399,13 @@ impl KeyTables {
 
     /// Put these tables into `config`, in place of the ones it had.
     pub fn apply(self, config: &mut crate::config::Config) {
-        let Self { shell, mut panels } = self;
+        let Self {
+            shell,
+            arrange,
+            mut panels,
+        } = self;
         config.keys = shell;
+        config.arrange.keys = arrange;
         for scope in crate::widgets::KEY_SCOPES {
             *(scope.keys_mut)(config) = panels.remove(scope.widget).unwrap_or_default();
         }
@@ -1213,8 +1434,20 @@ pub fn read_keys(path: &Path) -> Result<(KeyTables, Keymap), String> {
         .transpose()
         .map_err(|e| format!("in `[keys]`: {e}"))?
         .unwrap_or_default();
+    let read_section = |table: &mut toml::Table, name: &str| -> Result<KeysConfig, String> {
+        // The section's other settings are ignored here, as the rest of the
+        // file is.
+        table
+            .remove(name)
+            .map(toml::Value::try_into::<KeysOnly>)
+            .transpose()
+            .map(|only| only.map(|only| only.keys).unwrap_or_default())
+            .map_err(|e| format!("in `[{name}.keys]`: {e}"))
+    };
+    let arrange = read_section(&mut table, "arrange")?;
     let mut tables = KeyTables {
         shell,
+        arrange,
         panels: BTreeMap::new(),
     };
     for scope in crate::widgets::KEY_SCOPES {
@@ -1626,6 +1859,9 @@ mod tests {
             .1;
         let uncommented = block
             .lines()
+            // Up to the next section: `[arrange.keys]` follows, and its
+            // names are not the shell's.
+            .take_while(|line| !line.starts_with('['))
             .filter_map(|line| line.strip_prefix("# "))
             .filter(|line| !line.starts_with(' ') && line.contains('='))
             .collect::<Vec<_>>()
@@ -1818,6 +2054,7 @@ mod tests {
     fn a_panel_key_may_share_a_shell_key_but_not_a_resize_key() {
         let tables = |shell: &str, panel: &str| KeyTables {
             shell: keys_config(&format!("[keys]\n{shell}")),
+            arrange: KeysConfig::default(),
             panels: [("cpu", toml::from_str(panel).expect("a table"))].into(),
         };
         assert!(tables("", "per_core = \"t\"").check().is_ok());
@@ -1860,7 +2097,231 @@ mod tests {
         let (_, panels) = KeyTables::default()
             .check()
             .expect("the defaults check out");
-        assert_eq!(panels.len(), crate::widgets::KEY_SCOPES.len());
+        let tables: Vec<&str> = panels.iter().map(|(name, _)| *name).collect();
+        let expected: Vec<&str> = std::iter::once("arrange")
+            .chain(crate::widgets::KEY_SCOPES.iter().map(|scope| scope.widget))
+            .collect();
+        assert_eq!(
+            tables, expected,
+            "arrange mode's table first, then each panel's"
+        );
+    }
+
+    fn arrange(toml_text: &str) -> Result<PanelKeymap<ArrangeAction>, String> {
+        arrange_keymap(&toml::from_str(toml_text).expect("a table"))
+    }
+
+    /// The golden test for stage 4: the default map answers every key the
+    /// mode's `match` answered before it existed, the shifted arrow as the row
+    /// and the bare one as the panel.
+    #[test]
+    fn the_default_arrange_map_is_the_keys_the_mode_always_had() {
+        use ArrangeAction as A;
+        let map = arrange("").expect("valid");
+        let shift = KeyModifiers::SHIFT;
+        for (code, held, action) in [
+            (KeyCode::Left, NONE, A::MoveLeft),
+            (KeyCode::Char('h'), NONE, A::MoveLeft),
+            (KeyCode::Right, NONE, A::MoveRight),
+            (KeyCode::Char('l'), NONE, A::MoveRight),
+            (KeyCode::Up, NONE, A::MoveUp),
+            (KeyCode::Char('k'), NONE, A::MoveUp),
+            (KeyCode::Down, NONE, A::MoveDown),
+            (KeyCode::Char('j'), NONE, A::MoveDown),
+            (KeyCode::Up, shift, A::RowUp),
+            (KeyCode::Char('K'), shift, A::RowUp),
+            (KeyCode::Down, shift, A::RowDown),
+            (KeyCode::Char('J'), NONE, A::RowDown),
+            (KeyCode::Enter, NONE, A::Keep),
+            (KeyCode::Char('m'), NONE, A::Keep),
+            (KeyCode::Char('q'), NONE, A::Keep),
+            (KeyCode::Tab, NONE, A::FocusNext),
+            (KeyCode::BackTab, shift, A::FocusPrevious),
+        ] {
+            assert_eq!(
+                map.action(event(code, held)),
+                Some(action),
+                "{code:?} {held:?}"
+            );
+        }
+        assert_eq!(
+            map.action(event(KeyCode::Esc, NONE)),
+            None,
+            "Esc is not in the map"
+        );
+    }
+
+    /// The legend reads exactly as it did when it was a literal list — bar
+    /// the keep key, which is drawn `↵` like every other Enter in mirador.
+    #[test]
+    fn the_default_arrange_legend_is_the_one_the_mode_always_drew() {
+        let legend = arrange_legend(
+            &arrange("").expect("valid"),
+            Keymap::default().resize_bindings(),
+        );
+        let drawn: Vec<String> = legend
+            .iter()
+            .map(|b| format!("{} {}", b.key, b.action))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                "←→↑↓ move",
+                "↵ keep",
+                "Esc cancel",
+                "Shift+↑↓ move row",
+                "Ctrl+←→↑↓ resize",
+                "↑↓ at edge new row",
+            ]
+        );
+    }
+
+    /// Moved off the arrows, the move keys are not squeezed into a collapsed
+    /// hint that would misdescribe them, and the row and new-row hints follow
+    /// the keys they are about.
+    #[test]
+    fn a_moved_arrange_key_is_shown_where_it_went() {
+        let map = arrange(
+            r#"
+            move_left = "a"
+            move_right = "d"
+            move_up = "w"
+            move_down = "s"
+            row_up = "W"
+            row_down = "S"
+            keep = "space"
+            "#,
+        )
+        .expect("valid");
+        let legend = arrange_legend(&map, Keymap::default().resize_bindings());
+        let drawn: Vec<String> = legend
+            .iter()
+            .map(|b| format!("{} {}", b.key, b.action))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                "a move left",
+                "d move right",
+                "w move up",
+                "s move down",
+                "space keep",
+                "Esc cancel",
+                "W / S move row",
+                "Ctrl+←→↑↓ resize",
+                "w / s at edge new row",
+            ]
+        );
+        assert_eq!(map.action(key("d")), Some(ArrangeAction::MoveRight));
+        assert_eq!(
+            map.action(event(KeyCode::Right, NONE)),
+            None,
+            "the old key is free"
+        );
+    }
+
+    /// The same rules as every table, named by the table: and a key the shell
+    /// resizes with is refused, since in the mode resizing is read first.
+    #[test]
+    fn an_arrange_table_is_held_to_the_rules_and_kept_off_the_resize_keys() {
+        for (written, why) in [
+            ("\"esc\"", "Esc"),
+            ("\"ctrl+c\"", "Ctrl+C"),
+            ("\"4\"", "1-9"),
+        ] {
+            let error = arrange(&format!("keep = {written}")).expect_err(written);
+            assert!(
+                error.contains(why) && error.contains("[arrange.keys]"),
+                "{error}"
+            );
+        }
+        let misspelled = arrange("moveleft = \"a\"").expect_err("unknown");
+        assert!(misspelled.contains("move_left"), "{misspelled}");
+
+        let tables = |shell: &str, mode: &str| KeyTables {
+            shell: keys_config(&format!("[keys]\n{shell}")),
+            arrange: toml::from_str(mode).expect("a table"),
+            panels: BTreeMap::new(),
+        };
+        let error = tables("", "move_right = \"ctrl+right\"")
+            .check()
+            .expect_err("resize reads it first");
+        assert!(
+            error.contains("[arrange.keys]") && error.contains("resize_wider"),
+            "{error}"
+        );
+        assert!(
+            tables(
+                "resize_wider = \"alt+right\"",
+                "move_right = \"ctrl+right\""
+            )
+            .check()
+            .is_ok(),
+            "once resize has moved, the key is free"
+        );
+    }
+
+    /// `[arrange.keys]` in the shipped config lists every action with its
+    /// default, as `[keys]` and each panel's table do.
+    #[test]
+    fn the_shipped_config_documents_every_arrange_default_exactly() {
+        let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
+        let block = shipped
+            .split_once("\n[arrange.keys]\n")
+            .expect("the shipped config has an [arrange.keys] section")
+            .1;
+        let uncommented = block
+            .lines()
+            .map_while(|line| line.strip_prefix("# "))
+            .filter(|line| !line.starts_with(' ') && line.contains('='))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let written: KeysConfig = toml::from_str(&uncommented).expect("valid TOML");
+        assert_eq!(
+            written.0.len(),
+            ARRANGE_ACTIONS.len(),
+            "{:?}",
+            written.0.keys()
+        );
+        let documented = arrange_keymap(&written).expect("valid").listing();
+        let defaults = arrange_keymap(&KeysConfig::default())
+            .expect("valid")
+            .listing();
+        assert_eq!(documented, defaults);
+    }
+
+    /// Reload reads `[arrange.keys]`, and the reset comments it out with the
+    /// rest.
+    #[test]
+    fn the_arrange_table_reloads_and_resets_with_the_others() {
+        let dir = std::env::temp_dir().join(format!("mirador-arrange-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[keys]\nquit = \"x\"\n\n[arrange.keys]\nkeep = \"space\"\n",
+        )
+        .expect("write");
+
+        let (tables, _) = read_keys(&path).expect("reads");
+        assert_eq!(
+            arrange_keymap(&tables.arrange)
+                .expect("valid")
+                .action(key("space")),
+            Some(ArrangeAction::Keep)
+        );
+        assert_eq!(reset_file(&path), Ok(true));
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("[arrange.keys]\n# keep = \"space\""),
+            "{text}"
+        );
+        let (tables, _) = read_keys(&path).expect("reads");
+        assert!(
+            tables.arrange.0.is_empty() && tables.shell.0.is_empty(),
+            "{tables:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Each panel's table in the shipped config lists every action with its

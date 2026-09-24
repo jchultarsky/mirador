@@ -1021,6 +1021,12 @@ The panels themselves move as you press, so what you see is what you will get.
 `Tab` picks a different panel to move without leaving the mode, and `Ctrl+←→↑↓`
 still resize while you are in there.
 
+Every one of these keys except `Esc` and `1` – `9` can be moved under
+`[arrange.keys]` in the config, which lists each action with its default —
+`move_left`, `row_up`, `keep` and so on — and the legend at the foot of the
+screen shows the keys you chose. A key there may not also be a resize key,
+since resizing is read first and the mode would never see it.
+
 A panel keeps the width you gave it when it moves, and the row weights always
 add up to what they added up to before — so rearranging one corner of the
 dashboard never quietly rescales another.

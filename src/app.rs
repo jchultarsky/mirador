@@ -212,6 +212,8 @@ pub struct App {
     config: Config,
     /// The shell's keys: the defaults with the config's `[keys]` over them.
     keymap: crate::keymap::Keymap,
+    /// Arrange mode's keys, from `[arrange.keys]`.
+    arrange_keys: crate::keymap::PanelKeymap<crate::keymap::ArrangeAction>,
     gradients: Gradients,
     slots: Vec<Slot>,
     /// `(row, column)` in `config.layout` for each slot, so a resize knows
@@ -319,11 +321,15 @@ impl App {
         let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
             .check()
             .map_err(anyhow::Error::msg)?;
+        // Checked with the rest just above, so this cannot fail.
+        let arrange_keys =
+            crate::keymap::arrange_keymap(&config.arrange.keys).map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
             config,
             keymap,
+            arrange_keys,
             gradients,
             slots,
             positions,
@@ -828,12 +834,16 @@ impl App {
 
         // Arrange mode claims the bare arrows, which is the whole point of it
         // being a mode: no modifier to discover, and no terminal that declines
-        // to deliver the chord. Anything with Ctrl held falls through, and so
-        // do the resize keys wherever they have been moved to, so resizing
-        // keeps working while you are rearranging — which is when you are most
-        // likely to want it. The keymap refuses a resize key without Ctrl or
-        // Alt, so none of them is a key this mode needs.
-        if self.arranging.is_some() && !ctrl && resize.is_none() {
+        // to deliver the chord. The resize keys fall through wherever they
+        // have been moved to, so resizing keeps working while you are
+        // rearranging — which is when you are most likely to want it — and a
+        // key in `[arrange.keys]` that is also a resize key is refused at load
+        // for that reason. Any other Ctrl key falls through too, unless
+        // `[arrange.keys]` binds it.
+        if self.arranging.is_some()
+            && resize.is_none()
+            && (!ctrl || self.arrange_keys.action(key).is_some())
+        {
             self.handle_arrange_key(key);
             return;
         }
@@ -974,8 +984,14 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Hand every live panel its keys from the config again.
+    /// Hand arrange mode and every live panel their keys from the config
+    /// again.
     fn rebind_panels(&mut self) {
+        self.arrange_keys = crate::keymap::PanelKeymap::or_defaults(
+            "arrange",
+            crate::keymap::ARRANGE_ACTIONS,
+            &self.config.arrange.keys,
+        );
         for slot in &mut self.slots {
             slot.panel.set_keys(&self.config);
         }
@@ -1019,74 +1035,65 @@ impl App {
     /// Move the focused panel, or leave the mode.
     fn handle_arrange_key(&mut self, key: KeyEvent) {
         use crate::arrange::Direction;
+        use crate::keymap::ArrangeAction;
 
-        // Shift moves the whole row rather than the panel, which is the same
-        // escalation the clock panel uses: the bare key moves the small thing,
-        // the shifted key moves the thing it sits in. Claimed before the plain
-        // arrows below, or `Shift+Down` would fall through and merge the panel.
-        //
-        // Not `Ctrl+←→↑↓`, which #100 proposed: those already resize inside
-        // this mode, advertised in the legend and pinned by
-        // `ctrl_arrows_still_resize_inside_arrange_mode`.
-        let shifted = key.modifiers.contains(KeyModifiers::SHIFT);
-        match key.code {
-            KeyCode::Up if shifted => return self.move_focused_row(false),
-            KeyCode::Char('K') => return self.move_focused_row(false),
-            KeyCode::Down if shifted => return self.move_focused_row(true),
-            KeyCode::Char('J') => return self.move_focused_row(true),
-            _ => {}
+        // Esc backs out of it, which is what Esc means everywhere else in
+        // mirador, and so it is in no table. The picker commits on Esc instead,
+        // and that is defensible there because each of its changes is one
+        // keystroke to undo; an arrangement is not.
+        if key.code == KeyCode::Esc {
+            if let Some(before) = self.arranging.take() {
+                self.config.layout = before.layout;
+                // Rebuilding from a layout that was live a moment ago
+                // cannot fail, and if it somehow did there is nothing
+                // better to fall back to.
+                let _ = self.rebuild_panels();
+                self.layout_dirty = before.was_dirty;
+                self.layout_error = None;
+            }
+            return;
         }
-
-        let direction = match key.code {
-            KeyCode::Left | KeyCode::Char('h') => Some(Direction::Left),
-            KeyCode::Right | KeyCode::Char('l') => Some(Direction::Right),
-            KeyCode::Up | KeyCode::Char('k') => Some(Direction::Up),
-            KeyCode::Down | KeyCode::Char('j') => Some(Direction::Down),
-            _ => None,
-        };
-
-        if let Some(direction) = direction {
-            self.move_focused(direction);
+        // The digits pick a panel here as they do outside the mode, and are
+        // in no table for the same reason.
+        if let KeyCode::Char(c @ '1'..='9') = key.code {
+            let index = c as usize - '1' as usize;
+            if index < self.slots.len() {
+                self.focus = index;
+            }
             return;
         }
 
-        match key.code {
+        let Some(action) = self.arrange_keys.action(key) else {
+            return;
+        };
+        match action {
+            // The shifted keys move the whole row rather than the panel,
+            // which is the same escalation the clock panel uses: the bare key
+            // moves the small thing, the shifted key the thing it sits in.
+            //
+            // Not `Ctrl+←→↑↓`, which #100 proposed: those resize inside this
+            // mode, advertised in the legend and pinned by
+            // `ctrl_arrows_still_resize_inside_arrange_mode`.
+            ArrangeAction::RowUp => self.move_focused_row(false),
+            ArrangeAction::RowDown => self.move_focused_row(true),
+            ArrangeAction::MoveLeft => self.move_focused(Direction::Left),
+            ArrangeAction::MoveRight => self.move_focused(Direction::Right),
+            ArrangeAction::MoveUp => self.move_focused(Direction::Up),
+            ArrangeAction::MoveDown => self.move_focused(Direction::Down),
             // Pick a different panel to move without leaving the mode.
             // Rearranging a dashboard means moving several things, and having
             // to commit and re-enter between each one would make a two-panel
             // swap a six-keystroke job.
-            KeyCode::Tab => self.cycle_focus(true),
-            KeyCode::BackTab => self.cycle_focus(false),
-            KeyCode::Char(c @ '1'..='9') => {
-                let index = c as usize - '1' as usize;
-                if index < self.slots.len() {
-                    self.focus = index;
-                }
-            }
+            ArrangeAction::FocusNext => self.cycle_focus(true),
+            ArrangeAction::FocusPrevious => self.cycle_focus(false),
             // Keeping it is the ordinary way out, so it gets the ordinary keys.
             // Written here rather than on every arrow: trying four arrangements
             // should cost one write, and the mode is a natural commit point —
             // the same reasoning as the picker.
-            KeyCode::Enter | KeyCode::Char('m' | 'q') => {
+            ArrangeAction::Keep => {
                 self.arranging = None;
                 self.write_layout();
             }
-            // Esc backs out of it, which is what Esc means everywhere else in
-            // mirador. The picker commits on Esc instead, and that is defensible
-            // there because each of its changes is one keystroke to undo; an
-            // arrangement is not.
-            KeyCode::Esc => {
-                if let Some(before) = self.arranging.take() {
-                    self.config.layout = before.layout;
-                    // Rebuilding from a layout that was live a moment ago
-                    // cannot fail, and if it somehow did there is nothing
-                    // better to fall back to.
-                    let _ = self.rebuild_panels();
-                    self.layout_dirty = before.was_dirty;
-                    self.layout_error = None;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -1739,20 +1746,10 @@ impl App {
             // is the only place any of these are documented. A key that ships
             // undiscoverable is the mistake the resize keys already made once.
             //
-            // The resize hint comes from the keymap, so a reader who moved
-            // resize off Ctrl is shown where it went; the rest of the mode's
-            // keys are not configurable yet.
-            let resize = self.keymap.resize_bindings();
-            let fixed = |key: &'static str, action: &'static str| Binding::primary(key, action);
-            let legend = [
-                fixed("←→↑↓", "move"),
-                fixed("Enter", "keep"),
-                fixed("Esc", "cancel"),
-                fixed("Shift+↑↓", "move row"),
-            ]
-            .into_iter()
-            .chain(resize)
-            .chain([fixed("↑↓ at edge", "new row")]);
+            // Derived from `[arrange.keys]` and the shell's resize keys, so a
+            // key moved in either is shown where it went.
+            let legend =
+                crate::keymap::arrange_legend(&self.arrange_keys, self.keymap.resize_bindings());
             for binding in legend {
                 // Dropped whole rather than clipped: half a hint reads as a
                 // rendering fault, where a missing one just reads as a narrow
@@ -3989,6 +3986,58 @@ mod tests {
             app.keymap_dialog.is_some(),
             "and the dialog stays to say so"
         );
+    }
+
+    /// `config` with `[arrange.keys]` set from `toml_text`.
+    fn with_arrange_keys(config: Config, toml_text: &str) -> Config {
+        let mut config = config;
+        config.arrange.keys = toml::from_str(toml_text).expect("a table");
+        config
+    }
+
+    /// A moved arrange key moves the panel and the old one does nothing —
+    /// and a Ctrl key, which the mode used to hand straight on, is the mode's
+    /// once `[arrange.keys]` binds it.
+    #[test]
+    fn a_moved_arrange_key_works_even_with_ctrl_and_the_old_key_is_free() {
+        let config = with_arrange_keys(resizable(), "move_right = \"ctrl+l\"");
+        let mut app = App::new(config).expect("builds");
+        app.focus = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        let before = widgets_by_row(&app);
+
+        app.handle_key(KeyEvent::from(KeyCode::Right));
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(
+            widgets_by_row(&app),
+            before,
+            "neither old key moves anything"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_ne!(widgets_by_row(&app), before, "Ctrl+L moved the panel");
+        assert!(app.arranging.is_some(), "and the mode is still open");
+
+        let legend = status_bar_at(&mut app, 200);
+        assert!(legend.contains("Ctrl+l move right"), "{legend}");
+    }
+
+    /// Reload reaches a mode that is already open: the keys change under the
+    /// reader's hands, as the panels' do.
+    #[test]
+    fn reload_gives_arrange_mode_its_new_keys() {
+        let file = KeysFile::new("arrange", "[arrange.keys]\nkeep = \"space\"\n");
+        let mut app = App::new(resizable()).expect("builds");
+        app.write_layout_to(file.0.clone());
+        open_key_map(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.arranging.is_some(), "Enter no longer keeps");
+        app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
+        assert!(app.arranging.is_none(), "space does");
     }
 
     #[test]

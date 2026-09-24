@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Arrange mode's keys can be changed** (#284). An `[arrange.keys]` section
+  moves any of them — the four moves, moving a whole row, keeping the
+  arrangement, and picking another panel — and the legend shows the keys you
+  chose. Esc still cancels and `1`–`9` still pick a panel. A key there may not
+  also be a resize key, since resizing is read first. The key map on `?`
+  pressed twice lists the table, and reload and reset include it.
+
 ## [1.18.0] - 2026-09-24
 
 ### Added

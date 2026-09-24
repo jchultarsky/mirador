@@ -89,6 +89,17 @@ pub struct Config {
     pub temperature: TemperatureConfig,
     /// The shell's keys, where the reader has moved them. See [`crate::keymap`].
     pub keys: crate::keymap::KeysConfig,
+    /// Arrange mode, whose only settings are its keys.
+    pub arrange: ArrangeConfig,
+}
+
+/// Arrange mode (`m`). It has nothing to set but its keys, under
+/// `[arrange.keys]`; a section of its own keeps that table beside the others
+/// of its shape rather than inventing a second one.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArrangeConfig {
+    pub keys: crate::keymap::KeysConfig,
 }
 
 /// Global behaviour.

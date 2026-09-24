@@ -245,8 +245,9 @@ impl KeymapDialog {
             |path| path.display().to_string(),
         );
         let how = format!(
-            "To change a key, edit [keys] in {file} — or the panel's own table, \
-             as headed above — and press r here to load it; no restart needed. \
+            "To change a key, edit [keys] in {file} — or the table headed \
+             above it, for arrange mode or a panel — and press r here to load \
+             it; no restart needed. \
              Keys are written in words, as in resize_wider = \"alt+right\". A \
              list gives an action several keys and [] gives it none. A panel \
              key is offered to that panel first, so it wins while the panel is \
