@@ -2284,7 +2284,19 @@ and had to be added back was the one that did not.
   resets them, and `mirador --reset-keys`. The reporter's case was resize
   on a Mac, where Ctrl+arrows switch desktops. It does **not** carry the
   NetBSD battery fix (#255): `starship-battery` was still 0.11.1 on
-  crates.io. 1.16.0 was a feature release cut on 2026-09-18,
+  crates.io. The release run built all five targets and 21 assets, the
+  attestations on an archive and a Windows `-update` binary both trace to
+  `release.yml@refs/tags/v1.17.0` at `2eaad95` (the wrong-repository
+  control returned 404 for both), and it was live on crates.io at 15:54
+  UTC — eleven minutes after Cut release was dispatched at 15:43. Step 0
+  was the merged `main` as a release build under tmux with a fresh home:
+  first run wrote `[keys]`, `??` opened the key map, `r` reloaded, a
+  Ctrl+→ resize was saved, `q` quit. PR #285 first went red on Windows
+  only: a new test looked for `"\n[keys]\n"` in the `include_str!`
+  config, which a Windows checkout writes with CRLF — the trap recorded
+  under Phase 2's `layout_edit` pass, met a second time. Option+arrows on
+  a real Mac terminal remain unverified; #284's reporter was asked. 1.16.0
+  was a feature release cut on 2026-09-18,
   the third that day, carrying the disk panel's I/O graphs (#281): the
   network face per device, `i` to hide them, the scale floored at a
   megabyte a second. It does **not** carry the NetBSD battery fix (#255):
