@@ -1199,7 +1199,11 @@ mod tests {
     /// test that notices an action added here and not documented there.
     #[test]
     fn the_shipped_config_documents_every_default_exactly() {
-        let block = crate::config::DEFAULT_CONFIG
+        // Normalised first: `include_str!` keeps whatever line endings git
+        // wrote, which is CRLF on a Windows checkout — the trap CLAUDE.md
+        // records for `layout_edit`'s sweep.
+        let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
+        let block = shipped
             .split_once("\n[keys]\n")
             .expect("the shipped config has a [keys] section")
             .1;
