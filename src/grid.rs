@@ -1172,6 +1172,7 @@ mod tests {
         ("calculator", crate::widgets::calculator::COLUMNS),
         ("clocks", crate::widgets::clocks::COLUMNS),
         ("clocks", crate::widgets::clocks::COLUMNS_MERIDIEM),
+        ("keymap_dialog", crate::keymap_dialog::COLUMNS),
         ("notes", crate::widgets::notes::COLUMNS),
         ("stocks", crate::widgets::stocks::COLUMNS),
         ("temperature", crate::widgets::temperature::COLUMNS),

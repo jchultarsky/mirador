@@ -266,6 +266,8 @@ pub struct App {
     /// cancelled. Previewing means the live theme is not the committed one, so
     /// the dialog cannot be closed without knowing what it replaced.
     theme_picker: Option<(crate::theme_picker::ThemePicker, crate::theme::Theme)>,
+    /// The key map, opened by pressing the help key while help is open.
+    keymap_dialog: Option<crate::keymap_dialog::KeymapDialog>,
     /// The layout as it stood when arrange mode opened, kept so that `Esc` can
     /// put it back. Moving panels is a bigger, more spatial change than
     /// toggling one on, and being able to try an arrangement and back out of it
@@ -335,6 +337,7 @@ impl App {
             today: jiff::Zoned::now().date(),
             picker: None,
             theme_picker: None,
+            keymap_dialog: None,
             arranging: None,
             config_path: None,
             last_resize: None,
@@ -769,6 +772,15 @@ impl App {
         // that does not exist. Scrolling only binds when there is something
         // below the fold, so on a tall terminal any key still closes it.
         if self.show_help {
+            // The help key a second time goes one level deeper, to the full
+            // key map. Reached through help rather than on a key of its own:
+            // every free letter is some panel's already, and the overlay is
+            // where someone wondering about keys has just arrived.
+            if self.keymap.action(key) == Some(Action::Help) {
+                self.show_help = false;
+                self.keymap_dialog = Some(crate::keymap_dialog::KeymapDialog::new());
+                return;
+            }
             if self.help_overflow > 0 {
                 let page = self.help_viewport.max(1);
                 let moved = match key.code {
@@ -786,6 +798,16 @@ impl App {
                 }
             }
             self.show_help = false;
+            return;
+        }
+
+        if let Some(dialog) = self.keymap_dialog.as_mut() {
+            match dialog.handle_key(key) {
+                crate::keymap_dialog::Request::None => {}
+                crate::keymap_dialog::Request::Close => self.keymap_dialog = None,
+                crate::keymap_dialog::Request::Reload => self.reload_keys(),
+                crate::keymap_dialog::Request::Reset => self.reset_keys(),
+            }
             return;
         }
 
@@ -861,7 +883,11 @@ impl App {
             self.show_help = false;
             return true;
         }
-        if self.theme_picker.is_some() || self.picker.is_some() || self.arranging.is_some() {
+        if self.theme_picker.is_some()
+            || self.picker.is_some()
+            || self.arranging.is_some()
+            || self.keymap_dialog.is_some()
+        {
             return false;
         }
 
@@ -891,6 +917,64 @@ impl App {
                 || used;
         }
         used
+    }
+
+    /// Read `[keys]` from the config again, for the key map's `r`.
+    ///
+    /// A keymap that does not check out is reported and not applied: the keys
+    /// in force stay in force, so a half-finished edit cannot take away the
+    /// key the reader would use to fix it.
+    fn reload_keys(&mut self) {
+        let result = match self.config_path.as_deref() {
+            Some(path) => crate::keymap::read_keys(path),
+            None => Err("there is no config file to read keys from".into()),
+        };
+        let report = match result {
+            Ok((keys, keymap)) => {
+                let changed = Action::LISTED
+                    .iter()
+                    .filter(|action| !keymap.is_default(**action))
+                    .count();
+                self.keymap = keymap;
+                self.config.keys = keys;
+                let text = match changed {
+                    0 => "Loaded. Every key is its default.".to_string(),
+                    1 => "Loaded. One key differs from its default.".to_string(),
+                    n => format!("Loaded. {n} keys differ from their defaults."),
+                };
+                (text, false)
+            }
+            Err(error) => (format!("Kept the keys you had. {error}"), true),
+        };
+        if let Some(dialog) = self.keymap_dialog.as_mut() {
+            dialog.report(report.0, report.1);
+        }
+    }
+
+    /// Comment out `[keys]` in the config and go back to the defaults, for
+    /// the key map's `d` once the reader has said yes.
+    fn reset_keys(&mut self) {
+        let result = match self.config_path.as_deref() {
+            Some(path) => crate::keymap::reset_file(path),
+            None => Err("there is no config file to reset".into()),
+        };
+        let report = match result {
+            Ok(edited) => {
+                self.keymap = crate::keymap::Keymap::default();
+                self.config.keys = crate::keymap::KeysConfig::default();
+                let text = if edited {
+                    "Every key is back to its default. Your old [keys] lines are \
+                     still in the config, commented out."
+                } else {
+                    "The config sets no keys, so every key is its default."
+                };
+                (text.to_string(), false)
+            }
+            Err(error) => (format!("Nothing was changed. {error}"), true),
+        };
+        if let Some(dialog) = self.keymap_dialog.as_mut() {
+            dialog.report(report.0, report.1);
+        }
     }
 
     /// Open arrange mode, remembering what to go back to.
@@ -1550,6 +1634,15 @@ impl App {
         if self.show_help {
             self.render_help(frame, area);
         }
+        if let Some(dialog) = self.keymap_dialog.as_mut() {
+            dialog.render(
+                frame,
+                area,
+                &self.keymap,
+                self.config_path.as_deref(),
+                &self.config.theme,
+            );
+        }
         if let Some((picker, _)) = &self.theme_picker {
             picker.render(frame, area, &self.config.theme);
         }
@@ -1922,7 +2015,10 @@ impl App {
                 height: 1,
                 ..inner
             };
-            frame.render_widget(Paragraph::new(self.help_footer(theme)), footer);
+            frame.render_widget(
+                Paragraph::new(self.help_footer(theme, footer.width)),
+                footer,
+            );
         }
     }
 
@@ -1931,34 +2027,44 @@ impl App {
     /// It says how to close the overlay, and when there is more text than fits,
     /// that scrolling is possible and where in the list you are. Without the
     /// position there is no way to tell a full list from a truncated one.
-    fn help_footer(&self, theme: &crate::theme::Theme) -> Line<'static> {
+    fn help_footer(&self, theme: &crate::theme::Theme, width: u16) -> Line<'static> {
         let italic = Style::default()
             .fg(theme.muted)
             .add_modifier(Modifier::ITALIC);
 
-        if self.help_overflow == 0 {
-            return Line::from(Span::styled("any key to close", italic));
-        }
-
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
-        let more_above = self.help_scroll > 0;
-        let more_below = self.help_scroll < self.help_overflow;
-        let arrows = match (more_above, more_below) {
-            (true, true) => "↑↓",
-            (true, false) => "↑",
-            _ => "↓",
-        };
-        Line::from(vec![
-            Span::styled(arrows, key_style),
-            Span::styled(
-                format!(
-                    " {}/{} · any other key to close",
-                    self.help_scroll + self.help_viewport,
-                    self.help_overflow + self.help_viewport,
+        let mut parts = Vec::new();
+        // First, so it survives a narrow overlay: the way to the key map, and
+        // the only place it is advertised.
+        if let Some(help) = self.keymap.keys(Action::Help).first() {
+            parts.push(vec![
+                Span::styled(help.to_string(), key_style),
+                Span::styled(" key map · ", italic),
+            ]);
+        }
+        if self.help_overflow == 0 {
+            parts.push(vec![Span::styled("any key to close", italic)]);
+        } else {
+            let more_above = self.help_scroll > 0;
+            let more_below = self.help_scroll < self.help_overflow;
+            let arrows = match (more_above, more_below) {
+                (true, true) => "↑↓",
+                (true, false) => "↑",
+                _ => "↓",
+            };
+            parts.push(vec![
+                Span::styled(arrows, key_style),
+                Span::styled(
+                    format!(
+                        " {}/{} · any other key to close",
+                        self.help_scroll + self.help_viewport,
+                        self.help_overflow + self.help_viewport,
+                    ),
+                    italic,
                 ),
-                italic,
-            ),
-        ])
+            ]);
+        }
+        crate::grid::assemble(parts, width)
     }
 }
 
@@ -3657,6 +3763,132 @@ mod tests {
             assert!(bar.contains("Alt+←→↑↓ resize"), "{bar}");
             assert!(!bar.contains("Ctrl+←"), "{bar}");
         }
+    }
+
+    /// A config file of its own, removed when the test ends.
+    struct KeysFile(std::path::PathBuf);
+
+    impl KeysFile {
+        fn new(name: &str, text: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("mirador-keymap-{}-{name}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("dir");
+            let path = dir.join("config.toml");
+            std::fs::write(&path, text).expect("write");
+            Self(path)
+        }
+
+        fn text(&self) -> String {
+            std::fs::read_to_string(&self.0).expect("read")
+        }
+    }
+
+    impl Drop for KeysFile {
+        fn drop(&mut self) {
+            if let Some(dir) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+
+    fn open_key_map(app: &mut App) {
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(app.show_help, "the first press opens help");
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(
+            !app.show_help && app.keymap_dialog.is_some(),
+            "the second, the key map"
+        );
+    }
+
+    /// The only place the key map is advertised is the help overlay's footer,
+    /// so the footer has to say it — in the help key's own name.
+    #[test]
+    fn help_says_how_to_reach_the_key_map_and_the_key_map_opens() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let backend = ratatui::backend::TestBackend::new(100, 40);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| app.render(frame)).expect("draw");
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(screen.contains("? key map"), "the footer names the way in");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(app.keymap_dialog.is_some());
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.keymap_dialog.is_none(), "Esc closes it");
+        assert!(!app.should_quit);
+    }
+
+    /// Invariant 2 holds inside the dialog too: it reads keys, and Ctrl+C is
+    /// taken before it can.
+    #[test]
+    fn ctrl_c_quits_from_inside_the_key_map_even_mid_question() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        open_key_map(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    /// Edit the config, press `r`, and the new keys are live — no restart.
+    /// A bad edit is reported and the keys in force stay in force.
+    #[test]
+    fn reload_applies_a_good_edit_and_refuses_a_bad_one() {
+        let file = KeysFile::new("reload", "[keys]\nquit = \"x\"\n");
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.write_layout_to(file.0.clone());
+        open_key_map(&mut app);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert_eq!(
+            app.keymap.action(KeyEvent::from(KeyCode::Char('x'))),
+            Some(Action::Quit),
+            "the edit is live"
+        );
+
+        std::fs::write(&file.0, "[keys]\ntheme = \"q\"\n").expect("write");
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert_eq!(
+            app.keymap.action(KeyEvent::from(KeyCode::Char('x'))),
+            Some(Action::Quit),
+            "a clash is refused and x still quits"
+        );
+    }
+
+    /// `d`, then `y`: the file's `[keys]` lines are commented out and the
+    /// defaults are live at once. Anything else leaves both alone.
+    #[test]
+    fn defaults_resets_the_file_and_the_live_keys_only_on_yes() {
+        let file = KeysFile::new("reset", "[general]\nmouse = true\n\n[keys]\nquit = \"x\"\n");
+        let config = with_keys(config_with(&["clocks"]), "[keys]\nquit = \"x\"");
+        let mut app = App::new(config).unwrap();
+        app.write_layout_to(file.0.clone());
+        open_key_map(&mut app);
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+        assert!(
+            file.text().contains("\nquit = \"x\""),
+            "a no changed nothing"
+        );
+        assert!(!app.keymap.is_default(Action::Quit));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('d')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('y')));
+        assert!(file.text().contains("\n# quit = \"x\""), "{}", file.text());
+        assert!(file.text().starts_with("[general]\nmouse = true\n"));
+        assert!(app.keymap.is_default(Action::Quit), "the defaults are live");
+        assert!(
+            app.keymap_dialog.is_some(),
+            "and the dialog stays to say so"
+        );
     }
 
     #[test]

@@ -562,6 +562,12 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # list and cannot be put in it: Ctrl+C always quits, and Esc always backs out
 # of whatever is open. 1-9 still jump straight to a panel. A key given to two
 # actions is refused at startup, with the line to change.
+#
+# Press ? twice in mirador to see every key with its default, load an edit
+# here without restarting (r), or put every key back to its default (d).
+# If a mistake here stops mirador starting, `mirador --reset-keys` does the
+# same from the command line. Either way your lines are commented out, not
+# deleted.
 # ---------------------------------------------------------------------------
 [keys]
 # focus_next      = "tab"

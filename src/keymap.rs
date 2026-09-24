@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -270,6 +271,8 @@ struct Meta {
     defaults: &'static [(KeyCode, KeyModifiers)],
     label: &'static str,
     primary: bool,
+    /// What it does, for the key map dialog, in the imperative.
+    about: &'static str,
 }
 
 /// Every action, in the order their hints appear.
@@ -284,6 +287,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Tab, KeyModifiers::NONE)],
         label: "focus",
         primary: true,
+        about: "move focus to the next panel",
     },
     Meta {
         action: Action::Help,
@@ -291,6 +295,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Char('?'), KeyModifiers::NONE)],
         label: "keys",
         primary: true,
+        about: "show the keys, then the key map",
     },
     Meta {
         action: Action::Quit,
@@ -298,6 +303,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Char('q'), KeyModifiers::NONE)],
         label: "quit",
         primary: true,
+        about: "quit mirador",
     },
     // After `quit` deliberately. On a narrow terminal knowing how to get out
     // beats knowing how to add a panel. A notice naming this key for anyone
@@ -309,6 +315,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Char('w'), KeyModifiers::NONE)],
         label: "panels",
         primary: true,
+        about: "choose which panels are shown",
     },
     // Last of the single-key primaries, so it is the first to go when the
     // terminal is too narrow for all of them — but a primary, because the
@@ -320,6 +327,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Char('m'), KeyModifiers::NONE)],
         label: "arrange",
         primary: true,
+        about: "rearrange the panels",
     },
     // Behind `m` for the same reason `m` is behind `w`, and a primary for the
     // same reason too: nineteen themes ship, and a theme nobody can find is
@@ -330,6 +338,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Char('t'), KeyModifiers::NONE)],
         label: "theme",
         primary: true,
+        about: "choose a theme",
     },
     // The four resize actions are advertised as one hint when they can be —
     // see `Keymap::resize_bindings` — and one each when they cannot.
@@ -339,6 +348,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Right, KeyModifiers::CONTROL)],
         label: "wider",
         primary: true,
+        about: "widen the focused panel",
     },
     Meta {
         action: Action::ResizeNarrower,
@@ -346,6 +356,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Left, KeyModifiers::CONTROL)],
         label: "narrower",
         primary: true,
+        about: "narrow the focused panel",
     },
     Meta {
         action: Action::ResizeTaller,
@@ -353,6 +364,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Down, KeyModifiers::CONTROL)],
         label: "taller",
         primary: true,
+        about: "make the focused panel taller",
     },
     Meta {
         action: Action::ResizeShorter,
@@ -360,6 +372,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::Up, KeyModifiers::CONTROL)],
         label: "shorter",
         primary: true,
+        about: "make the focused panel shorter",
     },
     Meta {
         action: Action::FocusPrevious,
@@ -367,6 +380,7 @@ const ACTIONS: &[Meta] = &[
         defaults: &[(KeyCode::BackTab, KeyModifiers::NONE)],
         label: "focus back",
         primary: false,
+        about: "move focus to the previous panel",
     },
 ];
 
@@ -393,6 +407,37 @@ impl Action {
     pub fn name(self) -> &'static str {
         self.meta().name
     }
+
+    /// What the action does, for the key map dialog.
+    pub fn about(self) -> &'static str {
+        self.meta().about
+    }
+
+    /// The keys the action has when `[keys]` says nothing about it.
+    pub fn defaults(self) -> Vec<Key> {
+        self.meta()
+            .defaults
+            .iter()
+            .map(|&(code, modifiers)| Key::new(code, modifiers))
+            .collect()
+    }
+
+    /// Every action, in the order the key map dialog lists them: the order
+    /// they are written in `[keys]`, which pairs each with its opposite rather
+    /// than following the status bar.
+    pub const LISTED: [Self; 11] = [
+        Self::FocusNext,
+        Self::FocusPrevious,
+        Self::Help,
+        Self::Quit,
+        Self::Panels,
+        Self::Arrange,
+        Self::Theme,
+        Self::ResizeWider,
+        Self::ResizeNarrower,
+        Self::ResizeTaller,
+        Self::ResizeShorter,
+    ];
 }
 
 /// One or more keys, written in a config as a string or a list of strings.
@@ -418,13 +463,16 @@ impl<'de> Deserialize<'de> for KeyList {
             fn visit_str<E: de::Error>(self, text: &str) -> Result<KeyList, E> {
                 text.parse()
                     .map(|key| KeyList(vec![key]))
-                    .map_err(E::custom)
+                    .map_err(|e| E::custom(format!("in `[keys]`, {e}")))
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<KeyList, A::Error> {
                 let mut keys = Vec::new();
                 while let Some(text) = seq.next_element::<String>()? {
-                    keys.push(text.parse().map_err(de::Error::custom)?);
+                    keys.push(
+                        text.parse()
+                            .map_err(|e| de::Error::custom(format!("in `[keys]`, {e}")))?,
+                    );
                 }
                 Ok(KeyList(keys))
             }
@@ -483,11 +531,7 @@ impl Keymap {
         for meta in ACTIONS {
             let mut list: Vec<Key> = match config.0.get(meta.name) {
                 Some(KeyList(written)) => written.clone(),
-                None => meta
-                    .defaults
-                    .iter()
-                    .map(|&(code, modifiers)| Key::new(code, modifiers))
-                    .collect(),
+                None => meta.action.defaults(),
             };
             let mut seen = Vec::new();
             list.retain(|key| {
@@ -540,6 +584,11 @@ impl Keymap {
             .iter()
             .find(|(candidate, _)| *candidate == action)
             .map_or(&[], |(_, keys)| keys.as_slice())
+    }
+
+    /// Whether `action` has exactly its default keys.
+    pub fn is_default(&self, action: Action) -> bool {
+        self.keys(action) == action.defaults().as_slice()
     }
 
     /// The shell's hints, for the status bar and the help overlay.
@@ -637,6 +686,145 @@ impl Default for Keymap {
     }
 }
 
+/// Read `[keys]` from the config at `path` and check it, without touching
+/// anything else in the file.
+///
+/// What the key map dialog's reload runs. Only `[keys]` is read, so a config
+/// that is fine apart from a half-finished edit elsewhere still reloads its
+/// keys — but a file that is not TOML at all is reported, since nothing in it
+/// can be trusted to mean what it appears to.
+pub fn read_keys(path: &Path) -> Result<(KeysConfig, Keymap), String> {
+    #[derive(Deserialize)]
+    struct KeysOnly {
+        #[serde(default)]
+        keys: KeysConfig,
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let only: KeysOnly = toml::from_str(&text).map_err(|e| e.to_string())?;
+    let keymap = Keymap::new(&only.keys)?;
+    Ok((only.keys, keymap))
+}
+
+/// Put every key back to its default by commenting out the live lines under
+/// `[keys]`, with a line above them saying when and why.
+///
+/// `None` when there is nothing to comment out. An edit, never a rewrite, for
+/// invariant 16's reason: a round trip through `toml` would throw away every
+/// comment in the file. And a comment rather than a deletion, for the reason
+/// the reset flags keep a `.bak`: a reader who reset by mistake gets their
+/// keys back by deleting a `# `, and nothing they wrote is lost.
+///
+/// Checked the way `layout_edit` checks itself. The result is parsed and
+/// compared with the original: everything outside `[keys]` must come out the
+/// same, and `[keys]` must come out empty. Keys set some other way — an
+/// inline `keys = { … }`, a dotted `keys.quit` — fail the second half, and
+/// the file is left alone rather than half reset.
+pub fn reset_text(text: &str, note: &str) -> Result<Option<String>, String> {
+    let ending = crate::store::line_ending(text);
+    let mut lines: Vec<String> = Vec::new();
+    let mut in_keys = false;
+    let mut depth = 0i32;
+    let mut marked = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if depth == 0 && trimmed.starts_with('[') {
+            in_keys = is_keys_header(trimmed);
+            lines.push(line.to_string());
+            continue;
+        }
+        let live = depth > 0 || !(trimmed.is_empty() || trimmed.starts_with('#'));
+        if in_keys && live {
+            if !marked {
+                lines.push(format!("# {note}"));
+                marked = true;
+            }
+            depth += bracket_depth_change(line);
+            lines.push(format!("# {line}"));
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    let mut edited = lines.join(ending);
+    if text.ends_with('\n') {
+        edited.push_str(ending);
+    }
+
+    let refused = "the keys in this config are not all written under a `[keys]` \
+                   heading, so they cannot be reset automatically; comment out \
+                   the lines that set them by hand";
+    let parse = |text: &str| text.parse::<toml::Table>().map_err(|e| e.to_string());
+    let mut before = parse(text)?;
+    let mut after = parse(&edited).map_err(|_| refused.to_string())?;
+    before.remove("keys");
+    let left = after.remove("keys");
+    if before != after || left.is_some_and(|keys| keys.as_table().is_none_or(|t| !t.is_empty())) {
+        return Err(refused.into());
+    }
+    Ok(marked.then_some(edited))
+}
+
+/// [`reset_text`] applied to the file at `path`, written atomically. `false`
+/// when the file sets no keys and so was left alone.
+pub fn reset_file(path: &Path) -> Result<bool, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    let note = format!(
+        "Keys reset to the defaults by mirador on {}. What was set:",
+        jiff::Zoned::now().date()
+    );
+    match reset_text(&text, &note)? {
+        Some(edited) => crate::store::write_atomic(path, &edited)
+            .map(|()| true)
+            .map_err(|e| format!("{e:#}")),
+        None => Ok(false),
+    }
+}
+
+/// Whether a table header line is `[keys]`, allowing the spaces and trailing
+/// comment TOML allows.
+fn is_keys_header(trimmed: &str) -> bool {
+    trimmed
+        .strip_prefix('[')
+        .filter(|rest| !rest.starts_with('['))
+        .and_then(|rest| rest.split_once(']'))
+        .is_some_and(|(name, after)| {
+            name.trim() == "keys" && {
+                let after = after.trim_start();
+                after.is_empty() || after.starts_with('#')
+            }
+        })
+}
+
+/// How far `line` opens (positive) or closes (negative) an array, ignoring
+/// brackets inside strings — `"["` is a key — and anything after a comment.
+fn bracket_depth_change(line: &str) -> i32 {
+    let mut change = 0;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for c in line.chars() {
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' && q == '"' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '#' => break,
+                '[' => change += 1,
+                ']' => change -= 1,
+                _ => {}
+            },
+        }
+    }
+    change
+}
+
 /// Refuse a key that `meta`'s action may not have, whoever asked for it.
 fn check_key(meta: &Meta, key: Key) -> Result<(), String> {
     let name = meta.name;
@@ -663,8 +851,8 @@ fn check_key(meta: &Meta, key: Key) -> Result<(), String> {
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
         return Err(format!(
-            "`{name}` is `{key}`, and a resize key needs Ctrl or Alt held, as in \
-             \"alt+right\": resizing is read before the focused panel sees the \
+            "`{name}` is `{key}` in `[keys]`, and a resize key needs Ctrl or Alt \
+             held, as in \"alt+right\": resizing is read before the focused panel sees the \
              key, so without one it would take `{key}` from every panel."
         ));
     }
@@ -1034,6 +1222,100 @@ mod tests {
         }
     }
 
+    const NOTE: &str = "Keys reset to the defaults by mirador on 2026-09-24. What was set:";
+
+    /// The reset comments out what `[keys]` set, and only that: every other
+    /// line of the file, comments and spacing included, comes out identical.
+    #[test]
+    fn a_reset_comments_out_the_keys_and_touches_nothing_else() {
+        let text = "[general]\nmouse = true   # keep this\n\n[keys]\n# quit = \"q\"\n\
+                    quit = [\n  \"x\",\n  \"[\",  # a key that is a bracket\n]\n\
+                    theme = \"T\"\n\n[network]\ninterfaces = []\n";
+        let edited = reset_text(text, NOTE)
+            .expect("resets")
+            .expect("something to do");
+        assert_eq!(
+            edited,
+            "[general]\nmouse = true   # keep this\n\n[keys]\n# quit = \"q\"\n\
+             # Keys reset to the defaults by mirador on 2026-09-24. What was set:\n\
+             # quit = [\n#   \"x\",\n#   \"[\",  # a key that is a bracket\n# ]\n\
+             # theme = \"T\"\n\n[network]\ninterfaces = []\n"
+        );
+    }
+
+    #[test]
+    fn a_reset_keeps_the_files_own_line_endings() {
+        let text = "[keys]\r\nquit = \"x\"\r\n";
+        let edited = reset_text(text, NOTE).expect("resets").expect("changed");
+        assert!(!edited.replace("\r\n", "").contains('\n'), "{edited:?}");
+    }
+
+    #[test]
+    fn a_config_that_sets_no_keys_has_nothing_to_reset() {
+        for text in ["[general]\nmouse = true\n", crate::config::DEFAULT_CONFIG] {
+            assert_eq!(reset_text(text, NOTE), Ok(None));
+        }
+    }
+
+    /// Keys written somewhere other than under a `[keys]` heading cannot be
+    /// found line by line, and the check that follows the edit is what says
+    /// so — the file is refused rather than half reset.
+    #[test]
+    fn keys_the_reset_cannot_find_are_refused_rather_than_half_reset() {
+        for text in [
+            "keys = { quit = \"x\" }\n",
+            "keys.quit = \"x\"\n[general]\nmouse = true\n",
+            "[[keys]]\nquit = \"x\"\n",
+        ] {
+            let error = reset_text(text, NOTE).expect_err(text);
+            assert!(error.contains("by hand"), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_reset_file_reads_back_as_the_default_keymap() {
+        let dir = std::env::temp_dir().join(format!("mirador-reset-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[keys]\nquit = \"x\"\n").expect("write");
+
+        let (_, before) = read_keys(&path).expect("reads");
+        assert!(!before.is_default(Action::Quit));
+        assert_eq!(reset_file(&path), Ok(true));
+        let (keys, after) = read_keys(&path).expect("reads");
+        assert!(keys.0.is_empty(), "{keys:?}");
+        assert!(Action::LISTED.iter().all(|a| after.is_default(*a)));
+        assert_eq!(
+            reset_file(&path),
+            Ok(false),
+            "a second reset has nothing to do"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reload_reports_a_bad_keymap_instead_of_applying_it() {
+        let dir = std::env::temp_dir().join(format!("mirador-read-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[keys]\ntheme = \"q\"\n").expect("write");
+        let error = read_keys(&path).expect_err("clash");
+        assert!(error.contains("bound to both"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_action_is_listed_once_in_the_dialog_order() {
+        for meta in ACTIONS {
+            assert_eq!(
+                Action::LISTED.iter().filter(|a| **a == meta.action).count(),
+                1,
+                "{}",
+                meta.name
+            );
+        }
+    }
+
     #[test]
     fn a_bad_key_name_is_reported_where_it_was_written() {
         let error = toml::from_str::<BTreeMap<String, KeysConfig>>("[keys]\n\nquit = \"cmd+q\"\n")
@@ -1043,5 +1325,13 @@ mod tests {
             error.contains("line 3") && error.contains("does not pass"),
             "{error}"
         );
+        // `main` appends `--reset-keys` to any startup error naming `[keys]`,
+        // so every way a keymap can fail has to name it — a single key and a
+        // list alike.
+        assert!(error.contains("[keys]"), "{error}");
+        let listed = toml::from_str::<BTreeMap<String, KeysConfig>>("[keys]\nquit = [\"cmd+q\"]\n")
+            .expect_err("in a list too")
+            .to_string();
+        assert!(listed.contains("[keys]"), "{listed}");
     }
 }

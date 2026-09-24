@@ -156,6 +156,8 @@ plugin/      mod.rs: external Panel adapter, bounded input and rendering;
              process.rs: JSON-lines workers, limits and child lifecycle
 picker.rs    the `w` dialog — owns its cursor, returns an Action to the shell
 theme_picker.rs the `t` dialog — same shape, but previews as the cursor moves
+keymap_dialog.rs the key map, `?` pressed twice — every shell key, its default
+             and what it does; reloads `[keys]` and resets it to the defaults
 arrange.rs   the `m` mode's arithmetic: where a panel goes when you move it
 prompt.rs    the one-line question a panel asks for a path, place or zone,
              with an optional list to choose from
@@ -288,7 +290,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 402 of them, including the ones mirador
+    trip through `toml` discards all 408 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.

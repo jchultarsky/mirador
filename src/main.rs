@@ -19,6 +19,7 @@ mod glyphs;
 mod grid;
 mod ical;
 mod keymap;
+mod keymap_dialog;
 mod layout_edit;
 mod link;
 mod migrate;
@@ -73,6 +74,8 @@ OPTIONS:
         --config-path      Print the resolved config path and exit
         --migrate-config   Update a config written by an older version
         --reset-config     Replace the config with the defaults, keeping a copy
+        --reset-keys       Put every key back to its default; your [keys]
+                           lines are commented out, not deleted
         --factory-reset    Start over: config, preferences, tasks, notes and
                            watchlist all set aside, nothing deleted
         --update           Update through the installer or Cargo and exit
@@ -91,6 +94,7 @@ KEYS:
     q / Ctrl+C             Quit
 
 All but 1 - 9 and Ctrl+C can be changed in the config's [keys] section.
+Press ? twice to see them all, reload an edit, or reset them.
 
 On first run mirador writes a commented config file you can edit. Run
 `mirador --config-path` to find it.
@@ -108,6 +112,7 @@ struct Args {
     show_config_path: bool,
     migrate_config: bool,
     reset_config: bool,
+    reset_keys: bool,
     factory_reset: bool,
     update: bool,
     /// Skip the confirmation `--reset-config` would otherwise ask for.
@@ -129,6 +134,7 @@ fn parse_args(raw: impl Iterator<Item = String>) -> Result<Args> {
             "--config-path" => args.show_config_path = true,
             "--migrate-config" => args.migrate_config = true,
             "--reset-config" => args.reset_config = true,
+            "--reset-keys" => args.reset_keys = true,
             "--factory-reset" => args.factory_reset = true,
             "--update" => args.update = true,
             "-y" | "--yes" => args.assume_yes = true,
@@ -234,6 +240,79 @@ fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
 
     println!("Left your tasks, notes and watchlist alone.");
     Ok(())
+}
+
+/// `--reset-keys`: comment out `[keys]`, putting every key back to its
+/// default.
+///
+/// The key map dialog does the same from inside the dashboard, and this is
+/// for when that cannot be reached: a keymap mirador refuses is a dashboard
+/// that does not start, and the error that says so names this flag. Asks
+/// first, under the same rules as `--reset-config`, though far less is at
+/// stake — the lines are commented out rather than removed, and nothing
+/// outside `[keys]` is touched.
+fn reset_keys(path: &Path, assume_yes: bool) -> Result<()> {
+    if !path.try_exists().unwrap_or(false) {
+        println!(
+            "There is no config at {}, so every key is already its default.",
+            path.display()
+        );
+        return Ok(());
+    }
+    if !assume_yes {
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "refusing to reset the keys in {} without a confirmation.\n\nThere \
+                 is no terminal to ask on, so re-run with `--yes` if you mean it.",
+                path.display()
+            );
+        }
+        println!(
+            "This puts every key back to its default by commenting out the [keys] \
+             lines in {}.",
+            path.display()
+        );
+        println!("Nothing else in the file changes.");
+        print!("Go ahead? [y/N] ");
+        std::io::stdout().flush().context("writing the prompt")?;
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading your answer")?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Left {} alone.", path.display());
+            return Ok(());
+        }
+    }
+    if keymap::reset_file(path).map_err(anyhow::Error::msg)? {
+        println!(
+            "Every key is back to its default. Your old [keys] lines are still in \
+             {}, commented out.",
+            path.display()
+        );
+    } else {
+        println!(
+            "{} sets no keys; there was nothing to reset.",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Append the way out to an error about `[keys]`.
+///
+/// A keymap mirador refuses is a dashboard that will not start, so the key
+/// map dialog that could fix it is out of reach. Every such error names
+/// `[keys]`, and each one gets `--reset-keys` appended.
+fn point_at_reset_keys(error: anyhow::Error) -> anyhow::Error {
+    let text = format!("{error:#}");
+    if text.contains("[keys]") {
+        anyhow::anyhow!(
+            "{text}\n\nTo put every key back to its default, run `mirador --reset-keys`."
+        )
+    } else {
+        error
+    }
 }
 
 /// Put mirador back where a fresh install would leave it.
@@ -397,6 +476,14 @@ fn run() -> Result<()> {
         return reset_config(&path, args.assume_yes);
     }
 
+    if args.reset_keys {
+        let path = match args.config.clone() {
+            Some(p) => p,
+            None => Config::default_path()?,
+        };
+        return reset_keys(&path, args.assume_yes);
+    }
+
     if args.factory_reset {
         let path = match args.config.clone() {
             Some(p) => p,
@@ -425,7 +512,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let (mut config, config_path) = Config::load(args.config)?;
+    let (mut config, config_path) = Config::load(args.config).map_err(point_at_reset_keys)?;
 
     // Preferences changed from the keyboard on a previous run are applied over
     // the config *before* any panel exists, so every panel is constructed with
@@ -501,6 +588,9 @@ mod tests {
         assert!(parse(&["--migrate-config"]).unwrap().migrate_config);
         assert!(parse(&["--reset-config"]).unwrap().reset_config);
         assert!(parse(&["--factory-reset"]).unwrap().factory_reset);
+        assert!(parse(&["--reset-keys"]).unwrap().reset_keys);
+        assert!(!parse(&["--reset-keys"]).unwrap().reset_config);
+        assert!(!parse(&["--reset-config"]).unwrap().reset_keys);
         assert!(parse(&["--update"]).unwrap().update);
         // The two are separate commands, not degrees of one: a config reset
         // must never quietly take the tasks with it.
