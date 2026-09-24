@@ -21,10 +21,113 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::theme::Theme;
+
+/// What the theme picker's keys do, under `[theme_picker.keys]`. Esc is not
+/// here: it always puts the theme back, as Esc backs out of everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemePickerAction {
+    Up,
+    Down,
+    First,
+    Last,
+    PageUp,
+    PageDown,
+    Keep,
+    PutBack,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// The theme picker's actions and their default keys.
+///
+/// `t` closes the dialog the same way it opened it, and `q` is the habit
+/// everything else in mirador has taught. Both put the theme back rather than
+/// keep it, because both are reflexes rather than decisions — the keys that
+/// keep a theme are the ones you have to mean.
+pub const ACTIONS: &[Meta<ThemePickerAction>] = &[
+    Meta {
+        action: ThemePickerAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "move",
+        primary: false,
+        joins: false,
+        about: "preview the theme above",
+    },
+    Meta {
+        action: ThemePickerAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "move",
+        primary: false,
+        joins: true,
+        about: "preview the theme below",
+    },
+    Meta {
+        action: ThemePickerAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Home, NONE)],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "preview the first theme",
+    },
+    Meta {
+        action: ThemePickerAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::End, NONE)],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "preview the last theme",
+    },
+    Meta {
+        action: ThemePickerAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, NONE)],
+        label: "page",
+        primary: false,
+        joins: false,
+        about: "preview the theme a page up",
+    },
+    Meta {
+        action: ThemePickerAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, NONE)],
+        label: "page",
+        primary: false,
+        joins: true,
+        about: "preview the theme a page down",
+    },
+    Meta {
+        action: ThemePickerAction::Keep,
+        name: "keep",
+        defaults: &[(KeyCode::Enter, NONE), (KeyCode::Char(' '), NONE)],
+        label: "keep",
+        primary: true,
+        joins: false,
+        about: "keep the theme under the cursor",
+    },
+    Meta {
+        action: ThemePickerAction::PutBack,
+        name: "put_back",
+        defaults: &[(KeyCode::Char('q'), NONE), (KeyCode::Char('t'), NONE)],
+        label: "put back",
+        primary: true,
+        joins: false,
+        about: "close and put back the theme you had",
+    },
+];
+
+/// `[theme_picker.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<ThemePickerAction>, String> {
+    PanelKeymap::new("theme_picker", ACTIONS, keys)
+}
 
 /// What a keypress asked the shell to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +157,7 @@ pub struct ThemePicker {
     bundled: usize,
     selected: usize,
     offset: usize,
+    keys: PanelKeymap<ThemePickerAction>,
 }
 
 impl ThemePicker {
@@ -88,9 +192,18 @@ impl ThemePicker {
             bundled,
             selected,
             offset: 0,
+            keys: PanelKeymap::defaults("theme_picker", ACTIONS),
         };
         picker.scroll_into_view();
         picker
+    }
+
+    /// The same picker reading `keys` — `[theme_picker.keys]` as the shell
+    /// last loaded it.
+    #[must_use]
+    pub fn with_keys(mut self, keys: PanelKeymap<ThemePickerAction>) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// The themes available, for tests.
@@ -113,20 +226,22 @@ impl ThemePicker {
     /// Move the cursor, or report what the shell has to do.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let last = self.names.len().saturating_sub(1);
-        let moved = match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') => return Action::Accept,
-            // `t` closes the dialog the same way it opened it, and `q` is the
-            // habit everything else in mirador has taught. Both cancel rather
-            // than accept, because both are reflexes rather than decisions —
-            // the one key that keeps a theme is the one you have to mean.
-            KeyCode::Esc | KeyCode::Char('q' | 't') => return Action::Cancel,
-            KeyCode::Down | KeyCode::Char('j') => self.selected.saturating_add(1).min(last),
-            KeyCode::Up | KeyCode::Char('k') => self.selected.saturating_sub(1),
-            KeyCode::Home => 0,
-            KeyCode::End => last,
-            KeyCode::PageDown => self.selected.saturating_add(ROWS).min(last),
-            KeyCode::PageUp => self.selected.saturating_sub(ROWS),
-            _ => return Action::None,
+        // Esc always puts the theme back, and is in no table.
+        if key.code == KeyCode::Esc {
+            return Action::Cancel;
+        }
+        let Some(action) = self.keys.action(key) else {
+            return Action::None;
+        };
+        let moved = match action {
+            ThemePickerAction::Keep => return Action::Accept,
+            ThemePickerAction::PutBack => return Action::Cancel,
+            ThemePickerAction::Down => self.selected.saturating_add(1).min(last),
+            ThemePickerAction::Up => self.selected.saturating_sub(1),
+            ThemePickerAction::First => 0,
+            ThemePickerAction::Last => last,
+            ThemePickerAction::PageDown => self.selected.saturating_add(ROWS).min(last),
+            ThemePickerAction::PageUp => self.selected.saturating_sub(ROWS),
         };
 
         if moved == self.selected {
@@ -178,18 +293,20 @@ impl ThemePicker {
         }
 
         lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::styled(
-                crate::glyphs::utility("enter"),
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" keep  ", Style::default().fg(theme.muted)),
-            Span::styled(
-                crate::glyphs::utility("esc"),
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" put back", Style::default().fg(theme.muted)),
-        ]));
+        // The keep key is the one `[theme_picker.keys]` gave it; Esc always
+        // puts the theme back, whatever else does.
+        let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
+        let mut footer = Vec::new();
+        if let Some(keep) = self.keys.keys(ThemePickerAction::Keep).first() {
+            footer.push(Span::styled(
+                crate::glyphs::utility(&keep.to_string()),
+                key_style,
+            ));
+            footer.push(Span::styled(" keep  ", Style::default().fg(theme.muted)));
+        }
+        footer.push(Span::styled(crate::glyphs::utility("esc"), key_style));
+        footer.push(Span::styled(" put back", Style::default().fg(theme.muted)));
+        lines.push(Line::from(footer));
         lines
     }
 
@@ -384,6 +501,58 @@ mod tests {
     /// width 1, found by sweeping rather than by reasoning, so this sweeps —
     /// and it holds with a list long enough to scroll, which is when the
     /// arithmetic has something to get wrong.
+    /// The golden test for the `t` picker: the default map answers every key
+    /// the old `match` answered.
+    #[test]
+    fn the_default_theme_picker_map_is_the_keys_it_always_had() {
+        let map = keymap(&KeysConfig::default()).expect("valid");
+        for (code, action) in [
+            (KeyCode::Enter, ThemePickerAction::Keep),
+            (KeyCode::Char(' '), ThemePickerAction::Keep),
+            (KeyCode::Char('q'), ThemePickerAction::PutBack),
+            (KeyCode::Char('t'), ThemePickerAction::PutBack),
+            (KeyCode::Down, ThemePickerAction::Down),
+            (KeyCode::Char('j'), ThemePickerAction::Down),
+            (KeyCode::Up, ThemePickerAction::Up),
+            (KeyCode::Char('k'), ThemePickerAction::Up),
+            (KeyCode::Home, ThemePickerAction::First),
+            (KeyCode::End, ThemePickerAction::Last),
+            (KeyCode::PageDown, ThemePickerAction::PageDown),
+            (KeyCode::PageUp, ThemePickerAction::PageUp),
+        ] {
+            assert_eq!(map.action(key(code)), Some(action), "{code:?}");
+        }
+    }
+
+    /// A moved key previews and keeps as the old one did, the footer names
+    /// it, and Esc puts the theme back whatever the table says.
+    #[test]
+    fn a_moved_theme_picker_key_works_and_esc_still_puts_back() {
+        let keys =
+            keymap(&toml::from_str("down = \"n\"\nkeep = \"y\"\nput_back = []").expect("a table"))
+                .expect("valid");
+        let mut picker = ThemePicker::new(None, None).with_keys(keys);
+        assert_eq!(picker.handle_key(key(KeyCode::Char('j'))), Action::None);
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('n'))),
+            Action::Preview(_)
+        ));
+        assert_eq!(picker.handle_key(key(KeyCode::Enter)), Action::None);
+        assert_eq!(picker.handle_key(key(KeyCode::Char('y'))), Action::Accept);
+        assert_eq!(picker.handle_key(key(KeyCode::Char('t'))), Action::None);
+        assert_eq!(picker.handle_key(key(KeyCode::Esc)), Action::Cancel);
+
+        let footer: String = picker
+            .lines(&Theme::default())
+            .last()
+            .expect("a footer")
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(footer, "Y keep  ESC put back");
+    }
+
     #[test]
     fn it_draws_without_panicking_at_every_size_down_to_one_cell() {
         let dir = themes_dir("tiny");

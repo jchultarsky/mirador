@@ -17,9 +17,92 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::theme::Theme;
+
+/// What the picker's keys do, under `[panel_picker.keys]`. Esc is not here:
+/// it always closes the dialog, as Esc backs out of everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerAction {
+    Up,
+    Down,
+    First,
+    Last,
+    Toggle,
+    Close,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// The picker's actions and their default keys. `w` closes it the way it
+/// opened, and `q` is the habit everything else in mirador teaches.
+pub const ACTIONS: &[Meta<PickerAction>] = &[
+    Meta {
+        action: PickerAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "move",
+        primary: false,
+        joins: false,
+        about: "move to the panel above",
+    },
+    Meta {
+        action: PickerAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "move",
+        primary: false,
+        joins: true,
+        about: "move to the panel below",
+    },
+    Meta {
+        action: PickerAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Home, NONE), (KeyCode::Char('g'), NONE)],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "move to the first panel",
+    },
+    Meta {
+        action: PickerAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::End, NONE), (KeyCode::Char('G'), NONE)],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "move to the last panel",
+    },
+    Meta {
+        action: PickerAction::Toggle,
+        name: "toggle",
+        defaults: &[(KeyCode::Char(' '), NONE)],
+        label: "toggle",
+        primary: true,
+        joins: false,
+        about: "switch the panel under the cursor on or off",
+    },
+    Meta {
+        action: PickerAction::Close,
+        name: "close",
+        defaults: &[
+            (KeyCode::Enter, NONE),
+            (KeyCode::Char('q'), NONE),
+            (KeyCode::Char('w'), NONE),
+        ],
+        label: "close",
+        primary: true,
+        joins: false,
+        about: "close, writing any change to the config",
+    },
+];
+
+/// `[panel_picker.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<PickerAction>, String> {
+    PanelKeymap::new("panel_picker", ACTIONS, keys)
+}
 
 /// What a keypress asked the shell to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,12 +120,25 @@ pub enum Action {
 pub struct Picker {
     selected: usize,
     names: Vec<String>,
+    keys: PanelKeymap<PickerAction>,
 }
 
 impl Picker {
-    /// Open on the first widget.
+    /// Open on the first widget, with the default keys.
     pub fn new(names: Vec<String>) -> Self {
-        Self { selected: 0, names }
+        Self {
+            selected: 0,
+            names,
+            keys: PanelKeymap::defaults("panel_picker", ACTIONS),
+        }
+    }
+
+    /// The same picker reading `keys` — `[panel_picker.keys]` as the shell
+    /// last loaded it.
+    #[must_use]
+    pub fn with_keys(mut self, keys: PanelKeymap<PickerAction>) -> Self {
+        self.keys = keys;
+        self
     }
 
     /// Which row the cursor is on. Exposed for tests.
@@ -59,31 +155,27 @@ impl Picker {
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
         let last = self.names.len().saturating_sub(1);
 
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q' | 'w') | KeyCode::Enter => Action::Close,
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.selected = self.selected.saturating_add(1).min(last);
-                Action::None
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.selected = self.selected.saturating_sub(1);
-                Action::None
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.selected = 0;
-                Action::None
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                self.selected = last;
-                Action::None
-            }
-            KeyCode::Char(' ') => self
-                .names
-                .get(self.selected)
-                .cloned()
-                .map_or(Action::None, Action::Toggle),
-            _ => Action::None,
+        if key.code == KeyCode::Esc {
+            return Action::Close;
         }
+        let Some(action) = self.keys.action(key) else {
+            return Action::None;
+        };
+        match action {
+            PickerAction::Close => return Action::Close,
+            PickerAction::Toggle => {
+                return self
+                    .names
+                    .get(self.selected)
+                    .cloned()
+                    .map_or(Action::None, Action::Toggle);
+            }
+            PickerAction::Down => self.selected = self.selected.saturating_add(1).min(last),
+            PickerAction::Up => self.selected = self.selected.saturating_sub(1),
+            PickerAction::First => self.selected = 0,
+            PickerAction::Last => self.selected = last,
+        }
+        Action::None
     }
 
     /// Draw the dialog.
@@ -138,18 +230,19 @@ impl Picker {
                 Style::default().fg(theme.muted),
             ))),
         }
-        lines.push(Line::from(vec![
-            Span::styled(
-                "  space",
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" toggle   ", Style::default().fg(theme.muted)),
-            Span::styled(
-                "esc",
-                Style::default().fg(theme.key).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" close", Style::default().fg(theme.muted)),
-        ]));
+        // The toggle key is the one `[panel_picker.keys]` gave it; Esc always
+        // closes, whatever else does.
+        let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
+        let mut footer = Vec::new();
+        if let Some(toggle) = self.keys.keys(PickerAction::Toggle).first() {
+            footer.push(Span::styled(format!("  {toggle}"), key_style));
+            footer.push(Span::styled(" toggle   ", Style::default().fg(theme.muted)));
+        } else {
+            footer.push(Span::raw("  "));
+        }
+        footer.push(Span::styled("esc", key_style));
+        footer.push(Span::styled(" close", Style::default().fg(theme.muted)));
+        lines.push(Line::from(footer));
 
         let height = u16::try_from(lines.len())
             .unwrap_or(u16::MAX)
@@ -191,6 +284,69 @@ mod tests {
                 .map(|name| (*name).to_string())
                 .collect(),
         )
+    }
+
+    /// The golden test for the `w` picker: the default map answers every key
+    /// the old `match` answered.
+    #[test]
+    fn the_default_picker_map_is_the_keys_it_always_had() {
+        let map = keymap(&KeysConfig::default()).expect("valid");
+        for (code, action) in [
+            (KeyCode::Up, PickerAction::Up),
+            (KeyCode::Char('k'), PickerAction::Up),
+            (KeyCode::Down, PickerAction::Down),
+            (KeyCode::Char('j'), PickerAction::Down),
+            (KeyCode::Home, PickerAction::First),
+            (KeyCode::Char('g'), PickerAction::First),
+            (KeyCode::End, PickerAction::Last),
+            (KeyCode::Char('G'), PickerAction::Last),
+            (KeyCode::Char(' '), PickerAction::Toggle),
+            (KeyCode::Enter, PickerAction::Close),
+            (KeyCode::Char('q'), PickerAction::Close),
+            (KeyCode::Char('w'), PickerAction::Close),
+        ] {
+            assert_eq!(map.action(KeyEvent::from(code)), Some(action), "{code:?}");
+        }
+    }
+
+    /// A moved toggle key toggles, the old one does nothing, the footer says
+    /// the new one — and Esc closes whatever the table says.
+    #[test]
+    fn a_moved_picker_key_works_and_esc_still_closes() {
+        let keys =
+            keymap(&toml::from_str("toggle = \"x\"\nclose = []").expect("a table")).expect("valid");
+        let mut picker = picker().with_keys(keys);
+        assert_eq!(press(&mut picker, KeyCode::Char(' ')), Action::None);
+        assert!(matches!(
+            press(&mut picker, KeyCode::Char('x')),
+            Action::Toggle(_)
+        ));
+        assert_eq!(
+            press(&mut picker, KeyCode::Char('q')),
+            Action::None,
+            "q was unbound"
+        );
+        assert_eq!(
+            press(&mut picker, KeyCode::Esc),
+            Action::Close,
+            "Esc always closes"
+        );
+
+        let theme = Theme::default();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 40)).unwrap();
+        terminal
+            .draw(|frame| picker.render(frame, frame.area(), &theme, |_| false, None))
+            .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(screen.contains("x toggle"), "the footer follows the key");
+        assert!(!screen.contains("space toggle"));
     }
 
     /// The dialog as drawn. `render` was never executed by a test, and it is

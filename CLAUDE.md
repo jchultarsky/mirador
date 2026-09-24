@@ -143,9 +143,10 @@ panel.rs     the Panel trait — the seam every widget goes through (in-tree)
 frame.rs     panel frames, Binding type, key hints punched into borders
 keymap.rs    keys by name: `Key` parsed from and printed as words, one
              `Action` per global key, `[keys]` laid over the defaults, a
-             `PanelKeymap` for each panel's `[<widget>.keys]` and for arrange
-             mode's `[arrange.keys]`, and the hints and the arrange legend
-             derived from the result
+             `PanelKeymap` for each panel's `[<widget>.keys]` and for each of
+             the shell's modes (`MODE_SCOPES`: arrange, panel_picker,
+             theme_picker), and the hints and the arrange legend derived
+             from the result
 grid.rs      shared column grid with named headers
 chart.rs     braille graphs + baked colour gradients
 glyphs.rs    block numerals, bold-uppercase labels, weather art
@@ -296,7 +297,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 539 of them, including the ones mirador
+    trip through `toml` discards all 557 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.

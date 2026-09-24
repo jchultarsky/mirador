@@ -90,15 +90,22 @@ pub struct Config {
     /// The shell's keys, where the reader has moved them. See [`crate::keymap`].
     pub keys: crate::keymap::KeysConfig,
     /// Arrange mode, whose only settings are its keys.
-    pub arrange: ArrangeConfig,
+    pub arrange: KeysSection,
+    /// The `w` picker, whose only settings are its keys. Not `[panels]`,
+    /// which reads as though it configured the panels themselves.
+    pub panel_picker: KeysSection,
+    /// The `t` picker, whose only settings are its keys. Not `[theme]`, which
+    /// is the theme.
+    pub theme_picker: KeysSection,
 }
 
-/// Arrange mode (`m`). It has nothing to set but its keys, under
-/// `[arrange.keys]`; a section of its own keeps that table beside the others
-/// of its shape rather than inventing a second one.
+/// A shell mode with nothing to set but its keys: arrange mode (`m`) and the
+/// two pickers (`w`, `t`), each under `[<mode>.keys]`. A section of its own
+/// keeps each table beside the others of its shape rather than inventing a
+/// second one.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ArrangeConfig {
+pub struct KeysSection {
     pub keys: crate::keymap::KeysConfig,
 }
 

@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chose. Esc still cancels and `1`–`9` still pick a panel. A key there may not
   also be a resize key, since resizing is read first. The key map on `?`
   pressed twice lists the table, and reload and reset include it.
+- **The panel and theme pickers' keys can be changed** (#284).
+  `[panel_picker.keys]` moves `w`'s keys (the cursor, `toggle`, `close`) and
+  `[theme_picker.keys]` moves `t`'s (the cursor, `keep`, `put_back`), and each
+  footer shows the key you chose. Esc always closes either picker. The theme
+  picker's footer now draws Enter as `↵`, as the rest of mirador does.
 
 ## [1.18.0] - 2026-09-24
 

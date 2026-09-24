@@ -13,9 +13,10 @@
 //! declares its actions as a table of [`Meta`], reads its keys from
 //! `[<widget>.keys]` through a [`PanelKeymap`], and draws its hints from that
 //! — see [`crate::widgets::KEY_SCOPES`] for the ones that have moved so far.
-//! Arrange mode moved the same way, as `[arrange.keys]` and
-//! [`ArrangeAction`]. The pickers and the help overlay still match their own
-//! keys; each is a scope of its own to move later.
+//! The shell's modes moved the same way — arrange mode as `[arrange.keys]`,
+//! the `w` and `t` pickers as `[panel_picker.keys]` and `[theme_picker.keys]`
+//! — and are listed in [`MODE_SCOPES`]. The help overlay still closes on any
+//! key but its scroll keys, and is the scope left to move.
 //!
 //! Two keys are not in the map at all, and cannot be put there: Ctrl+C, which
 //! always quits (invariant 2), and Esc, which always backs out of whatever is
@@ -786,11 +787,11 @@ pub fn reset_file(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// Every section that may hold a `keys` table: arrange mode's, and each
-/// panel's whose keys can move. One list, so the reset's header matching and
+/// Every section that may hold a `keys` table: each of the shell's modes,
+/// and each panel's whose keys can move. One list, so the reset's header matching and
 /// its self-check cannot disagree about which tables exist.
 fn key_sections() -> impl Iterator<Item = &'static str> {
-    std::iter::once("arrange").chain(crate::widgets::KEY_SCOPES.iter().map(|scope| scope.widget))
+    scopes().map(|scope| scope.widget)
 }
 
 /// Remove every key table from a parsed config — `keys`, and `keys` inside
@@ -1332,15 +1333,52 @@ pub fn arrange_legend(map: &PanelKeymap<ArrangeAction>, resize: Vec<Binding>) ->
     legend
 }
 
-/// Every key table in a config: `[keys]` for the shell, `[arrange.keys]` for
-/// arrange mode, and a `[<widget>.keys]` for each panel in
-/// [`crate::widgets::KEY_SCOPES`].
+/// The shell's own modes whose keys can move, in the order the key map lists
+/// them, ahead of the panels. The same shape as a panel's
+/// [`crate::widgets::KeyScope`], so every table after `[keys]` is checked,
+/// reloaded, reset and listed by one loop.
+pub const MODE_SCOPES: &[crate::widgets::KeyScope] = &[
+    crate::widgets::KeyScope {
+        widget: "arrange",
+        keys: |config| &config.arrange.keys,
+        keys_mut: |config| &mut config.arrange.keys,
+        listing: |keys| arrange_keymap(keys).map(|map| map.listing()),
+    },
+    crate::widgets::KeyScope {
+        widget: "panel_picker",
+        keys: |config| &config.panel_picker.keys,
+        keys_mut: |config| &mut config.panel_picker.keys,
+        listing: |keys| crate::picker::keymap(keys).map(|map| map.listing()),
+    },
+    crate::widgets::KeyScope {
+        widget: "theme_picker",
+        keys: |config| &config.theme_picker.keys,
+        keys_mut: |config| &mut config.theme_picker.keys,
+        listing: |keys| crate::theme_picker::keymap(keys).map(|map| map.listing()),
+    },
+];
+
+/// The tables that read a key only after resizing has had it, and so may not
+/// use a resize key. The pickers are not here: an open picker is offered every
+/// key first, so a resize key there is simply the picker's.
+fn read_after_resize(table: &str) -> bool {
+    !matches!(table, "panel_picker" | "theme_picker")
+}
+
+/// Every table after `[keys]`: the shell's modes, then each panel's.
+fn scopes() -> impl Iterator<Item = &'static crate::widgets::KeyScope> {
+    MODE_SCOPES.iter().chain(crate::widgets::KEY_SCOPES)
+}
+
+/// Every key table in a config: `[keys]` for the shell, a `[<mode>.keys]` for
+/// each of the shell's modes in [`MODE_SCOPES`], and a `[<widget>.keys]` for
+/// each panel in [`crate::widgets::KEY_SCOPES`].
 #[derive(Debug, Clone, Default)]
 pub struct KeyTables {
     pub shell: KeysConfig,
-    pub arrange: KeysConfig,
-    /// By widget name. A panel with no table here has its default keys.
-    pub panels: BTreeMap<&'static str, KeysConfig>,
+    /// Every other table, by the name before `.keys`: a mode's or a panel's.
+    /// One with no entry here has its default keys.
+    pub scopes: BTreeMap<&'static str, KeysConfig>,
 }
 
 impl KeyTables {
@@ -1348,20 +1386,19 @@ impl KeyTables {
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self {
             shell: config.keys.clone(),
-            arrange: config.arrange.keys.clone(),
-            panels: crate::widgets::KEY_SCOPES
-                .iter()
+            scopes: scopes()
                 .map(|scope| (scope.widget, (scope.keys)(config).clone()))
                 .collect(),
         }
     }
 
     /// Check every table, returning the shell's keymap and the listing of
-    /// every other table — arrange mode's first, then each panel's — when
-    /// they all hold.
+    /// every other table — the modes' first, then each panel's — when they
+    /// all hold.
     ///
     /// A key in arrange mode's table or a panel's may not be a resize key:
     /// resizing is read before either sees a key, so it would never arrive.
+    /// The pickers see keys before resizing does, so theirs may.
     pub fn check(&self) -> Result<(Keymap, PanelListing), String> {
         let shell = Keymap::new(&self.shell)?;
         let resize: Vec<(Key, Action)> = Action::LISTED
@@ -1385,29 +1422,24 @@ impl KeyTables {
             }
             Ok(())
         };
-        let arrange = arrange_keymap(&self.arrange)?.listing();
-        clash("arrange", &arrange)?;
         let empty = KeysConfig::default();
-        let mut panels = vec![("arrange", arrange)];
-        for scope in crate::widgets::KEY_SCOPES {
-            let listing = (scope.listing)(self.panels.get(scope.widget).unwrap_or(&empty))?;
-            clash(scope.widget, &listing)?;
-            panels.push((scope.widget, listing));
+        let mut listings = Vec::new();
+        for scope in scopes() {
+            let listing = (scope.listing)(self.scopes.get(scope.widget).unwrap_or(&empty))?;
+            if read_after_resize(scope.widget) {
+                clash(scope.widget, &listing)?;
+            }
+            listings.push((scope.widget, listing));
         }
-        Ok((shell, panels))
+        Ok((shell, listings))
     }
 
     /// Put these tables into `config`, in place of the ones it had.
     pub fn apply(self, config: &mut crate::config::Config) {
-        let Self {
-            shell,
-            arrange,
-            mut panels,
-        } = self;
+        let Self { shell, mut scopes } = self;
         config.keys = shell;
-        config.arrange.keys = arrange;
-        for scope in crate::widgets::KEY_SCOPES {
-            *(scope.keys_mut)(config) = panels.remove(scope.widget).unwrap_or_default();
+        for scope in self::scopes() {
+            *(scope.keys_mut)(config) = scopes.remove(scope.widget).unwrap_or_default();
         }
     }
 }
@@ -1444,21 +1476,14 @@ pub fn read_keys(path: &Path) -> Result<(KeyTables, Keymap), String> {
             .map(|only| only.map(|only| only.keys).unwrap_or_default())
             .map_err(|e| format!("in `[{name}.keys]`: {e}"))
     };
-    let arrange = read_section(&mut table, "arrange")?;
     let mut tables = KeyTables {
         shell,
-        arrange,
-        panels: BTreeMap::new(),
+        scopes: BTreeMap::new(),
     };
-    for scope in crate::widgets::KEY_SCOPES {
-        if let Some(section) = table.remove(scope.widget) {
-            // The panel's other settings are ignored here, as the rest of
-            // the file is.
-            let only: KeysOnly = section
-                .try_into()
-                .map_err(|e| format!("in `[{}.keys]`: {e}", scope.widget))?;
-            tables.panels.insert(scope.widget, only.keys);
-        }
+    for scope in scopes() {
+        tables
+            .scopes
+            .insert(scope.widget, read_section(&mut table, scope.widget)?);
     }
     let (keymap, _) = tables.check()?;
     Ok((tables, keymap))
@@ -2054,8 +2079,7 @@ mod tests {
     fn a_panel_key_may_share_a_shell_key_but_not_a_resize_key() {
         let tables = |shell: &str, panel: &str| KeyTables {
             shell: keys_config(&format!("[keys]\n{shell}")),
-            arrange: KeysConfig::default(),
-            panels: [("cpu", toml::from_str(panel).expect("a table"))].into(),
+            scopes: [("cpu", toml::from_str(panel).expect("a table"))].into(),
         };
         assert!(tables("", "per_core = \"t\"").check().is_ok());
         let error = tables("", "per_core = \"ctrl+right\"")
@@ -2098,12 +2122,13 @@ mod tests {
             .check()
             .expect("the defaults check out");
         let tables: Vec<&str> = panels.iter().map(|(name, _)| *name).collect();
-        let expected: Vec<&str> = std::iter::once("arrange")
+        let expected: Vec<&str> = ["arrange", "panel_picker", "theme_picker"]
+            .into_iter()
             .chain(crate::widgets::KEY_SCOPES.iter().map(|scope| scope.widget))
             .collect();
         assert_eq!(
             tables, expected,
-            "arrange mode's table first, then each panel's"
+            "the shell's modes first, then each panel's"
         );
     }
 
@@ -2240,8 +2265,7 @@ mod tests {
 
         let tables = |shell: &str, mode: &str| KeyTables {
             shell: keys_config(&format!("[keys]\n{shell}")),
-            arrange: toml::from_str(mode).expect("a table"),
-            panels: BTreeMap::new(),
+            scopes: [("arrange", toml::from_str(mode).expect("a table"))].into(),
         };
         let error = tables("", "move_right = \"ctrl+right\"")
             .check()
@@ -2261,33 +2285,36 @@ mod tests {
         );
     }
 
-    /// `[arrange.keys]` in the shipped config lists every action with its
-    /// default, as `[keys]` and each panel's table do.
+    /// Each of the shell's modes has a table in the shipped config listing
+    /// every action with its default, as `[keys]` and each panel's table do —
+    /// one loop, so a mode added later cannot go undocumented.
     #[test]
-    fn the_shipped_config_documents_every_arrange_default_exactly() {
+    fn the_shipped_config_documents_every_mode_default_exactly() {
         let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
-        let block = shipped
-            .split_once("\n[arrange.keys]\n")
-            .expect("the shipped config has an [arrange.keys] section")
-            .1;
-        let uncommented = block
-            .lines()
-            .map_while(|line| line.strip_prefix("# "))
-            .filter(|line| !line.starts_with(' ') && line.contains('='))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let written: KeysConfig = toml::from_str(&uncommented).expect("valid TOML");
-        assert_eq!(
-            written.0.len(),
-            ARRANGE_ACTIONS.len(),
-            "{:?}",
-            written.0.keys()
-        );
-        let documented = arrange_keymap(&written).expect("valid").listing();
-        let defaults = arrange_keymap(&KeysConfig::default())
-            .expect("valid")
-            .listing();
-        assert_eq!(documented, defaults);
+        for scope in MODE_SCOPES {
+            let heading = format!("\n[{}.keys]\n", scope.widget);
+            let block = shipped
+                .split_once(&heading)
+                .unwrap_or_else(|| panic!("the shipped config has no {}", heading.trim()))
+                .1;
+            let uncommented = block
+                .lines()
+                .map_while(|line| line.strip_prefix("# "))
+                .filter(|line| !line.starts_with(' ') && line.contains('='))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let written: KeysConfig = toml::from_str(&uncommented).expect("valid TOML");
+            let documented = (scope.listing)(&written).expect("the documented keys are valid");
+            let defaults = (scope.listing)(&KeysConfig::default()).expect("valid");
+            assert_eq!(
+                written.0.len(),
+                defaults.len(),
+                "[{}.keys] lists every action once: {:?}",
+                scope.widget,
+                written.0.keys().collect::<Vec<_>>()
+            );
+            assert_eq!(documented, defaults, "{}", scope.widget);
+        }
     }
 
     /// Reload reads `[arrange.keys]`, and the reset comments it out with the
@@ -2305,7 +2332,7 @@ mod tests {
 
         let (tables, _) = read_keys(&path).expect("reads");
         assert_eq!(
-            arrange_keymap(&tables.arrange)
+            arrange_keymap(&tables.scopes["arrange"])
                 .expect("valid")
                 .action(key("space")),
             Some(ArrangeAction::Keep)
@@ -2318,7 +2345,7 @@ mod tests {
         );
         let (tables, _) = read_keys(&path).expect("reads");
         assert!(
-            tables.arrange.0.is_empty() && tables.shell.0.is_empty(),
+            tables.scopes["arrange"].0.is_empty() && tables.shell.0.is_empty(),
             "{tables:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -2397,8 +2424,8 @@ mod tests {
         )
         .expect("write");
         let (tables, _) = read_keys(&path).expect("reads");
-        assert_eq!(tables.panels["cpu"].0.len(), 1);
-        assert!(tables.panels["disk"].0.is_empty(), "no table, no keys");
+        assert_eq!(tables.scopes["cpu"].0.len(), 1);
+        assert!(tables.scopes["disk"].0.is_empty(), "no table, no keys");
 
         std::fs::write(&path, "[cpu.keys]\nper_core = \"esc\"\n").expect("write");
         let error = read_keys(&path).expect_err("Esc is never a key");

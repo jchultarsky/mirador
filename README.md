@@ -1027,6 +1027,12 @@ Every one of these keys except `Esc` and `1` – `9` can be moved under
 screen shows the keys you chose. A key there may not also be a resize key,
 since resizing is read first and the mode would never see it.
 
+The two pickers' keys move the same way: `[panel_picker.keys]` for `w` (`up`,
+`down`, `first`, `last`, `toggle`, `close`) and `[theme_picker.keys]` for `t`
+(the same moves, `page_up`, `page_down`, `keep` and `put_back`). Esc always
+closes either one. An open picker sees every key first, so its keys may be the
+same as a resize key.
+
 A panel keeps the width you gave it when it moves, and the row weights always
 add up to what they added up to before — so rearranging one corner of the
 dashboard never quietly rescales another.

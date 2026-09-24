@@ -214,6 +214,11 @@ pub struct App {
     keymap: crate::keymap::Keymap,
     /// Arrange mode's keys, from `[arrange.keys]`.
     arrange_keys: crate::keymap::PanelKeymap<crate::keymap::ArrangeAction>,
+    /// The `w` picker's keys, from `[panel_picker.keys]`, handed to it as it
+    /// opens.
+    panel_picker_keys: crate::keymap::PanelKeymap<crate::picker::PickerAction>,
+    /// The `t` picker's keys, from `[theme_picker.keys]`.
+    theme_picker_keys: crate::keymap::PanelKeymap<crate::theme_picker::ThemePickerAction>,
     gradients: Gradients,
     slots: Vec<Slot>,
     /// `(row, column)` in `config.layout` for each slot, so a resize knows
@@ -321,15 +326,21 @@ impl App {
         let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
             .check()
             .map_err(anyhow::Error::msg)?;
-        // Checked with the rest just above, so this cannot fail.
+        // Checked with the rest just above, so none of these can fail.
         let arrange_keys =
             crate::keymap::arrange_keymap(&config.arrange.keys).map_err(anyhow::Error::msg)?;
+        let panel_picker_keys =
+            crate::picker::keymap(&config.panel_picker.keys).map_err(anyhow::Error::msg)?;
+        let theme_picker_keys =
+            crate::theme_picker::keymap(&config.theme_picker.keys).map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
             config,
             keymap,
             arrange_keys,
+            panel_picker_keys,
+            theme_picker_keys,
             gradients,
             slots,
             positions,
@@ -984,13 +995,24 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Hand arrange mode and every live panel their keys from the config
-    /// again.
+    /// Hand the shell's modes and every live panel their keys from the
+    /// config again.
     fn rebind_panels(&mut self) {
-        self.arrange_keys = crate::keymap::PanelKeymap::or_defaults(
+        use crate::keymap::PanelKeymap;
+        self.arrange_keys = PanelKeymap::or_defaults(
             "arrange",
             crate::keymap::ARRANGE_ACTIONS,
             &self.config.arrange.keys,
+        );
+        self.panel_picker_keys = PanelKeymap::or_defaults(
+            "panel_picker",
+            crate::picker::ACTIONS,
+            &self.config.panel_picker.keys,
+        );
+        self.theme_picker_keys = PanelKeymap::or_defaults(
+            "theme_picker",
+            crate::theme_picker::ACTIONS,
+            &self.config.theme_picker.keys,
         );
         for slot in &mut self.slots {
             slot.panel.set_keys(&self.config);
@@ -1178,7 +1200,8 @@ impl App {
         let picker = crate::theme_picker::ThemePicker::new(
             self.config.theme.name.as_deref(),
             dir.as_deref(),
-        );
+        )
+        .with_keys(self.theme_picker_keys.clone());
         self.theme_picker = Some((picker, self.config.theme.clone()));
     }
 
@@ -1333,7 +1356,10 @@ impl App {
                 self.help_scroll = 0;
             }
             Some(Action::Panels) => {
-                self.picker = Some(crate::picker::Picker::new(self.config.widget_names()));
+                self.picker = Some(
+                    crate::picker::Picker::new(self.config.widget_names())
+                        .with_keys(self.panel_picker_keys.clone()),
+                );
             }
             Some(Action::Theme) => self.open_theme_picker(),
             Some(Action::Arrange) => self.enter_arrange(),
@@ -4038,6 +4064,63 @@ mod tests {
         assert!(app.arranging.is_some(), "Enter no longer keeps");
         app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
         assert!(app.arranging.is_none(), "space does");
+    }
+
+    /// Reload reaches both pickers: a picker opened after it reads the new
+    /// keys, the same way arrange mode and the panels do.
+    #[test]
+    fn reload_gives_the_pickers_their_new_keys() {
+        let file = KeysFile::new(
+            "pickers",
+            "[panel_picker.keys]\nclose = \"x\"\n\n[theme_picker.keys]\nput_back = \"x\"\n",
+        );
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        app.write_layout_to(file.0.clone());
+        open_key_map(&mut app);
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(app.picker.is_some(), "q no longer closes the panel picker");
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(app.picker.is_none(), "x does");
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+        assert!(
+            app.theme_picker.is_some(),
+            "t no longer puts the theme back"
+        );
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(app.theme_picker.is_none(), "x does");
+    }
+
+    /// An open picker is offered every key before resizing is, so a picker
+    /// key may be a resize key — it is the picker's while the picker is open,
+    /// and a resize again once it closes. Arrange mode reads after resize,
+    /// and there the same key is refused.
+    #[test]
+    fn a_picker_key_may_be_a_resize_key_but_an_arrange_key_may_not() {
+        let mut config = resizable();
+        config.panel_picker.keys = toml::from_str("down = \"ctrl+down\"").expect("a table");
+        let mut app = App::new(config).expect("a picker may use a resize key");
+        app.handle_key(KeyEvent::from(KeyCode::Char('w')));
+        let before = app.picker.as_ref().expect("open").selected();
+        app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL));
+        assert_eq!(
+            app.picker.as_ref().expect("still open").selected(),
+            before + 1,
+            "Ctrl+↓ moved the cursor in the picker"
+        );
+        assert!(!app.layout_dirty, "and resized nothing");
+
+        let mut config = resizable();
+        config.arrange.keys = toml::from_str("move_down = \"ctrl+down\"").expect("a table");
+        let Err(error) = App::new(config) else {
+            panic!("an arrange key on a resize key was accepted");
+        };
+        assert!(error.to_string().contains("[arrange.keys]"), "{error}");
     }
 
     #[test]

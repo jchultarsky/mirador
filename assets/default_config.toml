@@ -744,3 +744,25 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # keep           = ["enter", "m", "q"]
 # focus_next     = "tab"
 # focus_previous = "shift+tab"
+
+# The panel picker's keys, while `w` is open. Esc always closes it, whatever
+# else does.
+[panel_picker.keys]
+# up     = ["up", "k"]
+# down   = ["down", "j"]
+# first  = ["home", "g"]
+# last   = ["end", "G"]
+# toggle = "space"
+# close  = ["enter", "q", "w"]
+
+# The theme picker's keys, while `t` is open. Esc always puts back the theme
+# you had, whatever else does.
+[theme_picker.keys]
+# up        = ["up", "k"]
+# down      = ["down", "j"]
+# first     = "home"
+# last      = "end"
+# page_up   = "pageup"
+# page_down = "pagedown"
+# keep      = ["enter", "space"]
+# put_back  = ["q", "t"]
