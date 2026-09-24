@@ -1971,7 +1971,10 @@ survive it.** Re-measure rather than implementing what the issue says.
 
 ## Open work
 
-**One issue is open, and it is waiting on upstream.**
+**Two issues are open.** [#284](https://github.com/jchultarsky/mirador/issues/284)
+— configurable keys — is built and shipped in full (1.17.0 for the shell's
+keys, 1.18.0 for every panel's) and stays open only until its reporter
+confirms it solves the Mac resize clash. The other is waiting on upstream:
 [#255](https://github.com/jchultarsky/mirador/issues/255) — NetBSD's battery
 panel failing — is a trailing-NUL bug in `starship-battery`'s NetBSD backend,
 fixed by [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168)
@@ -2292,7 +2295,17 @@ and had to be added back was the one that did not.
   `starship-battery` was still 0.11.1 on crates.io. Step 0 was the merged
   `main` as a release build under tmux with a fresh home: first run, a
   moved `[calendar.keys]` table reloaded with `r` and drawn in the border,
-  `q` quit. 1.17.0 was a feature release cut earlier the same day,
+  `q` quit. The release run built all five targets and 21 assets, the
+  attestations on an archive and a Windows `-update` binary both trace to
+  `release.yml@refs/tags/v1.18.0` at `fccd192` (the wrong-repository
+  control returned 404 for both), and it was live on crates.io at 20:55
+  UTC — eleven minutes after Cut release was dispatched at 20:44. The Mac
+  findings came from a crossterm probe run one combination at a time:
+  iTerm2 sends Option+arrows as Alt+arrows; Terminal sends no Option,
+  Ctrl+Shift or Ctrl+Option arrow intact, and with "Use Option as Meta
+  key" on turns Option+↑/↓ into `Esc` plus two typed characters — a real
+  Esc reaching mirador. #284 stays open until its reporter confirms.
+  1.17.0 was a feature release cut earlier the same day,
   carrying configurable keys (#284, #285): a `[keys]` section for the
   shell's eleven keys, a key map on `?` pressed twice that reloads and
   resets them, and `mirador --reset-keys`. The reporter's case was resize
@@ -2309,7 +2322,8 @@ and had to be added back was the one that did not.
   only: a new test looked for `"\n[keys]\n"` in the `include_str!`
   config, which a Windows checkout writes with CRLF — the trap recorded
   under Phase 2's `layout_edit` pass, met a second time. Option+arrows on
-  a real Mac terminal remain unverified; #284's reporter was asked. 1.16.0
+  a real Mac terminal were unverified then, and measured the same day on
+  the owner's MacBook — see 1.18.0 above. 1.16.0
   was a feature release cut on 2026-09-18,
   the third that day, carrying the disk panel's I/O graphs (#281): the
   network face per device, `i` to hide them, the scale floored at a
