@@ -2276,9 +2276,15 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.16.0` is released**, as a GitHub release with binaries for macOS
+- **`1.17.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a feature release cut on 2026-09-18,
+  and published on crates.io. It is a feature release cut on 2026-09-24,
+  carrying configurable keys (#284, #285): a `[keys]` section for the
+  shell's eleven keys, a key map on `?` pressed twice that reloads and
+  resets them, and `mirador --reset-keys`. The reporter's case was resize
+  on a Mac, where Ctrl+arrows switch desktops. It does **not** carry the
+  NetBSD battery fix (#255): `starship-battery` was still 0.11.1 on
+  crates.io. 1.16.0 was a feature release cut on 2026-09-18,
   the third that day, carrying the disk panel's I/O graphs (#281): the
   network face per device, `i` to hide them, the scale floored at a
   megabyte a second. It does **not** carry the NetBSD battery fix (#255):
