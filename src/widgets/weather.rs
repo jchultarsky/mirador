@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratatui::Frame;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -26,6 +27,7 @@ use crate::config::WeatherConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs;
 use crate::grid::{Column, Grid};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext, describe_age};
 
 /// How long to wait on any single HTTP request.
@@ -73,11 +75,57 @@ pub(crate) const COLUMNS: &[Column] = &[
     Column::fixed("wind", WIND_W).right().drops_below(WIND_MIN),
 ];
 
-const BINDINGS: &[Binding] = &[
-    Binding::primary("r", "refresh"),
-    Binding::primary("u", "units"),
-    Binding::primary("L", "location"),
+/// What the weather panel's keys do. The location dialog keeps its own keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeatherAction {
+    Refresh,
+    Units,
+    Location,
+}
+
+/// Every key the panel responds to, under `[weather.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<WeatherAction>] = &[
+    Meta {
+        action: WeatherAction::Refresh,
+        name: "refresh",
+        defaults: &[(KeyCode::Char('r'), KeyModifiers::NONE)],
+        label: "refresh",
+        primary: true,
+        joins: false,
+        about: "fetch the weather now",
+    },
+    Meta {
+        action: WeatherAction::Units,
+        name: "units",
+        defaults: &[(KeyCode::Char('u'), KeyModifiers::NONE)],
+        label: "units",
+        primary: true,
+        joins: false,
+        about: "switch between metric and imperial",
+    },
+    Meta {
+        action: WeatherAction::Location,
+        name: "location",
+        defaults: &[(KeyCode::Char('L'), KeyModifiers::NONE)],
+        label: "location",
+        primary: true,
+        joins: false,
+        about: "change the location",
+    },
 ];
+
+/// `[weather.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<WeatherAction>, String> {
+    PanelKeymap::new("weather", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<WeatherAction> {
+    PanelKeymap::defaults("weather", ACTIONS)
+}
 
 /// Most hours ever fetched or shown. A day ahead is the limit of what the
 /// panel's question — "what is the rest of my day like" — can use, and it
@@ -150,6 +198,8 @@ impl State {
 /// The weather panel.
 #[derive(Debug)]
 pub struct WeatherPanel {
+    /// `[weather.keys]` over the defaults.
+    keys: PanelKeymap<WeatherAction>,
     state: Arc<Mutex<State>>,
     /// Set to true to ask the fetch thread for an immediate refresh.
     refresh: Arc<Mutex<bool>>,
@@ -246,6 +296,7 @@ impl WeatherPanel {
             .expect("spawning the weather thread");
 
         Self {
+            keys: default_keys(),
             state,
             refresh,
             config,
@@ -273,6 +324,7 @@ impl WeatherPanel {
             error: None,
         };
         Self {
+            keys: default_keys(),
             state: Arc::new(Mutex::new(state)),
             refresh: Arc::new(Mutex::new(false)),
             forecast_hours: config.forecast_hours,
@@ -800,8 +852,12 @@ impl Panel for WeatherPanel {
         self.with_state(|state| self.counter_for(state))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("weather", ACTIONS, &config.weather.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -849,15 +905,13 @@ impl Panel for WeatherPanel {
     }
 
     fn handle_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> crate::panel::KeyOutcome {
-        use ratatui::crossterm::event::KeyCode;
-
         if self.asking.is_some() {
             self.handle_prompt_key(key);
             return crate::panel::KeyOutcome::Consumed;
         }
 
-        match key.code {
-            KeyCode::Char('r') => {
+        match self.keys.action(key) {
+            Some(WeatherAction::Refresh) => {
                 if let Ok(mut flag) = self.refresh.lock() {
                     *flag = true;
                 }
@@ -865,13 +919,13 @@ impl Panel for WeatherPanel {
             }
             // Converted at render rather than re-requested, so the switch is
             // immediate instead of putting a network round trip behind a key.
-            KeyCode::Char('u') => {
+            Some(WeatherAction::Units) => {
                 self.imperial = !self.imperial;
                 crate::panel::KeyOutcome::Consumed
             }
-            // Capital, because `l` is a movement key nearly everywhere else in
-            // mirador and this panel does not scroll.
-            KeyCode::Char('L') => {
+            // Capital by default, because `l` is a movement key nearly
+            // everywhere else in mirador and this panel does not scroll.
+            Some(WeatherAction::Location) => {
                 self.asking = Some(crate::prompt::Prompt::new(
                     "WEATHER LOCATION",
                     "A place name, e.g. Lisbon, Portugal · Enter saves · Esc cancels",
@@ -880,7 +934,7 @@ impl Panel for WeatherPanel {
                 ));
                 crate::panel::KeyOutcome::Consumed
             }
-            _ => crate::panel::KeyOutcome::Ignored,
+            None => crate::panel::KeyOutcome::Ignored,
         }
     }
 
@@ -1138,6 +1192,15 @@ fn render_forecast(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, d
 mod tests {
     use super::*;
 
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
+            panel_showing(true).handle_key(event)
+        });
+    }
+
     pub(super) fn sample_data(imperial: bool) -> WeatherData {
         WeatherData {
             place: "Cincinnati".into(),
@@ -1162,6 +1225,7 @@ mod tests {
 
     fn panel_showing(imperial: bool) -> WeatherPanel {
         WeatherPanel {
+            keys: default_keys(),
             state: Arc::new(Mutex::new(State::default())),
             refresh: Arc::new(Mutex::new(false)),
             config: Arc::new(Mutex::new(WeatherConfig::default())),
@@ -1474,7 +1538,7 @@ mod tests {
         use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = panel_showing(true);
         assert!(
-            BINDINGS.iter().any(|b| b.key == "u"),
+            default_keys().bindings().iter().any(|b| b.key == "u"),
             "a key nobody is told about might as well not exist"
         );
 

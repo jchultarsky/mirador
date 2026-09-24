@@ -531,6 +531,43 @@ mod tests {
         );
     }
 
+    /// The README's table of panel key tables names every table the code
+    /// reads and every action in each, in order — the names a reader copies
+    /// into their config, so a renamed action with a stale README is a
+    /// config line that fails to start mirador.
+    #[test]
+    fn the_readme_lists_every_panel_key_table_and_action() {
+        let text = readme();
+        let rows: Vec<(String, Vec<String>)> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `["))
+            .filter_map(|rest| rest.split_once(".keys]` | "))
+            .map(|(widget, actions)| {
+                let names = actions
+                    .trim_end_matches(" |")
+                    .split_whitespace()
+                    .map(|name| name.trim_matches('`').to_string())
+                    .collect();
+                (widget.to_string(), names)
+            })
+            .collect();
+        let expected: Vec<(String, Vec<String>)> = crate::widgets::KEY_SCOPES
+            .iter()
+            .map(|scope| {
+                let listing = (scope.listing)(&crate::keymap::KeysConfig::default())
+                    .expect("the defaults are valid");
+                (
+                    scope.widget.to_string(),
+                    listing
+                        .iter()
+                        .map(|listed| listed.name.to_string())
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, expected);
+    }
+
     /// Each widget checks its documented keys against its own `BINDINGS`, and
     /// the README's key tables were checked against nothing — the last
     /// docs-versus-code seam with no guard, after two drawings went stale in
@@ -548,10 +585,12 @@ mod tests {
         let global = crate::keymap::Keymap::default();
         let todo = crate::widgets::todo::keymap(&crate::keymap::KeysConfig::default())
             .expect("the default task keys are valid");
+        let pomodoro = crate::widgets::pomodoro::keymap(&crate::keymap::KeysConfig::default())
+            .expect("the default pomodoro keys are valid");
         let declared: [(&str, &[crate::frame::Binding]); 4] = [
             ("global", global.bindings()),
             ("todo", todo.bindings()),
-            ("pomodoro", crate::widgets::pomodoro::BINDINGS),
+            ("pomodoro", pomodoro.bindings()),
             ("calculator", crate::widgets::calculator::TAPE_BINDINGS),
         ];
         let mut faults = Vec::new();

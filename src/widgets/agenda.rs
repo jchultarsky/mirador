@@ -24,7 +24,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use jiff::{Span, Zoned};
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span as TextSpan};
@@ -33,6 +33,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use crate::config::AgendaConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::ical;
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 
 /// The status shown while a reload is in flight.
@@ -42,15 +43,129 @@ use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 /// by `o` has to survive the next background read.
 const RELOADING: &str = "reloading…";
 
-const BINDINGS: &[Binding] = &[
-    Binding::primary("f", "file"),
-    Binding::primary("r", "reload"),
-    Binding::extra("↑ / ↓", "scroll"),
-    Binding::extra("j / k", "scroll"),
-    Binding::extra("g / G", "first / last"),
-    Binding::extra("Home / End", "first / last"),
-    Binding::extra("o", "show file path"),
+/// What the agenda's keys do. The file dialog keeps its own keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgendaAction {
+    File,
+    Reload,
+    Up,
+    Down,
+    First,
+    Last,
+    PageUp,
+    PageDown,
+    ShowPath,
+}
+
+/// Every key the panel responds to, under `[agenda.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<AgendaAction>] = &[
+    Meta {
+        action: AgendaAction::File,
+        name: "file",
+        defaults: &[(KeyCode::Char('f'), KeyModifiers::NONE)],
+        label: "file",
+        primary: true,
+        joins: false,
+        about: "choose the calendar file",
+    },
+    Meta {
+        action: AgendaAction::Reload,
+        name: "reload",
+        defaults: &[(KeyCode::Char('r'), KeyModifiers::NONE)],
+        label: "reload",
+        primary: true,
+        joins: false,
+        about: "read the calendar file again",
+    },
+    Meta {
+        action: AgendaAction::Up,
+        name: "up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "scroll",
+        primary: false,
+        joins: false,
+        about: "scroll up",
+    },
+    Meta {
+        action: AgendaAction::Down,
+        name: "down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "scroll",
+        primary: false,
+        joins: true,
+        about: "scroll down",
+    },
+    Meta {
+        action: AgendaAction::First,
+        name: "first",
+        defaults: &[
+            (KeyCode::Char('g'), KeyModifiers::NONE),
+            (KeyCode::Home, KeyModifiers::NONE),
+        ],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "scroll to the first event",
+    },
+    Meta {
+        action: AgendaAction::Last,
+        name: "last",
+        defaults: &[
+            (KeyCode::Char('G'), KeyModifiers::NONE),
+            (KeyCode::End, KeyModifiers::NONE),
+        ],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "scroll to the last event",
+    },
+    Meta {
+        action: AgendaAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, KeyModifiers::NONE)],
+        label: "scroll ten rows",
+        primary: false,
+        joins: false,
+        about: "scroll ten rows up",
+    },
+    Meta {
+        action: AgendaAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, KeyModifiers::NONE)],
+        label: "scroll ten rows",
+        primary: false,
+        joins: true,
+        about: "scroll ten rows down",
+    },
+    Meta {
+        action: AgendaAction::ShowPath,
+        name: "show_path",
+        defaults: &[(KeyCode::Char('o'), KeyModifiers::NONE)],
+        label: "show file path",
+        primary: false,
+        joins: false,
+        about: "show which calendar file is read",
+    },
 ];
+
+/// `[agenda.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<AgendaAction>, String> {
+    PanelKeymap::new("agenda", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<AgendaAction> {
+    PanelKeymap::defaults("agenda", ACTIONS)
+}
 
 /// How close an event has to be before it is worth interrupting for.
 ///
@@ -95,6 +210,8 @@ struct State {
 
 #[derive(Debug)]
 pub struct AgendaPanel {
+    /// `[agenda.keys]` over the defaults.
+    keys: PanelKeymap<AgendaAction>,
     state: Arc<Mutex<State>>,
     /// Set to ask the reader thread for an immediate re-read.
     reload: Arc<Mutex<bool>>,
@@ -178,6 +295,7 @@ impl AgendaPanel {
             .expect("spawning the agenda thread");
 
         Self {
+            keys: default_keys(),
             state,
             reload,
             generation,
@@ -504,8 +622,12 @@ impl Panel for AgendaPanel {
         })
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("agenda", ACTIONS, &config.agenda.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -613,8 +735,11 @@ impl Panel for AgendaPanel {
 
         self.status = None;
         let len = self.shown.events.len();
-        match key.code {
-            KeyCode::Char('f') => {
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            AgendaAction::File => {
                 self.asking = Some(crate::prompt::Prompt::new(
                     "AGENDA FILE",
                     "Tab completes · Enter saves · Esc cancels",
@@ -622,24 +747,19 @@ impl Panel for AgendaPanel {
                     crate::prompt::Completion::Paths,
                 ));
             }
-            KeyCode::Char('r') => {
+            AgendaAction::Reload => {
                 self.ask_for_reload();
                 self.status = Some(RELOADING.into());
             }
-            KeyCode::Char('o') => {
+            AgendaAction::ShowPath => {
                 self.status = Some(current_path(&self.path).display().to_string());
             }
-            KeyCode::Down | KeyCode::Char('j') => crate::selection::down(&mut self.scroll, 1, len),
-            KeyCode::Up | KeyCode::Char('k') => crate::selection::up(&mut self.scroll, 1, len),
-            KeyCode::PageDown => crate::selection::down(&mut self.scroll, 10, len),
-            KeyCode::PageUp => crate::selection::up(&mut self.scroll, 10, len),
-            KeyCode::Char('G') | KeyCode::End => {
-                crate::selection::down(&mut self.scroll, usize::MAX, len);
-            }
-            KeyCode::Char('g') | KeyCode::Home => {
-                crate::selection::up(&mut self.scroll, usize::MAX, len);
-            }
-            _ => return KeyOutcome::Ignored,
+            AgendaAction::Down => crate::selection::down(&mut self.scroll, 1, len),
+            AgendaAction::Up => crate::selection::up(&mut self.scroll, 1, len),
+            AgendaAction::PageDown => crate::selection::down(&mut self.scroll, 10, len),
+            AgendaAction::PageUp => crate::selection::up(&mut self.scroll, 10, len),
+            AgendaAction::Last => crate::selection::down(&mut self.scroll, usize::MAX, len),
+            AgendaAction::First => crate::selection::up(&mut self.scroll, usize::MAX, len),
         }
         KeyOutcome::Consumed
     }
@@ -949,6 +1069,15 @@ const _: u16 = FRAME_HEIGHT;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
+            idle_panel().handle_key(event)
+        });
+    }
     use jiff::civil::date;
 
     /// `f` asks for a path in place. A path that does not exist is refused

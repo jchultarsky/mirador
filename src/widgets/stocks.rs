@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,21 +30,126 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use crate::config::StocksConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::grid::{Column, Grid};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 use crate::quote::{Quote, QuoteSource, Watchlist, source_for, sparkline};
 use crate::textfield::TextField;
 use crate::theme::{Gradients, Theme};
 
-const BINDINGS: &[Binding] = &[
-    Binding::primary("a", "add"),
-    Binding::primary("d", "remove"),
-    Binding::primary("r", "refresh"),
-    Binding::extra("↑ / ↓", "move selection"),
-    Binding::extra("j / k", "move selection"),
-    Binding::extra("g / G", "first / last"),
-    Binding::extra("Home / End", "first / last"),
-    Binding::extra("o", "show file path"),
+/// What the watchlist's keys do. The add box and the remove question keep their
+/// own keys: they take typing, and a key moved there could never be typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StocksAction {
+    Add,
+    Remove,
+    Refresh,
+    Up,
+    Down,
+    First,
+    Last,
+    ShowPath,
+}
+
+/// Every key the panel responds to, under `[stocks.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<StocksAction>] = &[
+    Meta {
+        action: StocksAction::Add,
+        name: "add",
+        defaults: &[(KeyCode::Char('a'), KeyModifiers::NONE)],
+        label: "add",
+        primary: true,
+        joins: false,
+        about: "add a symbol",
+    },
+    Meta {
+        action: StocksAction::Remove,
+        name: "remove",
+        defaults: &[(KeyCode::Char('d'), KeyModifiers::NONE)],
+        label: "remove",
+        primary: true,
+        joins: false,
+        about: "remove the selected symbol, after asking",
+    },
+    Meta {
+        action: StocksAction::Refresh,
+        name: "refresh",
+        defaults: &[(KeyCode::Char('r'), KeyModifiers::NONE)],
+        label: "refresh",
+        primary: true,
+        joins: false,
+        about: "fetch prices now",
+    },
+    Meta {
+        action: StocksAction::Up,
+        name: "up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "move selection",
+        primary: false,
+        joins: false,
+        about: "select the symbol above",
+    },
+    Meta {
+        action: StocksAction::Down,
+        name: "down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "move selection",
+        primary: false,
+        joins: true,
+        about: "select the symbol below",
+    },
+    Meta {
+        action: StocksAction::First,
+        name: "first",
+        defaults: &[
+            (KeyCode::Char('g'), KeyModifiers::NONE),
+            (KeyCode::Home, KeyModifiers::NONE),
+        ],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "select the first symbol",
+    },
+    Meta {
+        action: StocksAction::Last,
+        name: "last",
+        defaults: &[
+            (KeyCode::Char('G'), KeyModifiers::NONE),
+            (KeyCode::End, KeyModifiers::NONE),
+        ],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "select the last symbol",
+    },
+    Meta {
+        action: StocksAction::ShowPath,
+        name: "show_path",
+        defaults: &[(KeyCode::Char('o'), KeyModifiers::NONE)],
+        label: "show file path",
+        primary: false,
+        joins: false,
+        about: "show where the watchlist is saved",
+    },
 ];
+
+/// `[stocks.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<StocksAction>, String> {
+    PanelKeymap::new("stocks", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<StocksAction> {
+    PanelKeymap::defaults("stocks", ACTIONS)
+}
 
 /// The shortest gap between two rounds of polling, however it was asked for.
 ///
@@ -169,6 +276,8 @@ enum Mode {
 
 #[derive(Debug)]
 pub struct StocksPanel {
+    /// `[stocks.keys]` over the defaults.
+    keys: PanelKeymap<StocksAction>,
     config: StocksConfig,
     watchlist: Watchlist,
     board: Arc<Mutex<Board>>,
@@ -301,6 +410,7 @@ impl StocksPanel {
             .expect("spawning the stocks thread");
 
         let mut panel = Self {
+            keys: default_keys(),
             config,
             watchlist,
             board,
@@ -398,31 +508,32 @@ impl StocksPanel {
     }
 
     fn handle_list_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => self.select_down(1),
-            KeyCode::Char('k') | KeyCode::Up => self.select_up(1),
-            KeyCode::Char('g') | KeyCode::Home => self.select_up(usize::MAX),
-            KeyCode::Char('G') | KeyCode::End => self.select_down(usize::MAX),
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            StocksAction::Down => self.select_down(1),
+            StocksAction::Up => self.select_up(1),
+            StocksAction::First => self.select_up(usize::MAX),
+            StocksAction::Last => self.select_down(usize::MAX),
 
-            KeyCode::Char('a') => self.mode = Mode::Add(TextField::new()),
+            StocksAction::Add => self.mode = Mode::Add(TextField::new()),
 
-            KeyCode::Char('d') => {
+            StocksAction::Remove => {
                 if let Some(symbol) = self.selected_symbol() {
                     self.mode = Mode::ConfirmRemove { symbol };
                 }
             }
 
-            KeyCode::Char('r') => {
+            StocksAction::Refresh => {
                 self.publish_request(true);
                 self.set_status("refreshing");
             }
 
-            KeyCode::Char('o') => {
+            StocksAction::ShowPath => {
                 let path = self.watchlist.path().display().to_string();
                 self.set_status(path);
             }
-
-            _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
     }
@@ -792,8 +903,12 @@ impl Panel for StocksPanel {
         Some(rows.saturating_add(1).saturating_add(FRAME_HEIGHT))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("stocks", ACTIONS, &config.stocks.keys);
     }
 
     fn refresh_interval(&self) -> Duration {
@@ -1760,36 +1875,13 @@ mod tests {
         );
     }
 
-    /// Every key list mode responds to, paired with the binding documenting it.
-    const DOCUMENTED_LIST_KEYS: &[(KeyCode, &str)] = &[
-        (KeyCode::Char('a'), "a"),
-        (KeyCode::Char('d'), "d"),
-        (KeyCode::Char('r'), "r"),
-        (KeyCode::Down, "↑ / ↓"),
-        (KeyCode::Up, "↑ / ↓"),
-        (KeyCode::Char('j'), "j / k"),
-        (KeyCode::Char('k'), "j / k"),
-        (KeyCode::Char('g'), "g / G"),
-        (KeyCode::Char('G'), "g / G"),
-        (KeyCode::Home, "Home / End"),
-        (KeyCode::End, "Home / End"),
-        (KeyCode::Char('o'), "o"),
-    ];
-
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
     #[test]
-    fn every_documented_key_works_and_every_working_key_is_documented() {
-        for (code, key) in DOCUMENTED_LIST_KEYS {
-            assert!(
-                BINDINGS.iter().any(|b| b.key == *key),
-                "`{key}` is handled but missing from BINDINGS"
-            );
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
             let (mut p, _g) = panel("keymap", &["AAPL"]);
-            let outcome = p.handle_key(KeyEvent::new(*code, KeyModifiers::NONE));
-            assert_eq!(
-                outcome,
-                KeyOutcome::Consumed,
-                "`{key}` is documented but the list ignores it"
-            );
-        }
+            p.handle_key(event)
+        });
     }
 }

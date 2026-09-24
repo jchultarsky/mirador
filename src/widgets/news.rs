@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use jiff::Zoned;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -52,16 +52,96 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use crate::config::NewsConfig;
 use crate::feed::Story;
 use crate::frame::{Binding, FRAME_WIDTH};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext, describe_age};
 
-const BINDINGS: &[Binding] = &[
-    Binding::primary("o", "show link"),
-    Binding::primary("y", "copy"),
-    Binding::primary("↵", "open"),
-    Binding::primary("r", "refresh"),
-    Binding::extra("↑ / ↓", "select"),
-    Binding::extra("j / k", "select"),
+/// What the news panel's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsAction {
+    ShowLink,
+    Copy,
+    Open,
+    Refresh,
+    Up,
+    Down,
+}
+
+/// Every key the panel responds to, under `[news.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<NewsAction>] = &[
+    Meta {
+        action: NewsAction::ShowLink,
+        name: "show_link",
+        defaults: &[(KeyCode::Char('o'), KeyModifiers::NONE)],
+        label: "show link",
+        primary: true,
+        joins: false,
+        about: "show the selected story's link",
+    },
+    Meta {
+        action: NewsAction::Copy,
+        name: "copy",
+        defaults: &[(KeyCode::Char('y'), KeyModifiers::NONE)],
+        label: "copy",
+        primary: true,
+        joins: false,
+        about: "copy the link to the clipboard",
+    },
+    Meta {
+        action: NewsAction::Open,
+        name: "open",
+        defaults: &[(KeyCode::Enter, KeyModifiers::NONE)],
+        label: "open",
+        primary: true,
+        joins: false,
+        about: "open the link with [news].open_command",
+    },
+    Meta {
+        action: NewsAction::Refresh,
+        name: "refresh",
+        defaults: &[(KeyCode::Char('r'), KeyModifiers::NONE)],
+        label: "refresh",
+        primary: true,
+        joins: false,
+        about: "fetch the feeds now",
+    },
+    Meta {
+        action: NewsAction::Up,
+        name: "up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "select",
+        primary: false,
+        joins: false,
+        about: "select the story above",
+    },
+    Meta {
+        action: NewsAction::Down,
+        name: "down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "select",
+        primary: false,
+        joins: true,
+        about: "select the story below",
+    },
 ];
+
+/// `[news.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<NewsAction>, String> {
+    PanelKeymap::new("news", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<NewsAction> {
+    PanelKeymap::defaults("news", ACTIONS)
+}
 
 /// Interior width past which the panel gains nothing.
 ///
@@ -84,6 +164,8 @@ struct State {
 }
 
 pub struct NewsPanel {
+    /// `[news.keys]` over the defaults.
+    keys: PanelKeymap<NewsAction>,
     state: Arc<Mutex<State>>,
     refresh: Arc<Mutex<bool>>,
     stop: Arc<AtomicBool>,
@@ -127,6 +209,7 @@ impl NewsPanel {
     #[cfg(test)]
     pub(crate) fn offline(config: &NewsConfig, stories: Vec<Story>) -> Self {
         Self {
+            keys: default_keys(),
             state: Arc::new(Mutex::new(State {
                 stories: stories.clone(),
                 fetched: Some(Instant::now()),
@@ -189,6 +272,7 @@ impl NewsPanel {
             .expect("spawning the news thread");
 
         Self {
+            keys: default_keys(),
             state,
             refresh,
             stop,
@@ -343,8 +427,12 @@ impl Panel for NewsPanel {
         None
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("news", ACTIONS, &config.news.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -377,13 +465,16 @@ impl Panel for NewsPanel {
         // keep up with, which is the point.
         self.showing_link = None;
         self.action = None;
-        match key.code {
-            KeyCode::Char('r') => {
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            NewsAction::Refresh => {
                 if let Ok(mut flag) = self.refresh.lock() {
                     *flag = true;
                 }
             }
-            KeyCode::Char('o') => {
+            NewsAction::ShowLink => {
                 // The top story when the cursor has not been placed. The
                 // selection starts empty, so `o` used to do nothing at all on a
                 // freshly focused panel — the border advertises `o show link`
@@ -407,15 +498,10 @@ impl Panel for NewsPanel {
                     self.selected.select(Some(index));
                 }
             }
-            KeyCode::Char('y') => self.copy_link(),
-            KeyCode::Enter => self.open_link(),
-            KeyCode::Down | KeyCode::Char('j') => {
-                crate::selection::down(&mut self.selected, 1, self.drawn);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                crate::selection::up(&mut self.selected, 1, self.drawn);
-            }
-            _ => return KeyOutcome::Ignored,
+            NewsAction::Copy => self.copy_link(),
+            NewsAction::Open => self.open_link(),
+            NewsAction::Down => crate::selection::down(&mut self.selected, 1, self.drawn),
+            NewsAction::Up => crate::selection::up(&mut self.selected, 1, self.drawn),
         }
         KeyOutcome::Consumed
     }
@@ -884,6 +970,15 @@ fn read_feed(url: &str) -> anyhow::Result<Vec<Story>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
+            NewsPanel::offline(&NewsConfig::default(), Vec::new()).handle_key(event)
+        });
+    }
 
     /// #114: the panel kept a cursor that `j`/`k` moved and `o` acted on, and
     /// drew no highlight at all — so the link in the footer belonged to a story

@@ -37,6 +37,9 @@ pub struct ClocksConfig {
     /// match (#265). When off, `time_format` is used exactly as written, so a
     /// config that already asked for `%I:%M:%S %p` keeps its table.
     pub twelve_hour: bool,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for ClocksConfig {
@@ -65,6 +68,7 @@ impl Default for ClocksConfig {
             show_offset: true,
             show_seconds: true,
             twelve_hour: false,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -99,6 +103,9 @@ pub struct WeatherConfig {
     pub forecast_hours: u8,
     /// Minutes between refreshes.
     pub refresh_minutes: u64,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for WeatherConfig {
@@ -110,6 +117,7 @@ impl Default for WeatherConfig {
             units: "imperial".into(),
             forecast_hours: 8,
             refresh_minutes: 30,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -166,6 +174,9 @@ pub struct StocksConfig {
     pub stagger_ms: u64,
     /// Draw the intraday sparkline when the panel is wide enough for it.
     pub show_sparkline: bool,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for StocksConfig {
@@ -183,6 +194,7 @@ impl Default for StocksConfig {
             refresh_secs: 120,
             stagger_ms: 400,
             show_sparkline: true,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -235,6 +247,9 @@ pub struct AgendaConfig {
     pub show_location: bool,
     /// Seconds between re-reads of the file.
     pub refresh_secs: u64,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for AgendaConfig {
@@ -247,6 +262,7 @@ impl Default for AgendaConfig {
             // should appear without the user pressing anything, and a minute is
             // the granularity a calendar changes at anyway.
             refresh_secs: 60,
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -262,6 +278,9 @@ pub struct CalendarConfig {
     pub months: u8,
     /// `sunday` or `monday`.
     pub week_starts: String,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for CalendarConfig {
@@ -269,6 +288,7 @@ impl Default for CalendarConfig {
         Self {
             months: 2,
             week_starts: "sunday".to_string(),
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -315,6 +335,9 @@ pub struct PomodoroConfig {
     /// Run directly rather than through a shell, so there is no quoting to get
     /// wrong and no shell to inject into.
     pub chime_command: Vec<String>,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for PomodoroConfig {
@@ -327,6 +350,7 @@ impl Default for PomodoroConfig {
             auto_start: false,
             chime: false,
             chime_command: Vec::new(),
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }
@@ -413,6 +437,15 @@ impl Default for MemoryConfig {
             keys: crate::keymap::KeysConfig::default(),
         }
     }
+}
+
+/// Watch log settings. It has none of its own but its keys.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WatchlogConfig {
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 /// Battery panel settings.
@@ -567,6 +600,9 @@ pub struct NewsConfig {
     /// `["open"]` on macOS, `["xdg-open"]` on Linux, `["cmd", "/c", "start"]`
     /// on Windows — or name a specific browser.
     pub open_command: Vec<String>,
+    /// The panel's keys, where the reader has moved them. See
+    /// [`crate::keymap::PanelKeymap`].
+    pub keys: crate::keymap::KeysConfig,
 }
 
 impl Default for NewsConfig {
@@ -591,6 +627,7 @@ impl Default for NewsConfig {
             refresh_minutes: 60,
             per_feed: 4,
             open_command: Vec::new(),
+            keys: crate::keymap::KeysConfig::default(),
         }
     }
 }

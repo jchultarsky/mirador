@@ -50,7 +50,7 @@ pub use plugins::PluginConfig;
 pub use widgets::{
     AgendaConfig, BatteryConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig,
     CpuConfig, DiskConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig,
-    PomodoroConfig, StocksConfig, TemperatureConfig, TodoConfig, WeatherConfig,
+    PomodoroConfig, StocksConfig, TemperatureConfig, TodoConfig, WatchlogConfig, WeatherConfig,
 };
 
 /// Top-level configuration.
@@ -78,6 +78,7 @@ pub struct Config {
     pub agenda: AgendaConfig,
     pub calendar: CalendarConfig,
     pub news: NewsConfig,
+    pub watchlog: WatchlogConfig,
     pub pomodoro: PomodoroConfig,
     pub calculator: CalculatorConfig,
     pub cpu: CpuConfig,

@@ -439,7 +439,7 @@ mod tests {
     fn every_action_is_listed_with_its_keys_and_its_default() {
         let map = keymap("[keys]\nresize_wider = \"alt+right\"");
         // Tall enough for every panel's table above the closing instructions.
-        let rows = drawn(&mut KeymapDialog::new(), &map, 100, 120);
+        let rows = drawn(&mut KeymapDialog::new(), &map, 100, 250);
         let screen = rows.join("\n");
         for action in Action::LISTED {
             assert!(

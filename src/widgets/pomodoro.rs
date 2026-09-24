@@ -23,6 +23,7 @@ use crate::chart::meter_line;
 use crate::config::PomodoroConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 /// The numerals are never drawn larger than this.
@@ -102,6 +103,8 @@ impl Phase {
 
 /// A pomodoro timer panel.
 pub struct PomodoroPanel {
+    /// `[pomodoro.keys]` over the defaults.
+    keys: PanelKeymap<PomodoroAction>,
     config: PomodoroConfig,
     phase: Phase,
     /// When the current phase ends. `None` whenever the timer is not running.
@@ -126,6 +129,7 @@ impl PomodoroPanel {
     pub fn new(config: PomodoroConfig) -> Self {
         let first = Duration::from_secs(config.focus_minutes * 60);
         Self {
+            keys: default_keys(),
             config,
             phase: Phase::Focus,
             ends_at: None,
@@ -335,12 +339,83 @@ fn clock_text(remaining: Duration) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
 }
 
-pub(crate) const BINDINGS: &[Binding] = &[
-    Binding::primary("space", "start/pause"),
-    Binding::primary("n", "next phase"),
-    Binding::primary("+/-", "length"),
-    Binding::extra("r", "reset phase"),
+/// What the pomodoro's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PomodoroAction {
+    Toggle,
+    Next,
+    Longer,
+    Shorter,
+    Reset,
+}
+
+/// Every key the panel responds to, under `[pomodoro.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<PomodoroAction>] = &[
+    Meta {
+        action: PomodoroAction::Toggle,
+        name: "toggle",
+        defaults: &[(KeyCode::Char(' '), KeyModifiers::NONE)],
+        label: "start/pause",
+        primary: true,
+        joins: false,
+        about: "start or pause the timer",
+    },
+    Meta {
+        action: PomodoroAction::Next,
+        name: "next",
+        defaults: &[(KeyCode::Char('n'), KeyModifiers::NONE)],
+        label: "next phase",
+        primary: true,
+        joins: false,
+        about: "skip to the next phase",
+    },
+    Meta {
+        action: PomodoroAction::Longer,
+        name: "longer",
+        defaults: &[
+            (KeyCode::Char('+'), KeyModifiers::NONE),
+            (KeyCode::Char('='), KeyModifiers::NONE),
+        ],
+        label: "length",
+        primary: true,
+        joins: false,
+        about: "lengthen this phase by a minute",
+    },
+    Meta {
+        action: PomodoroAction::Shorter,
+        name: "shorter",
+        defaults: &[
+            (KeyCode::Char('-'), KeyModifiers::NONE),
+            (KeyCode::Char('_'), KeyModifiers::NONE),
+        ],
+        label: "length",
+        primary: true,
+        joins: true,
+        about: "shorten this phase by a minute",
+    },
+    Meta {
+        action: PomodoroAction::Reset,
+        name: "reset",
+        defaults: &[(KeyCode::Char('r'), KeyModifiers::NONE)],
+        label: "reset phase",
+        primary: false,
+        joins: false,
+        about: "start this phase over",
+    },
 ];
+
+/// `[pomodoro.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<PomodoroAction>, String> {
+    PanelKeymap::new("pomodoro", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<PomodoroAction> {
+    PanelKeymap::defaults("pomodoro", ACTIONS)
+}
 
 impl Panel for PomodoroPanel {
     fn title(&self) -> String {
@@ -357,8 +432,12 @@ impl Panel for PomodoroPanel {
         })
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("pomodoro", ACTIONS, &config.pomodoro.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -537,21 +616,19 @@ impl Panel for PomodoroPanel {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        // Ctrl-modified keys belong to the shell; only Shift is meaningful here
-        // and only because `+` arrives that way on most layouts.
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            || key.modifiers.contains(KeyModifiers::ALT)
-        {
+        // The map compares modifiers exactly, so Ctrl+N is not `n` — those
+        // keys stay the shell's — while `+`, which arrives shifted on most
+        // layouts, matches, because a key's Shift is folded into its
+        // character.
+        let Some(action) = self.keys.action(key) else {
             return KeyOutcome::Ignored;
-        }
-
-        match key.code {
-            KeyCode::Char(' ') => self.toggle(),
-            KeyCode::Char('n') => self.advance(),
-            KeyCode::Char('r') => self.reset_phase(),
-            KeyCode::Char('+' | '=') => self.adjust(1),
-            KeyCode::Char('-' | '_') => self.adjust(-1),
-            _ => return KeyOutcome::Ignored,
+        };
+        match action {
+            PomodoroAction::Toggle => self.toggle(),
+            PomodoroAction::Next => self.advance(),
+            PomodoroAction::Reset => self.reset_phase(),
+            PomodoroAction::Longer => self.adjust(1),
+            PomodoroAction::Shorter => self.adjust(-1),
         }
         KeyOutcome::Consumed
     }
@@ -901,37 +978,21 @@ mod tests {
         assert_eq!(expired.phase, Phase::ShortBreak, "and still advance");
     }
 
-    /// Every key the panel answers to, paired with the binding documenting it.
-    const DOCUMENTED_KEYS: &[(KeyCode, &str)] = &[
-        (KeyCode::Char(' '), "space"),
-        (KeyCode::Char('n'), "n"),
-        (KeyCode::Char('r'), "r"),
-        (KeyCode::Char('+'), "+/-"),
-        (KeyCode::Char('='), "+/-"),
-        (KeyCode::Char('-'), "+/-"),
-        (KeyCode::Char('_'), "+/-"),
-    ];
-
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
     #[test]
-    fn every_documented_key_works_and_every_working_key_is_documented() {
-        for (code, key) in DOCUMENTED_KEYS {
-            assert!(
-                BINDINGS.iter().any(|b| b.key == *key),
-                "`{key}` is handled but missing from BINDINGS"
-            );
-            let mut p = panel();
-            assert_eq!(
-                p.handle_key(KeyEvent::new(*code, KeyModifiers::NONE)),
-                KeyOutcome::Consumed,
-                "`{key}` is documented but the panel ignores it"
-            );
-        }
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| panel().handle_key(event));
+    }
 
-        for binding in BINDINGS {
-            assert!(
-                DOCUMENTED_KEYS.iter().any(|(_, key)| *key == binding.key),
-                "`{}` is in BINDINGS but nothing here proves it works",
-                binding.key
+    /// Ctrl and Alt with a pomodoro key are the shell's, not the timer's.
+    #[test]
+    fn a_modified_key_is_not_the_bare_one() {
+        let mut p = panel();
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            assert_eq!(
+                p.handle_key(KeyEvent::new(KeyCode::Char('n'), modifiers)),
+                KeyOutcome::Ignored
             );
         }
     }

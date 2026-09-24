@@ -207,6 +207,9 @@ yanking the keyboard away from what the user was typing in.
 
 Adding a widget: implement `Panel`, add a config struct to `config/widgets.rs`,
 add the name to `WIDGET_NAMES` and an arm to `build()` in `widgets/mod.rs`,
+give its keys a `Meta` table and a `KEY_SCOPES` entry so `[<widget>.keys]`
+can move them (CONTRIBUTING has the steps; tests hold the shipped config and
+the README's table to the code),
 give it a `#[cfg(test)]` constructor that reads nothing and add that to
 `offline_panels` beside it (the silent-clip sweep builds every panel from that
 list, and the list asserts it matches `WIDGET_NAMES`, so it fails loudly until
@@ -292,7 +295,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 456 of them, including the ones mirador
+    trip through `toml` discards all 527 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.

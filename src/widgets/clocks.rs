@@ -17,6 +17,7 @@ use crate::config::ClocksConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
 use crate::grid::{Column, Grid};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 /// Keys this panel responds to.
@@ -49,18 +50,140 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// border pays for every cell: at the default width the first four still fit
 /// exactly and both of these drop, `h` appears from a 55-cell budget, and `d`
 /// joins it at 66.
-const BINDINGS: &[Binding] = &[
-    Binding::primary("s", "seconds"),
-    Binding::primary("a", "add"),
-    Binding::primary("e", "edit"),
-    Binding::primary("Shift+↑↓", "move"),
-    Binding::primary("h", "12/24h"),
-    Binding::primary("d", "remove"),
-    Binding::extra("↑ / ↓", "select a clock"),
-    Binding::extra("j / k", "select a clock"),
-    Binding::extra("J / K", "move it"),
-    Binding::extra("o", "show file path"),
+/// What the clock panel's keys do. The dialog `a` and `e` open keeps its own
+/// keys: it takes typing, and a key moved there could never be typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClocksAction {
+    Seconds,
+    Add,
+    Edit,
+    MoveUp,
+    MoveDown,
+    TwelveHour,
+    Remove,
+    Up,
+    Down,
+    ShowPath,
+}
+
+/// Every key the panel responds to, under `[clocks.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<ClocksAction>] = &[
+    Meta {
+        action: ClocksAction::Seconds,
+        name: "seconds",
+        defaults: &[(KeyCode::Char('s'), KeyModifiers::NONE)],
+        label: "seconds",
+        primary: true,
+        joins: false,
+        about: "show or hide seconds",
+    },
+    Meta {
+        action: ClocksAction::Add,
+        name: "add",
+        defaults: &[(KeyCode::Char('a'), KeyModifiers::NONE)],
+        label: "add",
+        primary: true,
+        joins: false,
+        about: "add a clock",
+    },
+    Meta {
+        action: ClocksAction::Edit,
+        name: "edit",
+        defaults: &[(KeyCode::Char('e'), KeyModifiers::NONE)],
+        label: "edit",
+        primary: true,
+        joins: false,
+        about: "edit the selected clock",
+    },
+    Meta {
+        action: ClocksAction::MoveUp,
+        name: "move_up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::SHIFT),
+            (KeyCode::Char('K'), KeyModifiers::NONE),
+        ],
+        label: "move",
+        primary: true,
+        joins: false,
+        about: "move the selected clock up",
+    },
+    Meta {
+        action: ClocksAction::MoveDown,
+        name: "move_down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::SHIFT),
+            (KeyCode::Char('J'), KeyModifiers::NONE),
+        ],
+        label: "move",
+        primary: true,
+        joins: true,
+        about: "move the selected clock down",
+    },
+    Meta {
+        action: ClocksAction::TwelveHour,
+        name: "twelve_hour",
+        defaults: &[(KeyCode::Char('h'), KeyModifiers::NONE)],
+        label: "12/24h",
+        primary: true,
+        joins: false,
+        about: "switch between the 24- and 12-hour clock",
+    },
+    Meta {
+        action: ClocksAction::Remove,
+        name: "remove",
+        defaults: &[(KeyCode::Char('d'), KeyModifiers::NONE)],
+        label: "remove",
+        primary: true,
+        joins: false,
+        about: "remove the selected clock",
+    },
+    Meta {
+        action: ClocksAction::Up,
+        name: "up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "select a clock",
+        primary: false,
+        joins: false,
+        about: "select the clock above",
+    },
+    Meta {
+        action: ClocksAction::Down,
+        name: "down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "select a clock",
+        primary: false,
+        joins: true,
+        about: "select the clock below",
+    },
+    Meta {
+        action: ClocksAction::ShowPath,
+        name: "show_path",
+        defaults: &[(KeyCode::Char('o'), KeyModifiers::NONE)],
+        label: "show file path",
+        primary: false,
+        joins: false,
+        about: "show where the clocks are saved",
+    },
 ];
+
+/// `[clocks.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<ClocksAction>, String> {
+    PanelKeymap::new("clocks", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<ClocksAction> {
+    PanelKeymap::defaults("clocks", ACTIONS)
+}
 
 /// The largest scale the numerals are ever drawn at. Past this a clock stops
 /// being readable-from-across-the-room and starts being a poster.
@@ -105,6 +228,8 @@ struct Clock {
 /// The world clocks panel.
 #[derive(Debug)]
 pub struct ClocksPanel {
+    /// `[clocks.keys]` over the defaults.
+    keys: PanelKeymap<ClocksAction>,
     config: ClocksConfig,
     /// The clock rendered large. Always the first configured zone.
     primary: Clock,
@@ -166,6 +291,7 @@ impl ClocksPanel {
         let show_seconds = config.show_seconds;
         let twelve_hour = config.twelve_hour;
         Ok(Self {
+            keys: default_keys(),
             config,
             primary,
             secondary: clocks,
@@ -509,8 +635,12 @@ impl Panel for ClocksPanel {
         )
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("clocks", ACTIONS, &config.clocks.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -586,15 +716,18 @@ impl Panel for ClocksPanel {
         // The primary clock is index 0 and is not selectable, so the cursor
         // lives in 1..=secondary.len().
         let last = self.secondary.len();
-        match key.code {
-            KeyCode::Char('s') => self.show_seconds = !self.show_seconds,
-            KeyCode::Char('h') => {
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            ClocksAction::Seconds => self.show_seconds = !self.show_seconds,
+            ClocksAction::TwelveHour => {
                 self.twelve_hour = !self.twelve_hour;
                 // The instant on screen has not moved, so `tick` would not
                 // see a change until it does — a minute, with seconds hidden.
                 self.last_shown = None;
             }
-            KeyCode::Char('a') => {
+            ClocksAction::Add => {
                 self.editing = None;
                 self.asking = Some(crate::prompt::Prompt::new(
                     "ADD A CLOCK",
@@ -603,7 +736,7 @@ impl Panel for ClocksPanel {
                     crate::prompt::Completion::Places(crate::zones::PLACES),
                 ));
             }
-            KeyCode::Char('e') => {
+            ClocksAction::Edit => {
                 // Pre-filled with what the entry already says, in the same
                 // `Label = Zone` the add dialog accepts. Relabelling is the
                 // common case, so the text you want to change is already there
@@ -618,7 +751,7 @@ impl Panel for ClocksPanel {
                     ));
                 }
             }
-            KeyCode::Char('o') => {
+            ClocksAction::ShowPath => {
                 self.status = Some(self.zones.path().display().to_string());
             }
             // Shift moves the clock rather than the cursor, which is the same
@@ -626,26 +759,21 @@ impl Panel for ClocksPanel {
             // `J`/`K` do it too, because this panel already offers arrows and
             // `j`/`k` as equals for the selection and it would be strange for
             // only one of the pair to gain the modifier.
-            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => self.move_selected_up(),
-            KeyCode::Char('K') => self.move_selected_up(),
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.move_selected_down();
-            }
-            KeyCode::Char('J') => self.move_selected_down(),
-            KeyCode::Char('d') => {
+            ClocksAction::MoveUp => self.move_selected_up(),
+            ClocksAction::MoveDown => self.move_selected_down(),
+            ClocksAction::Remove => {
                 if self.zones.remove(self.selected) {
                     self.reload();
                 } else {
                     self.status = Some("the big clock stays".into());
                 }
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            ClocksAction::Down => {
                 self.selected = self.selected.saturating_add(1).min(last.max(1));
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            ClocksAction::Up => {
                 self.selected = self.selected.saturating_sub(1).max(1);
             }
-            _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
     }
@@ -964,6 +1092,16 @@ impl Panel for ClocksPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
+            let (mut p, _g) = panel_from_named("keymap", ClocksConfig::default());
+            p.handle_key(event)
+        });
+    }
     use crate::config::ClockZone;
     use jiff::tz::Offset;
 
@@ -1818,7 +1956,7 @@ mod tests {
     /// Asserted against the width the default layout actually gives this panel,
     /// because `hint_line` fills the border in order and stops at the first
     /// binding that will not fit: this passes or fails on the *order* and the
-    /// *wording* of `BINDINGS`, not merely on the primary flag. Lengthening any
+    /// *wording* of `default_keys().bindings()`, not merely on the primary flag. Lengthening any
     /// label above `move` pushes it off, which is how it was invisible before.
     #[test]
     fn the_move_keys_reach_the_border_at_the_default_width() {
@@ -1826,8 +1964,8 @@ mod tests {
         // it — and `render_frame` spends `width - 8` of that on hints.
         const BUDGET: u16 = 52 - 8;
         let theme = crate::theme::Theme::default();
-        let hint =
-            crate::frame::hint_line(BINDINGS, &theme, BUDGET).expect("the clock has primaries");
+        let hint = crate::frame::hint_line(default_keys().bindings(), &theme, BUDGET)
+            .expect("the clock has primaries");
         let drawn: String = hint.spans.iter().map(|s| s.content.as_ref()).collect();
 
         // The move key, not a substring of another hint. The first version of
@@ -1853,7 +1991,7 @@ mod tests {
     fn the_twelve_hour_key_reaches_the_border_once_there_is_room() {
         let theme = crate::theme::Theme::default();
         let drawn = |budget: u16| -> String {
-            crate::frame::hint_line(BINDINGS, &theme, budget)
+            crate::frame::hint_line(default_keys().bindings(), &theme, budget)
                 .expect("the clock has primaries")
                 .spans
                 .iter()
@@ -1893,7 +2031,9 @@ mod tests {
     /// slot on the key every other list panel already teaches.
     #[test]
     fn move_is_offered_to_the_border_before_remove() {
-        let primaries: Vec<&str> = BINDINGS
+        let keys = default_keys();
+        let primaries: Vec<&str> = keys
+            .bindings()
             .iter()
             .filter(|b| b.primary)
             .map(|b| b.action.as_ref())

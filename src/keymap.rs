@@ -526,7 +526,7 @@ impl<'de> Deserialize<'de> for KeyList {
 /// A map rather than a struct with a field per action, so that an unknown
 /// name can be answered with the list of real ones — and so that a panel's
 /// `[<widget>.keys]` is the same shape.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
 pub struct KeysConfig(pub BTreeMap<String, KeyList>);
 
@@ -935,7 +935,7 @@ fn hints<A: 'static>(entries: &[(&Meta<A>, &[Key])]) -> (Vec<Binding>, Vec<Bindi
         for position in 0..keys.len().max(next_keys.len()) {
             let binding = match (keys.get(position), next_keys.get(position), next) {
                 (Some(key), Some(other), _) => Binding::owned(
-                    format!("{key} / {other}"),
+                    joined_keys(*key, *other),
                     label.clone(),
                     meta.primary && position == 0,
                 ),
@@ -956,6 +956,33 @@ fn hints<A: 'static>(entries: &[(&Meta<A>, &[Key])]) -> (Vec<Binding>, Vec<Bindi
         index += if next.is_some() { 2 } else { 1 };
     }
     (bindings, aliases)
+}
+
+/// Two keys on one hint: `g / G`, and `Shift+↑↓` rather than
+/// `Shift+↑ / Shift+↓` for two arrows under the same modifiers — the form the
+/// resize hint takes, and six cells a border cannot spare. Bare arrows keep
+/// their `↑ / ↓`, which is how every list in mirador has always drawn them.
+fn joined_keys(key: Key, other: Key) -> String {
+    let arrow = |code| {
+        matches!(
+            code,
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
+        )
+    };
+    if key.modifiers == other.modifiers
+        && !key.modifiers.is_empty()
+        && arrow(key.code)
+        && arrow(other.code)
+    {
+        format!(
+            "{}{}{}",
+            Key::modifier_prefix(key.modifiers),
+            Key::code_name(key.code),
+            Key::code_name(other.code)
+        )
+    } else {
+        format!("{key} / {other}")
+    }
 }
 
 /// One action as the key map dialog lists it, whatever scope it is in.
@@ -1202,6 +1229,51 @@ pub fn read_keys(path: &Path) -> Result<(KeyTables, Keymap), String> {
     }
     let (keymap, _) = tables.check()?;
     Ok((tables, keymap))
+}
+
+/// Whether `bindings` advertise `key`, alone, as one half of a joined pair
+/// (`g / G`), or inside a compacted arrow pair (`Shift+↑↓`).
+#[cfg(test)]
+fn advertises(bindings: &[Binding], key: Key) -> bool {
+    let text = key.to_string();
+    let prefix = Key::modifier_prefix(key.modifiers);
+    let glyph = Key::code_name(key.code);
+    bindings.iter().any(|binding| {
+        binding.key == text
+            || binding.key.split(" / ").any(|half| half == text)
+            || (!prefix.is_empty()
+                && binding.key.starts_with(&prefix)
+                && binding.key[prefix.len()..].contains(&glyph))
+    })
+}
+
+/// Every key in `map` works and is advertised: `press` is handed each key of
+/// each action in turn — build a fresh panel inside it — and must consume it,
+/// and the map's own hints must name it. The panel-side half of what the
+/// hints being derived guarantees: a key the map sends is a key the panel
+/// answers.
+#[cfg(test)]
+pub(crate) fn assert_every_key_works<A: Copy + PartialEq>(
+    map: &PanelKeymap<A>,
+    mut press: impl FnMut(KeyEvent) -> crate::panel::KeyOutcome,
+) {
+    for (meta, keys) in map.actions.iter().zip(&map.keys) {
+        assert!(!keys.is_empty(), "`{}` has no default key", meta.name);
+        for key in keys {
+            assert!(
+                advertises(map.bindings(), *key),
+                "`{key}` ({}) is handled but not advertised: {:?}",
+                meta.name,
+                map.bindings()
+            );
+            assert_eq!(
+                press(KeyEvent::new(key.code, key.modifiers)),
+                crate::panel::KeyOutcome::Consumed,
+                "`{key}` ({}) is in the map but the panel ignores it",
+                meta.name
+            );
+        }
+    }
 }
 
 #[cfg(test)]

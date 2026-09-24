@@ -11,7 +11,7 @@
 
 use jiff::civil::{Date, Weekday};
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -19,16 +19,98 @@ use ratatui::widgets::Paragraph;
 
 use crate::config::CalendarConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::theme::Theme;
 
-const BINDINGS: &[Binding] = &[
-    Binding::primary("n/p", "month"),
-    Binding::primary("t", "today"),
-    Binding::extra("←/→", "month"),
-    Binding::extra("↑/↓", "year"),
-    Binding::extra("wheel", "month"),
+/// What the calendar's keys do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalendarAction {
+    NextMonth,
+    PreviousMonth,
+    Today,
+    PreviousYear,
+    NextYear,
+}
+
+/// Every key the panel responds to, under `[calendar.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<CalendarAction>] = &[
+    Meta {
+        action: CalendarAction::NextMonth,
+        name: "next_month",
+        defaults: &[
+            (KeyCode::Char('n'), KeyModifiers::NONE),
+            (KeyCode::Right, KeyModifiers::NONE),
+            (KeyCode::Char('l'), KeyModifiers::NONE),
+        ],
+        label: "month",
+        primary: true,
+        joins: false,
+        about: "show the next month",
+    },
+    Meta {
+        action: CalendarAction::PreviousMonth,
+        name: "previous_month",
+        defaults: &[
+            (KeyCode::Char('p'), KeyModifiers::NONE),
+            (KeyCode::Left, KeyModifiers::NONE),
+            (KeyCode::Char('h'), KeyModifiers::NONE),
+        ],
+        label: "month",
+        primary: true,
+        joins: true,
+        about: "show the previous month",
+    },
+    Meta {
+        action: CalendarAction::Today,
+        name: "today",
+        defaults: &[(KeyCode::Char('t'), KeyModifiers::NONE)],
+        label: "today",
+        primary: true,
+        joins: false,
+        about: "go back to this month",
+    },
+    Meta {
+        action: CalendarAction::PreviousYear,
+        name: "previous_year",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "year",
+        primary: false,
+        joins: false,
+        about: "go back a year",
+    },
+    Meta {
+        action: CalendarAction::NextYear,
+        name: "next_year",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "year",
+        primary: false,
+        joins: true,
+        about: "go forward a year",
+    },
 ];
+
+/// Hints for keys the panel reads that no table moves.
+const FIXED: &[Binding] = &[Binding::extra("wheel", "month")];
+
+/// `[calendar.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<CalendarAction>, String> {
+    PanelKeymap::new("calendar", ACTIONS, keys).map(|map| map.with_fixed(FIXED))
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<CalendarAction> {
+    PanelKeymap::defaults("calendar", ACTIONS).with_fixed(FIXED)
+}
 
 /// Seven two-cell columns with a space between them, exactly as `cal` prints.
 const MONTH_WIDTH: u16 = 20;
@@ -50,6 +132,8 @@ const MAX_MONTHS: usize = 12;
 type MonthOffset = i32;
 
 pub struct CalendarPanel {
+    /// `[calendar.keys]` over the defaults.
+    keys: PanelKeymap<CalendarAction>,
     config: CalendarConfig,
     /// Months from the current one. Zero means "showing today".
     offset: MonthOffset,
@@ -59,6 +143,7 @@ pub struct CalendarPanel {
 impl CalendarPanel {
     pub fn new(config: CalendarConfig) -> Self {
         Self {
+            keys: default_keys(),
             config,
             offset: 0,
             today: jiff::Zoned::now().date(),
@@ -304,8 +389,13 @@ impl Panel for CalendarPanel {
         (self.offset != 0).then(|| format!("{:+} mo", self.offset))
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys =
+            PanelKeymap::or_defaults("calendar", ACTIONS, &config.calendar.keys).with_fixed(FIXED);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -345,29 +435,17 @@ impl Panel for CalendarPanel {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        match key.code {
-            KeyCode::Char('n' | 'l') | KeyCode::Right => {
-                self.scroll(1);
-                KeyOutcome::Consumed
-            }
-            KeyCode::Char('p' | 'h') | KeyCode::Left => {
-                self.scroll(-1);
-                KeyOutcome::Consumed
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll(12);
-                KeyOutcome::Consumed
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll(-12);
-                KeyOutcome::Consumed
-            }
-            KeyCode::Char('t') => {
-                self.offset = 0;
-                KeyOutcome::Consumed
-            }
-            _ => KeyOutcome::Ignored,
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        match action {
+            CalendarAction::NextMonth => self.scroll(1),
+            CalendarAction::PreviousMonth => self.scroll(-1),
+            CalendarAction::NextYear => self.scroll(12),
+            CalendarAction::PreviousYear => self.scroll(-12),
+            CalendarAction::Today => self.offset = 0,
         }
+        KeyOutcome::Consumed
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
@@ -466,6 +544,13 @@ impl Panel for CalendarPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| panel().handle_key(event));
+    }
 
     fn panel() -> CalendarPanel {
         CalendarPanel::new(CalendarConfig::default())

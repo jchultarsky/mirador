@@ -63,8 +63,22 @@ pub struct KeyScope {
 }
 
 /// Every panel whose keys can be moved, in the order the key map lists them
-/// — the order they appear in the shipped config.
+/// — the order they appear in the shipped config. The calculator, battery and
+/// network panels are not here: the calculator's keys are the digits and
+/// operators you type, and the other two have no keys.
 pub const KEY_SCOPES: &[KeyScope] = &[
+    KeyScope {
+        widget: "clocks",
+        keys: |config| &config.clocks.keys,
+        keys_mut: |config| &mut config.clocks.keys,
+        listing: |keys| clocks::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "weather",
+        keys: |config| &config.weather.keys,
+        keys_mut: |config| &mut config.weather.keys,
+        listing: |keys| weather::keymap(keys).map(|map| map.listing()),
+    },
     KeyScope {
         widget: "todo",
         keys: |config| &config.todo.keys,
@@ -76,6 +90,42 @@ pub const KEY_SCOPES: &[KeyScope] = &[
         keys: |config| &config.notes.keys,
         keys_mut: |config| &mut config.notes.keys,
         listing: |keys| notes::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "stocks",
+        keys: |config| &config.stocks.keys,
+        keys_mut: |config| &mut config.stocks.keys,
+        listing: |keys| stocks::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "calendar",
+        keys: |config| &config.calendar.keys,
+        keys_mut: |config| &mut config.calendar.keys,
+        listing: |keys| calendar::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "agenda",
+        keys: |config| &config.agenda.keys,
+        keys_mut: |config| &mut config.agenda.keys,
+        listing: |keys| agenda::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "news",
+        keys: |config| &config.news.keys,
+        keys_mut: |config| &mut config.news.keys,
+        listing: |keys| news::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "watchlog",
+        keys: |config| &config.watchlog.keys,
+        keys_mut: |config| &mut config.watchlog.keys,
+        listing: |keys| watchlog::keymap(keys).map(|map| map.listing()),
+    },
+    KeyScope {
+        widget: "pomodoro",
+        keys: |config| &config.pomodoro.keys,
+        keys_mut: |config| &mut config.pomodoro.keys,
+        listing: |keys| pomodoro::keymap(keys).map(|map| map.listing()),
     },
     KeyScope {
         widget: "cpu",
@@ -113,7 +163,7 @@ pub fn is_known_widget(name: &str) -> bool {
 /// Returns `Ok(None)` for an unknown name; the config validator rejects those
 /// earlier with a better message, so this is only a defensive fallback.
 pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
-    let panel: Box<dyn Panel> = match name {
+    let mut panel: Box<dyn Panel> = match name {
         "clocks" => Box::new(clocks::ClocksPanel::new(
             config.clocks.clone(),
             crate::config::Config::zones_path()?,
@@ -155,6 +205,9 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             Box::new(crate::plugin::PluginPanel::new(plugin.clone()))
         }
     };
+    // Every panel starts on its default keys; this is where the config's
+    // `[<widget>.keys]` reaches it, the same way a reload does.
+    panel.set_keys(config);
     Ok(Some(panel))
 }
 

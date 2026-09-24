@@ -17,26 +17,118 @@
 
 use jiff::Zoned;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use crate::frame::Binding;
+use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
-const BINDINGS: &[Binding] = &[
-    Binding::extra("↑ / ↓", "scroll"),
-    Binding::extra("j / k", "scroll"),
-    Binding::extra("g / G", "first / last"),
+/// What the watch log's keys do. It only scrolls: nothing here dismisses an
+/// entry, since an entry you can dismiss is one you are expected to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchlogAction {
+    Up,
+    Down,
+    First,
+    Last,
+    PageUp,
+    PageDown,
+}
+
+/// Every key the panel responds to, under `[watchlog.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
+pub const ACTIONS: &[Meta<WatchlogAction>] = &[
+    Meta {
+        action: WatchlogAction::Up,
+        name: "up",
+        defaults: &[
+            (KeyCode::Up, KeyModifiers::NONE),
+            (KeyCode::Char('k'), KeyModifiers::NONE),
+        ],
+        label: "scroll",
+        primary: false,
+        joins: false,
+        about: "scroll up",
+    },
+    Meta {
+        action: WatchlogAction::Down,
+        name: "down",
+        defaults: &[
+            (KeyCode::Down, KeyModifiers::NONE),
+            (KeyCode::Char('j'), KeyModifiers::NONE),
+        ],
+        label: "scroll",
+        primary: false,
+        joins: true,
+        about: "scroll down",
+    },
+    Meta {
+        action: WatchlogAction::First,
+        name: "first",
+        defaults: &[
+            (KeyCode::Char('g'), KeyModifiers::NONE),
+            (KeyCode::Home, KeyModifiers::NONE),
+        ],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "scroll to the top",
+    },
+    Meta {
+        action: WatchlogAction::Last,
+        name: "last",
+        defaults: &[
+            (KeyCode::Char('G'), KeyModifiers::NONE),
+            (KeyCode::End, KeyModifiers::NONE),
+        ],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "scroll to the bottom",
+    },
+    Meta {
+        action: WatchlogAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, KeyModifiers::NONE)],
+        label: "scroll ten rows",
+        primary: false,
+        joins: false,
+        about: "scroll ten rows up",
+    },
+    Meta {
+        action: WatchlogAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, KeyModifiers::NONE)],
+        label: "scroll ten rows",
+        primary: false,
+        joins: true,
+        about: "scroll ten rows down",
+    },
 ];
+
+/// `[watchlog.keys]` laid over [`ACTIONS`], or why it cannot be.
+pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<WatchlogAction>, String> {
+    PanelKeymap::new("watchlog", ACTIONS, keys)
+}
+
+/// The keys the panel starts with, until `build` hands it the config's
+/// through [`Panel::set_keys`].
+fn default_keys() -> PanelKeymap<WatchlogAction> {
+    PanelKeymap::defaults("watchlog", ACTIONS)
+}
 
 /// Interior width past which the panel gains nothing: a time, a source and a
 /// sentence with room to breathe.
 const USEFUL_WIDTH: u16 = 56;
 
 pub struct WatchLogPanel {
+    /// `[watchlog.keys]` over the defaults.
+    keys: PanelKeymap<WatchlogAction>,
     scroll: ListState,
     /// Entries drawn last frame, so `tick` can answer honestly.
     drawn: usize,
@@ -53,6 +145,7 @@ impl WatchLogPanel {
     /// on a panel it cannot see.
     pub fn new() -> Self {
         Self {
+            keys: default_keys(),
             scroll: ListState::default(),
             drawn: 0,
         }
@@ -70,8 +163,12 @@ impl Panel for WatchLogPanel {
         "Watch log".into()
     }
 
-    fn bindings(&self) -> &'static [Binding] {
-        BINDINGS
+    fn bindings(&self) -> &[Binding] {
+        self.keys.bindings()
+    }
+
+    fn set_keys(&mut self, config: &crate::config::Config) {
+        self.keys = PanelKeymap::or_defaults("watchlog", ACTIONS, &config.watchlog.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -93,22 +190,21 @@ impl Panel for WatchLogPanel {
         // or clears an entry. An entry you can dismiss is an entry you are
         // expected to dismiss, which is the obligation this panel exists
         // without.
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                crate::selection::down(&mut self.scroll, 1, self.drawn);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                crate::selection::up(&mut self.scroll, 1, self.drawn);
-            }
-            KeyCode::PageDown => crate::selection::down(&mut self.scroll, 10, self.drawn),
-            KeyCode::PageUp => crate::selection::up(&mut self.scroll, 10, self.drawn),
-            KeyCode::Char('G') | KeyCode::End => {
-                crate::selection::down(&mut self.scroll, usize::MAX, self.drawn);
-            }
-            KeyCode::Char('g') | KeyCode::Home => {
-                crate::selection::up(&mut self.scroll, usize::MAX, self.drawn);
-            }
-            _ => return KeyOutcome::Ignored,
+        let Some(action) = self.keys.action(key) else {
+            return KeyOutcome::Ignored;
+        };
+        let (down, rows) = match action {
+            WatchlogAction::Down => (true, 1),
+            WatchlogAction::Up => (false, 1),
+            WatchlogAction::PageDown => (true, 10),
+            WatchlogAction::PageUp => (false, 10),
+            WatchlogAction::Last => (true, usize::MAX),
+            WatchlogAction::First => (false, usize::MAX),
+        };
+        if down {
+            crate::selection::down(&mut self.scroll, rows, self.drawn);
+        } else {
+            crate::selection::up(&mut self.scroll, rows, self.drawn);
         }
         KeyOutcome::Consumed
     }
@@ -267,6 +363,15 @@ fn rule_line(width: u16, label: &str, theme: &crate::theme::Theme) -> Line<'stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every key in the map works and is advertised; see
+    /// [`crate::keymap::assert_every_key_works`].
+    #[test]
+    fn every_key_in_the_map_works_and_is_advertised() {
+        crate::keymap::assert_every_key_works(&default_keys(), |event| {
+            WatchLogPanel::new().handle_key(event)
+        });
+    }
 
     #[test]
     fn a_rule_line_fills_its_width_exactly() {

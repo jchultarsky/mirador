@@ -469,7 +469,7 @@ either, because a clock panel with nothing to draw large is not a clock panel.
 │ 12 13 14 15 16 17 18          │
 │ 19 20 21 22 23 24 25          │
 │ 26 27 28 29 30 31             │
-╰───── n/p month · t today ─────╯
+╰──── n / p month · t today ────╯
 ```
 
 The calendar is deliberately offline — it reads no mail server and no account.
@@ -686,6 +686,9 @@ A focus timer, in the same block numerals the clock uses.
 | `r` | Put the current phase back to full |
 | `+` / `-` | Lengthen or shorten the phase you are in, by a minute |
 
+Each of these can be moved in `[pomodoro.keys]` — see
+[Changing a panel's keys](#changing-a-panels-keys).
+
 Focus intervals are brass and breaks are moss, and the phase is spelled out
 above the numerals as well — colour alone is a bad way to tell someone whether
 they are meant to be working. A paused timer goes grey rather than blinking:
@@ -900,7 +903,8 @@ the ones you want and leave the rest:
 
 ```toml
 [keys]
-# Ctrl+arrows switch desktops on a Mac, so resize with Option instead.
+# Ctrl+arrows switch desktops on a Mac. Option+arrows, as iTerm2 sends them;
+# Terminal needs letters instead — see below.
 resize_wider    = "alt+right"
 resize_narrower = "alt+left"
 resize_taller   = "alt+down"
@@ -911,10 +915,21 @@ theme           = []           # or none at all
 
 Keys are written in words — `q`, `?`, `tab`, `shift+tab`, `space`, `f5`,
 `ctrl+left`, `alt+h` — and the status bar, the help overlay and the arrange
-legend all show the keys you chose rather than the defaults. On a Mac, Option
-works as Alt once the terminal sends it that way ("Use Option as Meta key" in
-Terminal, "Esc+" in iTerm2); terminals differ in what Option with an arrow
-sends, and `alt+h`/`j`/`k`/`l` work in all of them.
+legend all show the keys you chose rather than the defaults.
+
+On a Mac, what arrives depends on the terminal, and these were measured
+rather than assumed:
+
+- **iTerm2** passes Option+arrows through as Alt+arrows unchanged, so the
+  example above works as it is. Ctrl+Shift+arrows and Ctrl+Option+arrows
+  arrive intact too. Option with a *letter* types a symbol unless the Left
+  Option key is set to "Esc+".
+- **Terminal** passes no Option, Ctrl+Shift or Ctrl+Option arrow through
+  intact. Turn on "Use Option as Meta key" and use letters —
+  `alt+h`/`j`/`k`/`l` — which then arrive as Alt+letters. Do not use
+  Option+`↑`/`↓` there: with that setting Terminal sends each as `Esc`
+  followed by two characters, so the `Esc` backs out of whatever is open and
+  the characters are typed into the focused panel.
 
 A few rules keep a keymap from locking you out. `Ctrl+C` always quits and
 `Esc` always backs out of whatever is open, so neither can be bound. The resize
@@ -925,14 +940,22 @@ change.
 
 ### Changing a panel's keys
 
-Some panels' own keys move the same way, in a table under the panel's
+Every panel's own keys move the same way, in a table under the panel's
 section. The shipped config lists every action in each table with its
 default, and the key map below shows them too:
 
 | Table | Actions |
 | --- | --- |
+| `[clocks.keys]` | `seconds` `add` `edit` `move_up` `move_down` `twelve_hour` `remove` `up` `down` `show_path` |
+| `[weather.keys]` | `refresh` `units` `location` |
 | `[todo.keys]` | `add` `edit` `done` `delete` `up` `down` `first` `last` `page_up` `page_down` `priority_next` `priority_previous` `sort` `completed` `filter` `show_path` |
 | `[notes.keys]` | `new` `edit` `delete` `up` `down` `first` `last` `scroll_up` `scroll_down` `search` `show_path` |
+| `[stocks.keys]` | `add` `remove` `refresh` `up` `down` `first` `last` `show_path` |
+| `[calendar.keys]` | `next_month` `previous_month` `today` `previous_year` `next_year` |
+| `[agenda.keys]` | `file` `reload` `up` `down` `first` `last` `page_up` `page_down` `show_path` |
+| `[news.keys]` | `show_link` `copy` `open` `refresh` `up` `down` |
+| `[watchlog.keys]` | `up` `down` `first` `last` `page_up` `page_down` |
+| `[pomodoro.keys]` | `toggle` `next` `longer` `shorter` `reset` |
 | `[cpu.keys]` | `per_core` |
 | `[memory.keys]` | `swap` |
 | `[disk.keys]` | `io` |
@@ -943,21 +966,21 @@ default, and the key map below shows them too:
 delete = "x"
 up     = ["up", "k", "i"]   # a list gives an action several keys
 
-[cpu.keys]
-per_core = "p"
+[calendar.keys]
+today = "."                 # keep t for the theme picker
 ```
 
-In the task and note lists it is the list's keys that move. The form, the
-editor, the search box and the delete question keep theirs, because they
-take typing and a key moved there could never be typed; `Esc` still clears a
-filter or a search.
+What moves is what a panel does while you are looking at it. A form, an
+editor, a search box, a dialog or a delete question keeps its own keys,
+because it takes typing and a key moved there could never be typed; `Esc`
+still backs out of each and clears a filter or a search. The calculator has
+no table for the same reason: its keys are the digits and operators you type.
 
 The same rules hold, with one difference. A panel key may be one the
 dashboard also uses — it wins while that panel is focused, the way the
 calendar's `t` means "today" there and "theme" everywhere else — but not a
 resize key, which is read before the panel would see it. The panel's border
-and the help overlay show the key you chose. The other panels' keys are not
-configurable yet.
+and the help overlay show the keys you chose.
 
 **Press `?` twice** for the key map: every one of these actions with the key it
 has now, its default, and what it does, with the keys you changed picked out,
