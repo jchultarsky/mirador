@@ -97,10 +97,14 @@ pub struct Config {
     /// The `t` picker, whose only settings are its keys. Not `[theme]`, which
     /// is the theme.
     pub theme_picker: KeysSection,
+    /// The help overlay (`?`), whose only settings are its scroll keys. Not
+    /// `[help]`, which reads as the key that opens it.
+    pub help_overlay: KeysSection,
 }
 
-/// A shell mode with nothing to set but its keys: arrange mode (`m`) and the
-/// two pickers (`w`, `t`), each under `[<mode>.keys]`. A section of its own
+/// A shell mode with nothing to set but its keys: arrange mode (`m`), the
+/// two pickers (`w`, `t`) and the help overlay (`?`), each under
+/// `[<mode>.keys]`. A section of its own
 /// keeps each table beside the others of its shape rather than inventing a
 /// second one.
 #[derive(Debug, Clone, Default, Deserialize)]

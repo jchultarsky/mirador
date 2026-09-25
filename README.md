@@ -1033,6 +1033,11 @@ The two pickers' keys move the same way: `[panel_picker.keys]` for `w` (`up`,
 closes either one. An open picker sees every key first, so its keys may be the
 same as a resize key.
 
+The help overlay's scroll keys are `[help_overlay.keys]` (`up`, `down`,
+`page_up`, `page_down`, `first`, `last`). They scroll only when the overlay has
+more than fits, and any other key closes it. The help key itself is read first
+there, to open the key map, so none of them may be that key.
+
 A panel keeps the width you gave it when it moves, and the row weights always
 add up to what they added up to before — so rearranging one corner of the
 dashboard never quietly rescales another.

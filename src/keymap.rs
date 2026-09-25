@@ -15,8 +15,10 @@
 //! — see [`crate::widgets::KEY_SCOPES`] for the ones that have moved so far.
 //! The shell's modes moved the same way — arrange mode as `[arrange.keys]`,
 //! the `w` and `t` pickers as `[panel_picker.keys]` and `[theme_picker.keys]`
-//! — and are listed in [`MODE_SCOPES`]. The help overlay still closes on any
-//! key but its scroll keys, and is the scope left to move.
+//! — and so did the help overlay's scroll keys, as `[help_overlay.keys]`.
+//! All four are listed in [`MODE_SCOPES`]. Every key the shell reads now
+//! comes from a table, apart from the few that no table may hold: Ctrl+C,
+//! Esc and `1`–`9`.
 //!
 //! Two keys are not in the map at all, and cannot be put there: Ctrl+C, which
 //! always quits (invariant 2), and Esc, which always backs out of whatever is
@@ -1333,6 +1335,102 @@ pub fn arrange_legend(map: &PanelKeymap<ArrangeAction>, resize: Vec<Binding>) ->
     legend
 }
 
+/// What the help overlay's keys do, under `[help_overlay.keys]`.
+///
+/// They scroll it, and only when it has more than fits: on a tall terminal
+/// every key closes the overlay. Any key that is not one of these closes it
+/// too, which is why there is no `close` here — and the help key itself, read
+/// first, goes on to the key map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpAction {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    First,
+    Last,
+}
+
+/// The help overlay's actions and their default keys.
+pub const HELP_ACTIONS: &[Meta<HelpAction>] = &[
+    Meta {
+        action: HelpAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "scroll",
+        primary: false,
+        joins: false,
+        about: "scroll the help up a line",
+    },
+    Meta {
+        action: HelpAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "scroll",
+        primary: false,
+        joins: true,
+        about: "scroll the help down a line",
+    },
+    Meta {
+        action: HelpAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, NONE)],
+        label: "page",
+        primary: false,
+        joins: false,
+        about: "scroll the help up a page",
+    },
+    Meta {
+        action: HelpAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, NONE)],
+        label: "page",
+        primary: false,
+        joins: true,
+        about: "scroll the help down a page",
+    },
+    Meta {
+        action: HelpAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Home, NONE)],
+        label: "top",
+        primary: false,
+        joins: false,
+        about: "scroll the help to the top",
+    },
+    Meta {
+        action: HelpAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::End, NONE)],
+        label: "bottom",
+        primary: false,
+        joins: true,
+        about: "scroll the help to the bottom",
+    },
+];
+
+/// `[help_overlay.keys]` laid over [`HELP_ACTIONS`], or why it cannot be.
+pub fn help_keymap(keys: &KeysConfig) -> Result<PanelKeymap<HelpAction>, String> {
+    PanelKeymap::new("help_overlay", HELP_ACTIONS, keys)
+}
+
+/// The scroll hint for the help overlay's footer: both scroll keys when there
+/// is more in both directions, else the one that still goes somewhere. Four
+/// states, and `None` for the one where neither direction has a key.
+pub fn help_scroll_hint(
+    map: &PanelKeymap<HelpAction>,
+    more_above: bool,
+    more_below: bool,
+) -> Option<String> {
+    let up = map.keys(HelpAction::Up).first().copied();
+    let down = map.keys(HelpAction::Down).first().copied();
+    match (more_above, more_below) {
+        (true, true) => pair(up, down),
+        (true, false) => up.map(|key| key.to_string()),
+        _ => down.map(|key| key.to_string()),
+    }
+}
+
 /// The shell's own modes whose keys can move, in the order the key map lists
 /// them, ahead of the panels. The same shape as a panel's
 /// [`crate::widgets::KeyScope`], so every table after `[keys]` is checked,
@@ -1356,13 +1454,31 @@ pub const MODE_SCOPES: &[crate::widgets::KeyScope] = &[
         keys_mut: |config| &mut config.theme_picker.keys,
         listing: |keys| crate::theme_picker::keymap(keys).map(|map| map.listing()),
     },
+    crate::widgets::KeyScope {
+        widget: "help_overlay",
+        keys: |config| &config.help_overlay.keys,
+        keys_mut: |config| &mut config.help_overlay.keys,
+        listing: |keys| help_keymap(keys).map(|map| map.listing()),
+    },
 ];
 
-/// The tables that read a key only after resizing has had it, and so may not
-/// use a resize key. The pickers are not here: an open picker is offered every
-/// key first, so a resize key there is simply the picker's.
-fn read_after_resize(table: &str) -> bool {
-    !matches!(table, "panel_picker" | "theme_picker")
+/// The shell actions whose keys are read before `table` sees a key, so a key
+/// there that is also one of theirs would never arrive.
+///
+/// Resizing is read before arrange mode and every panel. The help key is read
+/// first in the help overlay, where it opens the key map. An open picker is
+/// offered every key before anything else, so nothing is read ahead of it.
+fn read_first(table: &str) -> &'static [Action] {
+    match table {
+        "panel_picker" | "theme_picker" => &[],
+        "help_overlay" => &[Action::Help],
+        _ => &[
+            Action::ResizeWider,
+            Action::ResizeNarrower,
+            Action::ResizeTaller,
+            Action::ResizeShorter,
+        ],
+    }
 }
 
 /// Every table after `[keys]`: the shell's modes, then each panel's.
@@ -1396,24 +1512,25 @@ impl KeyTables {
     /// every other table — the modes' first, then each panel's — when they
     /// all hold.
     ///
-    /// A key in arrange mode's table or a panel's may not be a resize key:
-    /// resizing is read before either sees a key, so it would never arrive.
-    /// The pickers see keys before resizing does, so theirs may.
+    /// A key may not be one the shell reads before that table sees it — a
+    /// resize key in arrange mode's table or a panel's, the help key in the
+    /// help overlay's — since it would never arrive. See [`read_first`].
     pub fn check(&self) -> Result<(Keymap, PanelListing), String> {
         let shell = Keymap::new(&self.shell)?;
-        let resize: Vec<(Key, Action)> = Action::LISTED
-            .into_iter()
-            .filter(|action| action.is_resize())
-            .flat_map(|action| shell.keys(action).iter().map(move |key| (*key, action)))
-            .collect();
         let clash = |table: &str, listing: &[Listed]| -> Result<(), String> {
-            for entry in listing {
-                if let Some((key, action)) = resize.iter().find(|(key, _)| entry.keys.contains(key))
-                {
+            for &action in read_first(table) {
+                for key in shell.keys(action) {
+                    let Some(entry) = listing.iter().find(|entry| entry.keys.contains(key)) else {
+                        continue;
+                    };
+                    let why = if action.is_resize() {
+                        "Resizing is read before anything else sees a key"
+                    } else {
+                        "The help key is read first there, to open the key map"
+                    };
                     return Err(format!(
                         "`{}` is `{key}` in `[{table}.keys]`, which is `{}` in `[keys]`. \
-                         Resizing is read before anything else sees a key, so \
-                         `{}` would never get it; give one of them another key.",
+                         {why}, so `{}` would never get it; give one of them another key.",
                         entry.name,
                         action.name(),
                         entry.name,
@@ -1426,9 +1543,7 @@ impl KeyTables {
         let mut listings = Vec::new();
         for scope in scopes() {
             let listing = (scope.listing)(self.scopes.get(scope.widget).unwrap_or(&empty))?;
-            if read_after_resize(scope.widget) {
-                clash(scope.widget, &listing)?;
-            }
+            clash(scope.widget, &listing)?;
             listings.push((scope.widget, listing));
         }
         Ok((shell, listings))
@@ -2122,7 +2237,7 @@ mod tests {
             .check()
             .expect("the defaults check out");
         let tables: Vec<&str> = panels.iter().map(|(name, _)| *name).collect();
-        let expected: Vec<&str> = ["arrange", "panel_picker", "theme_picker"]
+        let expected: Vec<&str> = ["arrange", "panel_picker", "theme_picker", "help_overlay"]
             .into_iter()
             .chain(crate::widgets::KEY_SCOPES.iter().map(|scope| scope.widget))
             .collect();
@@ -2283,6 +2398,78 @@ mod tests {
             .is_ok(),
             "once resize has moved, the key is free"
         );
+    }
+
+    /// The golden test for the help overlay: the default map answers every
+    /// key the old `match` scrolled with.
+    #[test]
+    fn the_default_help_map_is_the_keys_the_overlay_always_scrolled_with() {
+        let map = help_keymap(&KeysConfig::default()).expect("valid");
+        for (code, action) in [
+            (KeyCode::Up, HelpAction::Up),
+            (KeyCode::Char('k'), HelpAction::Up),
+            (KeyCode::Down, HelpAction::Down),
+            (KeyCode::Char('j'), HelpAction::Down),
+            (KeyCode::PageUp, HelpAction::PageUp),
+            (KeyCode::PageDown, HelpAction::PageDown),
+            (KeyCode::Home, HelpAction::First),
+            (KeyCode::End, HelpAction::Last),
+        ] {
+            assert_eq!(map.action(event(code, NONE)), Some(action), "{code:?}");
+        }
+    }
+
+    /// The help key is read first in the overlay, where it opens the key map,
+    /// so a scroll key on it would never arrive — refused, naming both. Once
+    /// the help key has moved, the old one is free.
+    #[test]
+    fn a_help_overlay_key_may_not_be_the_help_key() {
+        let tables = |shell: &str, overlay: &str| KeyTables {
+            shell: keys_config(&format!("[keys]\n{shell}")),
+            scopes: [("help_overlay", toml::from_str(overlay).expect("a table"))].into(),
+        };
+        let error = tables("", "down = \"?\"").check().expect_err("read first");
+        assert!(
+            error.contains("[help_overlay.keys]")
+                && error.contains("`help`")
+                && error.contains("key map"),
+            "{error}"
+        );
+        assert!(tables("help = \"f1\"", "down = \"?\"").check().is_ok());
+        assert!(
+            tables("", "down = \"ctrl+down\"").check().is_ok(),
+            "resizing is not read ahead of the overlay"
+        );
+    }
+
+    /// The footer's scroll hint in each of its states, at the defaults, moved,
+    /// and with nothing bound to scroll down.
+    #[test]
+    fn the_help_scroll_hint_follows_the_keys_and_the_position() {
+        let defaults = help_keymap(&KeysConfig::default()).expect("valid");
+        assert_eq!(
+            help_scroll_hint(&defaults, true, true).as_deref(),
+            Some("↑↓")
+        );
+        assert_eq!(
+            help_scroll_hint(&defaults, true, false).as_deref(),
+            Some("↑")
+        );
+        assert_eq!(
+            help_scroll_hint(&defaults, false, true).as_deref(),
+            Some("↓")
+        );
+
+        let moved = help_keymap(&toml::from_str("up = \"w\"\ndown = \"s\"").expect("a table"))
+            .expect("valid");
+        assert_eq!(
+            help_scroll_hint(&moved, true, true).as_deref(),
+            Some("w / s")
+        );
+        assert_eq!(help_scroll_hint(&moved, false, true).as_deref(), Some("s"));
+
+        let unbound = help_keymap(&toml::from_str("down = []").expect("a table")).expect("valid");
+        assert_eq!(help_scroll_hint(&unbound, false, true), None);
     }
 
     /// Each of the shell's modes has a table in the shipped config listing

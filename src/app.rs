@@ -219,6 +219,8 @@ pub struct App {
     panel_picker_keys: crate::keymap::PanelKeymap<crate::picker::PickerAction>,
     /// The `t` picker's keys, from `[theme_picker.keys]`.
     theme_picker_keys: crate::keymap::PanelKeymap<crate::theme_picker::ThemePickerAction>,
+    /// The help overlay's scroll keys, from `[help_overlay.keys]`.
+    help_keys: crate::keymap::PanelKeymap<crate::keymap::HelpAction>,
     gradients: Gradients,
     slots: Vec<Slot>,
     /// `(row, column)` in `config.layout` for each slot, so a resize knows
@@ -333,6 +335,8 @@ impl App {
             crate::picker::keymap(&config.panel_picker.keys).map_err(anyhow::Error::msg)?;
         let theme_picker_keys =
             crate::theme_picker::keymap(&config.theme_picker.keys).map_err(anyhow::Error::msg)?;
+        let help_keys =
+            crate::keymap::help_keymap(&config.help_overlay.keys).map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
@@ -341,6 +345,7 @@ impl App {
             arrange_keys,
             panel_picker_keys,
             theme_picker_keys,
+            help_keys,
             gradients,
             slots,
             positions,
@@ -800,17 +805,19 @@ impl App {
                 self.keymap_dialog = Some(crate::keymap_dialog::KeymapDialog::new());
                 return;
             }
+            // The scroll keys are `[help_overlay.keys]`, and bind only when
+            // there is something below the fold; every other key closes.
             if self.help_overflow > 0 {
+                use crate::keymap::HelpAction;
                 let page = self.help_viewport.max(1);
-                let moved = match key.code {
-                    KeyCode::Down | KeyCode::Char('j') => Some(self.help_scroll.saturating_add(1)),
-                    KeyCode::Up | KeyCode::Char('k') => Some(self.help_scroll.saturating_sub(1)),
-                    KeyCode::PageDown => Some(self.help_scroll.saturating_add(page)),
-                    KeyCode::PageUp => Some(self.help_scroll.saturating_sub(page)),
-                    KeyCode::Home => Some(0),
-                    KeyCode::End => Some(self.help_overflow),
-                    _ => None,
-                };
+                let moved = self.help_keys.action(key).map(|action| match action {
+                    HelpAction::Down => self.help_scroll.saturating_add(1),
+                    HelpAction::Up => self.help_scroll.saturating_sub(1),
+                    HelpAction::PageDown => self.help_scroll.saturating_add(page),
+                    HelpAction::PageUp => self.help_scroll.saturating_sub(page),
+                    HelpAction::First => 0,
+                    HelpAction::Last => self.help_overflow,
+                });
                 if let Some(to) = moved {
                     self.help_scroll = to.min(self.help_overflow);
                     return;
@@ -1013,6 +1020,11 @@ impl App {
             "theme_picker",
             crate::theme_picker::ACTIONS,
             &self.config.theme_picker.keys,
+        );
+        self.help_keys = PanelKeymap::or_defaults(
+            "help_overlay",
+            crate::keymap::HELP_ACTIONS,
+            &self.config.help_overlay.keys,
         );
         for slot in &mut self.slots {
             slot.panel.set_keys(&self.config);
@@ -2088,37 +2100,45 @@ impl App {
     ///
     /// It says how to close the overlay, and when there is more text than fits,
     /// that scrolling is possible and where in the list you are. Without the
-    /// position there is no way to tell a full list from a truncated one.
+    /// position there is no way to tell a full list from a truncated one — so
+    /// when there is a position it comes first, ahead of the way to the key
+    /// map, and the close hint is short enough that all three fit the
+    /// overlay's fixed width, three-digit counts included.
+    ///
+    /// Each separator leads the part it introduces, so a part dropped for
+    /// want of width takes its `·` with it. The first version put the
+    /// separator after `? key map`, and was two cells too wide besides: an
+    /// overlay that scrolled showed `? key map ·` and nothing else, the
+    /// position and the way out both gone.
+    /// `the_help_footer_keeps_its_position_and_ends_on_no_separator` pins it.
     fn help_footer(&self, theme: &crate::theme::Theme, width: u16) -> Line<'static> {
         let italic = Style::default()
             .fg(theme.muted)
             .add_modifier(Modifier::ITALIC);
-
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
-        let mut parts = Vec::new();
-        // First, so it survives a narrow overlay: the way to the key map, and
-        // the only place it is advertised.
-        if let Some(help) = self.keymap.keys(Action::Help).first() {
-            parts.push(vec![
-                Span::styled(help.to_string(), key_style),
-                Span::styled(" key map · ", italic),
-            ]);
-        }
-        if self.help_overflow == 0 {
-            parts.push(vec![Span::styled("any key to close", italic)]);
-        } else {
+
+        let mut parts: Vec<Vec<Span<'static>>> = Vec::new();
+        let mut push = |mut part: Vec<Span<'static>>| {
+            if !parts.is_empty() {
+                part.insert(0, Span::styled(" · ", italic));
+            }
+            parts.push(part);
+        };
+
+        if self.help_overflow > 0 {
             let more_above = self.help_scroll > 0;
             let more_below = self.help_scroll < self.help_overflow;
-            let arrows = match (more_above, more_below) {
-                (true, true) => "↑↓",
-                (true, false) => "↑",
-                _ => "↓",
-            };
-            parts.push(vec![
-                Span::styled(arrows, key_style),
+            // The keys that scroll, from `[help_overlay.keys]`: `↑↓` at the
+            // defaults, and whatever the reader moved them to otherwise.
+            let arrows = crate::keymap::help_scroll_hint(&self.help_keys, more_above, more_below);
+            // The count is spaced from the keys, and needs no space when
+            // there are none to be spaced from.
+            let gap = if arrows.is_some() { " " } else { "" };
+            push(vec![
+                Span::styled(arrows.unwrap_or_default(), key_style),
                 Span::styled(
                     format!(
-                        " {}/{} · any other key to close",
+                        "{gap}{}/{}",
                         self.help_scroll + self.help_viewport,
                         self.help_overflow + self.help_viewport,
                     ),
@@ -2126,6 +2146,21 @@ impl App {
                 ),
             ]);
         }
+        // The way to the key map, and the only place it is advertised.
+        if let Some(help) = self.keymap.keys(Action::Help).first() {
+            push(vec![
+                Span::styled(help.to_string(), key_style),
+                Span::styled(" key map", italic),
+            ]);
+        }
+        push(vec![Span::styled(
+            if self.help_overflow > 0 {
+                "other keys close"
+            } else {
+                "any key to close"
+            },
+            italic,
+        )]);
         crate::grid::assemble(parts, width)
     }
 }
@@ -4072,7 +4107,8 @@ mod tests {
     fn reload_gives_the_pickers_their_new_keys() {
         let file = KeysFile::new(
             "pickers",
-            "[panel_picker.keys]\nclose = \"x\"\n\n[theme_picker.keys]\nput_back = \"x\"\n",
+            "[panel_picker.keys]\nclose = \"x\"\n\n[theme_picker.keys]\nput_back = \"x\"\n\n\
+             [help_overlay.keys]\ndown = \"s\"\n",
         );
         let mut app = App::new(config_with(&["clocks"])).expect("builds");
         app.write_layout_to(file.0.clone());
@@ -4094,6 +4130,11 @@ mod tests {
         );
         app.handle_key(KeyEvent::from(KeyCode::Char('x')));
         assert!(app.theme_picker.is_none(), "x does");
+        assert_eq!(
+            app.help_keys.action(KeyEvent::from(KeyCode::Char('s'))),
+            Some(crate::keymap::HelpAction::Down),
+            "and the help overlay's"
+        );
     }
 
     /// An open picker is offered every key before resizing is, so a picker
@@ -4121,6 +4162,82 @@ mod tests {
             panic!("an arrange key on a resize key was accepted");
         };
         assert!(error.to_string().contains("[arrange.keys]"), "{error}");
+    }
+
+    /// The help footer an 80x24 terminal actually shows, scrolled to the top,
+    /// the middle and the bottom: the position, the way to the key map and
+    /// the way out, all three, and never a line ending on a separator. It
+    /// shipped in 1.17.0 reading `? key map ·` and nothing else.
+    #[test]
+    fn the_help_footer_keeps_its_position_and_ends_on_no_separator() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = App::new(config_with(&["todo"])).expect("builds");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+        assert!(
+            app.help_overflow > 0,
+            "the test needs an overlay that scrolls"
+        );
+
+        for key in [KeyCode::Home, KeyCode::Down, KeyCode::End] {
+            app.handle_key(KeyEvent::from(key));
+            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let footer = (0..24)
+                .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .find(|row| row.contains("key map"))
+                .expect("the footer row");
+            let text = footer.split('│').nth(1).expect("inside the overlay").trim();
+            assert!(
+                text.contains('/') && text.contains("? key map") && text.contains("close"),
+                "{key:?}: {text}"
+            );
+            assert!(!text.ends_with('·'), "{key:?}: {text}");
+        }
+
+        // Every width the footer could be squeezed to ends on a whole part.
+        for width in 1..60 {
+            let line = app.help_footer(&crate::theme::Theme::default(), width);
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(!text.trim_end().ends_with('·'), "{width}: {text}");
+        }
+    }
+
+    /// A moved scroll key scrolls the overlay, the old one closes it like any
+    /// other key, and the footer names the new one.
+    #[test]
+    fn a_moved_help_scroll_key_scrolls_and_the_old_one_closes() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut config = config_with(&["todo"]);
+        config.help_overlay.keys = toml::from_str("down = \"s\"").expect("a table");
+        let mut app = App::new(config).expect("builds");
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
+        assert!(
+            app.help_overflow > 0,
+            "the test needs an overlay that scrolls"
+        );
+
+        let buffer = terminal.backend().buffer();
+        let footer = (0..24)
+            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .find(|row| row.contains("key map"))
+            .expect("the footer row");
+        let text = footer.split('│').nth(1).expect("inside the overlay").trim();
+        assert!(
+            text.starts_with("s "),
+            "the footer names the new key: {text}"
+        );
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.help_scroll, 1, "s scrolled");
+        assert!(app.show_help);
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert!(!app.show_help, "the old key closes it like any other");
     }
 
     #[test]

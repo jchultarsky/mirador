@@ -766,3 +766,14 @@ sample_secs = 2               # see the note under [cpu]. Sampling the
 # page_down = "pagedown"
 # keep      = ["enter", "space"]
 # put_back  = ["q", "t"]
+
+# The help overlay's scroll keys, while `?` is open and there is more than
+# fits. Any other key closes it, and the key that opened it goes on to the
+# key map, so none of these may be that key.
+[help_overlay.keys]
+# up        = ["up", "k"]
+# down      = ["down", "j"]
+# page_up   = "pageup"
+# page_down = "pagedown"
+# first     = "home"
+# last      = "end"

@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[theme_picker.keys]` moves `t`'s (the cursor, `keep`, `put_back`), and each
   footer shows the key you chose. Esc always closes either picker. The theme
   picker's footer now draws Enter as `↵`, as the rest of mirador does.
+- **The help overlay's scroll keys can be changed** (#284).
+  `[help_overlay.keys]` moves `up`, `down`, `page_up`, `page_down`, `first`
+  and `last`, and the overlay's footer shows the keys you chose. Any other key
+  still closes it. None of them may be the help key, which opens the key map
+  from there. With this, every key mirador reads comes from a table, except
+  Ctrl+C, Esc and `1`–`9`.
+
+### Fixed
+
+- **The help overlay's footer lost its position when the overlay scrolled.**
+  Since 1.17.0, a help overlay with more than fits (any panel with many keys
+  on an 80x24 terminal) had a footer reading only `? key map ·`. The scroll
+  position and the way to close it were dropped for lack of room, leaving a
+  dangling separator. The position now comes first, the close hint is shorter
+  while scrolling, and all three parts fit.
 
 ## [1.18.0] - 2026-09-24
 
