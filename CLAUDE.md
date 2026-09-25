@@ -2287,8 +2287,16 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.18.0` is released**, as a GitHub release with binaries for macOS
+- **`1.19.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
+  and published on crates.io. It is a feature release cut on 2026-09-24,
+  finishing #284: arrange mode's keys (#292), the two pickers' (#293) and
+  the help overlay's (#294) can be changed, so every key mirador reads comes
+  from a table except Ctrl+C, Esc and 1–9. It also fixes the help overlay's
+  footer, which read only `? key map ·` when the overlay scrolled, from
+  1.17.0 to 1.18.0. It does **not** carry the NetBSD battery fix (#255):
+  `starship-battery` was still 0.11.1 on crates.io. 1.18.0 was released
+  the same day, as a GitHub release with binaries for the same five targets
   and published on crates.io. It is a feature release cut on 2026-09-24,
   the second that day, carrying every panel's keys (#284, #288): a
   `[<widget>.keys]` table for each of the fourteen panels with keys, listed
