@@ -2295,9 +2295,19 @@ and had to be added back was the one that did not.
   from a table except Ctrl+C, Esc and 1–9. It also fixes the help overlay's
   footer, which read only `? key map ·` when the overlay scrolled, from
   1.17.0 to 1.18.0. It does **not** carry the NetBSD battery fix (#255):
-  `starship-battery` was still 0.11.1 on crates.io. 1.18.0 was released
-  the same day, as a GitHub release with binaries for the same five targets
-  and published on crates.io. It is a feature release cut on 2026-09-24,
+  `starship-battery` was still 0.11.1 on crates.io. The release run built
+  all five targets and 21 assets, the attestations on an archive and a
+  Windows `-update` binary both trace to `release.yml@refs/tags/v1.19.0`
+  at `ecb4cfb` (the wrong-repository control returned 404 for both), and
+  it was live on crates.io at 02:27 UTC on the 25th — eight minutes after
+  Cut release was dispatched at 02:19. Step 0 was the merged `main` as a
+  release build under tmux at 80×24 with a fresh home: the fixed help
+  footer read `↓ 20/30 · ? key map · other keys close`, the key map,
+  arrange mode and both pickers drew their hints, first run wrote all 19
+  key tables, `q` quit. The footer bug it fixes was found by stage 6's own
+  test, and confirmed against the installed 1.18.0 in tmux before the fix
+  was written. 1.18.0 was released the same day, as a GitHub release with
+  binaries for the same five targets and published on crates.io. It is a feature release cut on 2026-09-24,
   the second that day, carrying every panel's keys (#284, #288): a
   `[<widget>.keys]` table for each of the fourteen panels with keys, listed
   in the key map, reloaded into live panels and reset with the shell's; and
