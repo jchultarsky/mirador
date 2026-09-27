@@ -2287,9 +2287,29 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.19.0` is released**, as a GitHub release with binaries for macOS
+- **`1.19.1` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a feature release cut on 2026-09-24,
+  and published on crates.io. It is a patch release cut on 2026-09-27, and
+  it is **the one carrying the NetBSD battery fix** (#255) that 1.12.1
+  through 1.19.0 all shipped without: `starship-battery` 0.12.0 landed
+  that morning, five minutes after
+  [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168)
+  merged, and mirador bumped to it the same day (#297).
+
+  **The bump was breaking, and the break was worth more than the fix that
+  prompted it.** `State` gained `Paused` — from 0.12.0's *other* fix, for
+  Darwin's paused charging — naming exactly the state mirador had been
+  inferring from `Unknown` with no energy moving. The new arm maps to the
+  same `Flow::Holding` and the old guard stays for platforms still reporting
+  it the old way, so nothing changed on screen; macOS simply stopped being
+  guessed at. **The check that mattered could not fail and had to be
+  replaced**: this MacBook sits at `80%; AC attached; not charging`, so a
+  capture showed `PLUGGED IN` either way — disabling the `Paused` arm on
+  purpose flipped the label to `BATTERY`, which is what proved it live. No
+  unit test covers it, because `read` takes a `starship_battery::Battery`
+  and that has no public constructor.
+
+- **`1.19.0`** was a feature release cut on 2026-09-24,
   finishing #284: arrange mode's keys (#292), the two pickers' (#293) and
   the help overlay's (#294) can be changed, so every key mirador reads comes
   from a table except Ctrl+C, Esc and 1–9. It also fixes the help overlay's
