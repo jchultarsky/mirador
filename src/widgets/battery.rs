@@ -55,8 +55,10 @@ pub(crate) enum Flow {
     /// On mains and full.
     Full,
     /// On mains, not charging, not full — macOS holding at 80% is the common
-    /// case. The library reports this as unknown with no energy moving, which
-    /// is exactly what "plugged in" looks like from the outside.
+    /// case. Since `starship-battery` 0.12.0 the library names that state
+    /// itself; before that it arrived as unknown with no energy moving, which
+    /// is what the fallback in [`read`] still recognises for the platforms
+    /// that report it that way.
     Holding,
     Unknown,
 }
@@ -196,6 +198,11 @@ fn read(b: &starship_battery::Battery) -> Reading {
         State::Charging => Flow::Charging,
         State::Discharging | State::Empty => Flow::Discharging,
         State::Full => Flow::Full,
+        // Plugged in and deliberately holding below full, which macOS reports
+        // once a charge limit is set. Until starship-battery 0.12.0 it arrived
+        // as `Unknown` with no energy moving, so the guard below inferred it;
+        // that guard stays for the platforms still reporting it that way.
+        State::Paused => Flow::Holding,
         State::Unknown if watts.abs() < 0.05 => Flow::Holding,
         State::Unknown => Flow::Unknown,
     };

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The battery panel reads on NetBSD** (#255). `starship-battery` 0.12.0
+  carries the fix for its NetBSD backend, which passed the kernel's plist
+  buffer with the trailing NUL still on it and so parsed nothing. Diagnosed
+  and confirmed on hardware by [@0323pin](https://github.com/0323pin);
+  fixed upstream in
+  [starship/rust-battery#168](https://github.com/starship/rust-battery/pull/168).
+  pkgsrc can drop its local patch.
+
+### Changed
+
+- **A battery holding below full is now reported by the system rather than
+  inferred.** macOS says so directly once a charge limit is set, which
+  `starship-battery` 0.12.0 surfaces as a state of its own; mirador had been
+  reading it as "unknown, with no energy moving". The panel says `PLUGGED IN`
+  either way, and the older inference stays for the platforms that still
+  report it that way.
+
 ## [1.19.0] - 2026-09-24
 
 ### Added
