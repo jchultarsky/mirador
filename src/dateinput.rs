@@ -66,20 +66,26 @@ fn parse_offset(raw: &str, today: Date) -> Result<Option<Date>> {
     }
 
     let Ok(n) = digits.parse::<i32>() else {
-        bail!("`{raw}` has too large a number");
+        bail!("`{raw}` is out of range");
     };
     let n = if negative { -n } else { n };
 
-    let result = match unit {
-        'd' => add_days(today, n),
-        'w' => add_days(today, n.saturating_mul(7)),
-        'm' => today
-            .checked_add(jiff::Span::new().months(n))
-            .map_err(|e| anyhow::anyhow!("{raw} is out of range: {e}")),
-        _ => today
-            .checked_add(jiff::Span::new().years(n))
-            .map_err(|e| anyhow::anyhow!("{raw} is out of range: {e}")),
-    }?;
+    // The fallible setters, never `days`/`weeks`/`months`/`years`: those
+    // **panic** past what a `Span` can hold, and `n` is whatever was typed.
+    // The two failures — too large for a span, or a span that lands outside
+    // the calendar — read the same to the person typing, so they share a
+    // message, and jiff's own wording ("parameter 'years' is not in the
+    // required range…") stays out of a form that has one row for it.
+    let span = jiff::Span::new();
+    let span = match unit {
+        'd' => span.try_days(n),
+        'w' => span.try_weeks(n),
+        'm' => span.try_months(n),
+        _ => span.try_years(n),
+    };
+    let Ok(result) = span.and_then(|span| today.checked_add(span)) else {
+        bail!("`{raw}` is out of range");
+    };
     Ok(Some(result))
 }
 
@@ -111,7 +117,9 @@ fn next_weekday(today: Date, target: Weekday) -> Result<Date> {
 
 /// Add whole days, reporting range errors instead of panicking.
 fn add_days(date: Date, days: i32) -> Result<Date> {
-    date.checked_add(jiff::Span::new().days(days))
+    jiff::Span::new()
+        .try_days(days)
+        .and_then(|span| date.checked_add(span))
         .map_err(|e| anyhow::anyhow!("date is out of range: {e}"))
 }
 
@@ -199,6 +207,37 @@ mod tests {
             msg.contains("+3d"),
             "error should show valid forms, got: {msg}"
         );
+    }
+
+    /// jiff's `Span::days`, `months` and `years` **panic** past what a span
+    /// can hold, and the figure is whatever was typed into the task form:
+    /// `99999y` took the whole dashboard down instead of showing the error the
+    /// form has a line for. Each unit just past jiff's bound and at `i32::MAX`,
+    /// both signs, and one inside a span's range but past the calendar's.
+    #[test]
+    fn an_offset_too_large_for_the_calendar_is_an_error_not_a_panic() {
+        for input in [
+            "7304485d",
+            "-7304485d",
+            "2147483647d",
+            "1043498w",
+            "-1043498w",
+            "2147483647w",
+            "239977m",
+            "-239977m",
+            "2147483647m",
+            "19999y",
+            "-19999y",
+            "2147483647y",
+            "9000y",
+            "99999999999d",
+        ] {
+            let err = parse_due(input, today()).expect_err(input);
+            // The whole message, so jiff's own wording ("parameter 'years' is
+            // not in the required range…") cannot creep back into a form that
+            // has one row for it.
+            assert_eq!(err.to_string(), format!("`{input}` is out of range"));
+        }
     }
 
     #[test]
