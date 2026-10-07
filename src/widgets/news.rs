@@ -364,6 +364,22 @@ impl NewsPanel {
             return;
         };
 
+        // Running the program directly is no protection when the program is
+        // itself a shell, and the README's own Windows example used to be one.
+        if let Some(shell) = shell_name(program) {
+            self.action = Some(format!("not opened: {shell} is a shell"));
+            return;
+        }
+        // Only a web address reaches the program, encoded to the same
+        // characters an OSC 8 link is held to. A feed is somebody else's file,
+        // and `open` and `xdg-open` hand a `file:`, `smb:` or app-specific
+        // scheme to whatever is registered for it; a link starting with `-`
+        // would be read as an option.
+        let Some(link) = crate::link::openable(&link) else {
+            self.action = Some("not opened: not a web link".to_string());
+            return;
+        };
+
         // Run directly, never through a shell, so nothing in a URL can be taken
         // as shell syntax — the same reasoning as `[pomodoro].chime_command`,
         // and the link goes on as one argument rather than being interpolated.
@@ -714,6 +730,34 @@ fn empty_message(
             Style::default().fg(theme.muted),
         ))],
     }
+}
+
+/// The command interpreter `program` names, if it names one.
+///
+/// `cmd` and PowerShell read their arguments as a command line, so a link
+/// handed to them is code: `&`, `;`, `|`, `%VAR%` and `$(…)` are all legal in
+/// a URL, and Rust quotes a Windows argument only when it holds a space or a
+/// tab. Matched on the file name — either separator, `.exe` or not, any case,
+/// and without the trailing dots and spaces Windows ignores. `sh -c` is not on
+/// the list, because a link appended after its script becomes `$0` rather
+/// than part of the script. A wrapper that hands its arguments on to a shell
+/// is not caught; this is a net for the example the README used to give, not
+/// a sandbox around a program the reader chose.
+fn shell_name(program: &str) -> Option<&str> {
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let name = name.trim_end_matches(['.', ' ']);
+    let stem = match name
+        .len()
+        .checked_sub(4)
+        .and_then(|at| Some((at, name.get(at..)?)))
+    {
+        Some((at, ext)) if ext.eq_ignore_ascii_case(".exe") => &name[..at],
+        _ => name,
+    };
+    ["cmd", "powershell", "pwsh"]
+        .iter()
+        .any(|shell| stem.eq_ignore_ascii_case(shell))
+        .then_some(stem)
 }
 
 /// How many rows the footer needs.
@@ -1530,6 +1574,84 @@ mod tests {
         );
     }
 
+    /// A feed is somebody else's file, and the programs people name here —
+    /// `open`, `xdg-open` — dispatch on the scheme to whatever handler is
+    /// registered. So a link has to pass the same allowlist as an OSC 8 link
+    /// before any program sees it: `http`/`https` and RFC 3986 characters.
+    #[test]
+    fn a_link_that_is_not_a_web_address_is_not_opened() {
+        for link in [
+            "file:///etc/passwd",
+            "smb://evil.test/share",
+            "javascript:alert(1)",
+            "-flag-for-the-opener",
+            "https://example.test/\x07",
+            "https://example.test/\x1b]8;;evil",
+        ] {
+            let mut panel = loaded_panel();
+            panel.shown[0].link = link.into();
+            // A command that would succeed, so the refusal is the only way
+            // the action can say anything but "opened".
+            panel.open_command = harmless_command();
+
+            panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+            assert_eq!(
+                panel.action.as_deref(),
+                Some("not opened: not a web link"),
+                "{link:?}"
+            );
+        }
+    }
+
+    /// The link check refuses what is not a web address, not what is merely
+    /// unusual in one. A path in another script and a scheme in capitals
+    /// opened before the check existed, and still do — encoded, so the
+    /// program receives plain ASCII.
+    #[test]
+    fn a_web_address_in_another_script_still_opens() {
+        for link in [
+            "https://de.wikipedia.org/wiki/Gödel",
+            "HTTPS://example.test/a",
+        ] {
+            let mut panel = loaded_panel();
+            panel.shown[0].link = link.into();
+            panel.open_command = harmless_command();
+
+            panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+            assert_eq!(panel.action.as_deref(), Some("opened"), "{link:?}");
+        }
+    }
+
+    /// Running the program directly protects nothing when the program *is* a
+    /// shell: `cmd` and PowerShell read their arguments as a command line, and
+    /// `&`, `;`, `|`, `%` and `$(…)` are all legal in a URL. `cmd /c start`
+    /// was the README's own Windows example, so a reader who followed it gets
+    /// told why rather than a feed getting a command line.
+    #[test]
+    fn a_shell_named_as_the_opener_is_refused() {
+        for (program, said) in [
+            ("cmd", "cmd"),
+            ("CMD.EXE", "CMD"),
+            ("C:\\Windows\\System32\\cmd.exe", "cmd"),
+            ("powershell", "powershell"),
+            ("/usr/local/bin/pwsh", "pwsh"),
+            ("cmd.exe. ", "cmd"),
+        ] {
+            let mut panel = loaded_panel();
+            panel.open_command = vec![program.into(), "/c".into(), "start".into()];
+
+            panel.handle_key(KeyEvent::from(KeyCode::Enter));
+
+            assert_eq!(
+                panel.action.as_deref(),
+                Some(format!("not opened: {said} is a shell").as_str()),
+                "{program}"
+            );
+        }
+    }
+
     /// A command that is not there has to say so rather than looking like it
     /// worked. The reader named it; only they can fix it.
     #[test]
@@ -1603,9 +1725,14 @@ mod tests {
     /// an outside contributor running the suite on their own box to find it
     /// (#174), which is a reminder that a green CI is evidence about the
     /// runner as much as about the code.
+    ///
+    /// **Not `cmd /c exit` either**, which this used on Windows until a shell
+    /// named as the opener started being refused. `whoami` is in System32 on
+    /// every Windows mirador ships to, and with a link as its argument it
+    /// prints an error and exits — the spawn is all these tests look at.
     fn harmless_command() -> Vec<String> {
         if cfg!(windows) {
-            vec!["cmd".into(), "/c".into(), "exit".into()]
+            vec!["whoami".into()]
         } else {
             vec!["true".into()]
         }

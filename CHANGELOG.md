@@ -36,6 +36,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same answer as `9000y`, which never panicked but lands past the year 9999,
   and as a figure too long to read at all.
 
+### Security
+
+- **A news link is opened only if it is a web address, and never by a
+  shell.** The README's Windows example for `[news].open_command` was
+  `["cmd", "/c", "start"]`, and cmd reads its arguments as a command line:
+  a feed whose link held `&` and a command got that command run when you
+  pressed Enter on the headline, and an ordinary link with a query string
+  opened cut short. mirador now refuses to hand a link to `cmd`, PowerShell
+  or `pwsh` and says so in the panel, and the Windows example is
+  `["rundll32", "url.dll,FileProtocolHandler"]`. If you copied the old line,
+  replace it. Separately, Enter now opens only `http` and `https` links:
+  `open` and `xdg-open` would otherwise hand a feed's `file:` or
+  custom-scheme link to whatever program is registered for it. A link in
+  another script is percent-encoded rather than refused, and one holding a
+  control character is not opened.
+
 ## [1.19.1] - 2026-09-27
 
 ### Fixed

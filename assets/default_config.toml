@@ -482,11 +482,13 @@ per_feed        = 4      # kept from each feed, so a chatty one cannot crowd
 # What Enter runs on the selected story, with the link added as the last
 # argument. Empty means Enter opens nothing — mirador launches no program you
 # did not name. Run directly rather than through a shell, so nothing in a URL
-# can be read as shell syntax.
+# can be read as shell syntax. Do not name a shell such as cmd or PowerShell:
+# it would read the link as a command line, and mirador refuses to hand it one.
+# Only http and https links are opened.
 #
-#   open_command = ["open"]                  # macOS
-#   open_command = ["xdg-open"]              # Linux
-#   open_command = ["cmd", "/c", "start"]    # Windows
+#   open_command = ["open"]                                     # macOS
+#   open_command = ["xdg-open"]                                 # Linux
+#   open_command = ["rundll32", "url.dll,FileProtocolHandler"]  # Windows
 #
 # `y` copies the link instead, by asking the terminal (OSC 52). That needs no
 # configuration, but some terminals refuse it and tmux wants `set-clipboard on`.
