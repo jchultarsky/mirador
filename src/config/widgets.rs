@@ -597,8 +597,11 @@ pub struct NewsConfig {
     /// `[pomodoro].chime_command`, run directly rather than through a shell, so
     /// nothing in a URL can be taken as shell syntax.
     ///
-    /// `["open"]` on macOS, `["xdg-open"]` on Linux, `["cmd", "/c", "start"]`
-    /// on Windows — or name a specific browser.
+    /// `["open"]` on macOS, `["xdg-open"]` on Linux,
+    /// `["rundll32", "url.dll,FileProtocolHandler"]` on Windows — or name a
+    /// specific browser. Never a shell: `cmd` and PowerShell read the link as
+    /// a command line, and the news panel refuses to hand them one. Only
+    /// `http` and `https` links are handed over, percent-encoded where needed.
     pub open_command: Vec<String>,
     /// The panel's keys, where the reader has moved them. See
     /// [`crate::keymap::PanelKeymap`].

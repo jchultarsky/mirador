@@ -606,15 +606,26 @@ worked, which is why it says it sent the link rather than claiming it copied one
 
 ```toml
 [news]
-open_command = ["open"]                  # macOS
-# open_command = ["xdg-open"]            # Linux
-# open_command = ["cmd", "/c", "start"]  # Windows
+open_command = ["open"]                                      # macOS
+# open_command = ["xdg-open"]                                # Linux
+# open_command = ["rundll32", "url.dll,FileProtocolHandler"] # Windows
 ```
 
 Empty by default, so mirador launches nothing you did not ask for. It is run
 directly rather than through a shell, and the link goes on as its own argument,
 so nothing in a URL can be read as shell syntax. Same shape as
 `[pomodoro].chime_command`: mirador does not pick the program, you name it.
+
+**Do not name a shell.** `cmd` and PowerShell read their arguments as a
+command line, and `&`, `;`, `|` and `%` are all ordinary in a URL, so a link
+handed to one is a command a feed wrote. mirador refuses to: it says `not
+opened: cmd is a shell` instead. Earlier versions of this README suggested
+`["cmd", "/c", "start"]` for Windows; use the line above, which hands the link
+to Windows' own URL handler without a shell. It has not yet been tried on a
+Windows machine, so if it does not open your browser, please say so in an
+issue. A link that is not an `http` or `https` address is not
+opened at all, and one with characters a URL cannot hold as written is
+percent-encoded first.
 
 If you would rather select the text with the mouse, note that mirador holds the
 mouse — use your terminal's override modifier (Shift in most, Option in macOS

@@ -43,35 +43,76 @@ use unicode_width::UnicodeWidthStr;
 /// terminal is guaranteed to undo, and a headline without a link loses
 /// nothing but the shortcut.
 pub fn linkable(url: &str) -> bool {
-    (url.starts_with("http://") || url.starts_with("https://"))
-        && url.bytes().all(|b| {
-            b.is_ascii_alphanumeric()
-                || matches!(
-                    b,
-                    b'-' | b'.'
-                        | b'_'
-                        | b'~'
-                        | b':'
-                        | b'/'
-                        | b'?'
-                        | b'#'
-                        | b'['
-                        | b']'
-                        | b'@'
-                        | b'!'
-                        | b'$'
-                        | b'&'
-                        | b'\''
-                        | b'('
-                        | b')'
-                        | b'*'
-                        | b'+'
-                        | b','
-                        | b';'
-                        | b'='
-                        | b'%'
-                )
-        })
+    (url.starts_with("http://") || url.starts_with("https://")) && url.bytes().all(uri_byte)
+}
+
+/// A byte RFC 3986 allows in a URI as written: unreserved, reserved, or `%`.
+fn uri_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b':'
+                | b'/'
+                | b'?'
+                | b'#'
+                | b'['
+                | b']'
+                | b'@'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b'%'
+        )
+}
+
+/// A feed link made fit to hand a program as one argument, or `None` when it
+/// is not a web address.
+///
+/// [`linkable`] is the test for a URL that rides inside an escape sequence,
+/// and it refuses anything it would have to change. A link handed to `open`
+/// or `xdg-open` as its own argument has more room: a path in another script
+/// (an IRI, which feeds do carry) or `HTTPS://` in capitals is still a web
+/// address, and refusing it would stop Enter opening links that it opened
+/// before. So the scheme is matched in any case and written in lower case,
+/// and every byte outside RFC 3986's set is percent-encoded — RFC 3987's
+/// mapping from an IRI to a URI, which also keeps non-ASCII away from
+/// openers that read their arguments in a legacy code page. A control
+/// character is refused rather than encoded: no real link holds one. So is a
+/// backslash, which is not in a URL or an IRI at all, and which browsers read
+/// as `/` — encoding it could send the link to a different host from the one
+/// a browser would.
+///
+/// What comes back always passes [`linkable`].
+pub fn openable(url: &str) -> Option<String> {
+    use std::fmt::Write;
+
+    let at = url.find("://")?;
+    let scheme = &url[..at];
+    if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        || url.chars().any(|c| c.is_control() || c == '\\')
+    {
+        return None;
+    }
+    let mut out = scheme.to_ascii_lowercase();
+    for byte in url[at..].bytes() {
+        if uri_byte(byte) {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    linkable(&out).then_some(out)
 }
 
 /// Turns the cells of row `y` from `x0` to `x1` (exclusive) into an OSC 8
@@ -248,5 +289,41 @@ mod tests {
         // symbols has always shown it, links or no links.
         assert_eq!(text, "ab 日 ");
         assert_eq!(without_links("plain"), "plain");
+    }
+
+    /// What `Enter` hands the opener: a web address whatever its script or the
+    /// case of its scheme, encoded so the result is one `linkable` accepts —
+    /// and nothing at all for any other scheme or a smuggled control byte.
+    #[test]
+    fn an_opener_gets_any_web_address_and_nothing_else() {
+        assert_eq!(
+            openable("https://de.wikipedia.org/wiki/Gödel").as_deref(),
+            Some("https://de.wikipedia.org/wiki/G%C3%B6del")
+        );
+        assert_eq!(
+            openable("HTTPS://Example.test/a?b=1&c=2#d").as_deref(),
+            Some("https://Example.test/a?b=1&c=2#d")
+        );
+        assert_eq!(
+            openable("https://example.test/a b").as_deref(),
+            Some("https://example.test/a%20b")
+        );
+        for refused in [
+            "file:///etc/passwd",
+            "smb://evil.test/share",
+            "javascript:alert(1)",
+            "-flag",
+            "",
+            "https://example.test/\x07",
+            "https://example.test/\x1b]8;;evil",
+            "https://example.test/\nsecond",
+            "http://x.test\\@evil.test/",
+        ] {
+            assert_eq!(openable(refused), None, "{refused:?}");
+        }
+        for url in ["https://日本.test/路径?q=値", "http://x.test/\"<>^`{|}"] {
+            let opened = openable(url).expect(url);
+            assert!(linkable(&opened), "{url:?} became {opened:?}");
+        }
     }
 }
