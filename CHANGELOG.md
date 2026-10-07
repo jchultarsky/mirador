@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   everything down with it. It now gets the form's "out of range" line, the
   same answer as `9000y`, which never panicked but lands past the year 9999,
   and as a figure too long to read at all.
+- **The agenda scrolls.** Its scroll keys and the mouse wheel moved a
+  position the list was never drawn with, so the panel always showed its
+  first rows and every event below the bottom edge was out of reach, while
+  the border, `?` and the README all said the keys scrolled. They move the
+  view now, a row at a time, ten with Page Up and Page Down, and to either
+  end with `g` and `G`, and wherever the panel has room the day of the
+  events on screen stays at the top as they scroll. A new day or another
+  calendar starts at the top again.
+  The panel also stops building a line for every event in the window on
+  every frame, and builds only the ones on screen.
 
 ### Security
 

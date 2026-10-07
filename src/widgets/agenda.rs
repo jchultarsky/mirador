@@ -28,7 +28,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, Mou
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span as TextSpan};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph};
 
 use crate::config::AgendaConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
@@ -224,9 +224,16 @@ pub struct AgendaPanel {
     path: Arc<Mutex<PathBuf>>,
     days: u16,
     show_location: bool,
-    scroll: ListState,
+    /// The first row on screen, moved by the scroll keys and the wheel.
+    offset: usize,
+    /// How far `offset` may go, as of the last draw: the rows that did not fit.
+    ///
+    /// Bounded by what was drawn, the rule `news` and `watchlog` follow,
+    /// because only `render` knows the panel's height. It was a `ListState`
+    /// whose selection the keys moved and the list was never drawn with, so
+    /// the agenda never scrolled at all.
+    max_offset: usize,
     status: Option<String>,
-    list_area: Option<Rect>,
     /// The `f` dialog, while it is open.
     asking: Option<crate::prompt::Prompt>,
     /// What the calendar held at the last read, so a new entry can be spotted.
@@ -304,9 +311,9 @@ impl AgendaPanel {
             path,
             days,
             show_location: config.show_location,
-            scroll: ListState::default(),
+            offset: 0,
+            max_offset: 0,
             status: None,
-            list_area: None,
             asking: None,
             known: None,
             pending: Vec::new(),
@@ -393,6 +400,8 @@ impl AgendaPanel {
             Ok(mut guard) => *guard = to,
             Err(poisoned) => *poisoned.into_inner() = to,
         }
+        // Another calendar starts at its top, not wherever this one was left.
+        self.offset = 0;
         self.ask_for_reload();
     }
 
@@ -427,36 +436,43 @@ impl AgendaPanel {
 
     /// The rows to draw: a heading per day, then that day's events.
     ///
-    /// Built as a flat list rather than a tree because a heading and an event
-    /// scroll together and a heading is never selectable — the distinction only
-    /// matters to whoever writes the arrow keys, and here it does not.
-    fn rows(state: &State, now: &Zoned, show_location: bool, width: u16) -> Vec<Row> {
-        let mut rows = Vec::new();
+    /// A flat sequence rather than a tree because a heading and an event
+    /// scroll together, one row each, which is all the offset needs.
+    ///
+    /// An iterator over borrowed events, not a `Vec` of cloned ones. `render`
+    /// counts it to bound the scroll and then builds lines for the rows on
+    /// screen only, so a frame costs what fits in the panel rather than what is
+    /// in the calendar — it used to clone and format every event in the window,
+    /// once a second.
+    fn rows<'a>(state: &'a State, now: &'a Zoned) -> impl Iterator<Item = Row<'a>> + 'a {
         let mut current: Option<Date> = None;
-        for event in &state.events {
+        state.events.iter().flat_map(move |event| {
             let day = event.start.date();
-            if current != Some(day) {
-                rows.push(Row::Day(day));
+            let heading = (current != Some(day)).then(|| {
                 current = Some(day);
-            }
-            rows.push(Row::Event {
-                event: event.clone(),
-                in_progress: event.contains(now),
-                show_location,
-                width,
+                Row::Day(day)
             });
-        }
-        rows
+            heading.into_iter().chain(std::iter::once(Row::Event {
+                event,
+                in_progress: event.contains(now),
+            }))
+        })
+    }
+
+    fn scroll_down(&mut self, rows: usize) {
+        self.offset = self.offset.saturating_add(rows).min(self.max_offset);
+    }
+
+    fn scroll_up(&mut self, rows: usize) {
+        self.offset = self.offset.saturating_sub(rows);
     }
 }
 
-enum Row {
+enum Row<'a> {
     Day(Date),
     Event {
-        event: ical::Event,
+        event: &'a ical::Event,
         in_progress: bool,
-        show_location: bool,
-        width: u16,
     },
 }
 
@@ -652,7 +668,14 @@ impl Panel for AgendaPanel {
         self.seen = now;
         if moved {
             // One copy, at the one moment the data can have changed.
+            let before = self.shown.built_for;
             self.shown = self.snapshot();
+            // A new day is a new agenda. A scroll left over from yesterday
+            // would hide the top of today's — the events happening now — on a
+            // dashboard left open overnight.
+            if self.shown.built_for != before {
+                self.offset = 0;
+            }
             self.note_new_entries();
             // The generation only moves when a read lands, so this is where a
             // reload finishes. Taking the message down here rather than on the
@@ -734,7 +757,6 @@ impl Panel for AgendaPanel {
         }
 
         self.status = None;
-        let len = self.shown.events.len();
         let Some(action) = self.keys.action(key) else {
             return KeyOutcome::Ignored;
         };
@@ -754,21 +776,20 @@ impl Panel for AgendaPanel {
             AgendaAction::ShowPath => {
                 self.status = Some(current_path(&self.path).display().to_string());
             }
-            AgendaAction::Down => crate::selection::down(&mut self.scroll, 1, len),
-            AgendaAction::Up => crate::selection::up(&mut self.scroll, 1, len),
-            AgendaAction::PageDown => crate::selection::down(&mut self.scroll, 10, len),
-            AgendaAction::PageUp => crate::selection::up(&mut self.scroll, 10, len),
-            AgendaAction::Last => crate::selection::down(&mut self.scroll, usize::MAX, len),
-            AgendaAction::First => crate::selection::up(&mut self.scroll, usize::MAX, len),
+            AgendaAction::Down => self.scroll_down(1),
+            AgendaAction::Up => self.scroll_up(1),
+            AgendaAction::PageDown => self.scroll_down(10),
+            AgendaAction::PageUp => self.scroll_up(10),
+            AgendaAction::Last => self.scroll_down(usize::MAX),
+            AgendaAction::First => self.scroll_up(usize::MAX),
         }
         KeyOutcome::Consumed
     }
 
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
-        let len = self.shown.events.len();
         match event.kind {
-            MouseEventKind::ScrollDown => crate::selection::down(&mut self.scroll, 1, len),
-            MouseEventKind::ScrollUp => crate::selection::up(&mut self.scroll, 1, len),
+            MouseEventKind::ScrollDown => self.scroll_down(1),
+            MouseEventKind::ScrollUp => self.scroll_up(1),
             _ => return KeyOutcome::Ignored,
         }
         KeyOutcome::Consumed
@@ -808,7 +829,16 @@ impl Panel for AgendaPanel {
         let (list_area, notice_area) =
             split_for_notices(area, u16::try_from(notices.len()).unwrap_or(0));
 
-        self.list_area = Some(list_area);
+        // Bound the scroll against this frame's rows and height before drawing:
+        // a re-read can shorten the calendar and a resize can lengthen the
+        // panel, and either leaves the old offset showing blank rows.
+        let rows = if state.error.is_some() {
+            0
+        } else {
+            Self::rows(state, &now).count()
+        };
+        self.max_offset = rows.saturating_sub(usize::from(list_area.height));
+        self.offset = self.offset.min(self.max_offset);
         self.draw_list(frame, list_area, state, &now, theme);
 
         if notice_area.height > 0 {
@@ -924,31 +954,61 @@ impl AgendaPanel {
             return;
         }
 
-        let today = state.built_for.unwrap_or_else(|| now.date());
-        let rows = Self::rows(state, now, self.show_location, area.width);
+        self.draw_events(frame, area, state, now, theme);
+    }
 
-        let items: Vec<ListItem> = rows
-            .iter()
+    /// The events themselves, a heading per day, from the scroll offset down.
+    fn draw_events(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &State,
+        now: &Zoned,
+        theme: &crate::theme::Theme,
+    ) {
+        let today = state.built_for.unwrap_or_else(|| now.date());
+
+        // Scrolled into a day, its heading stays on top, covering the row that
+        // has just scrolled under it: an event on its own says `09:00` and not
+        // which of seven days it is. Covering rather than pushing down keeps
+        // every press moving the view, and keeps the last row reachable at the
+        // same offset as without it.
+        //
+        // Not when the row below is the next day's heading. The covered event
+        // was that day's last, and its heading over nothing would say the day
+        // is empty, under a border counting its events; the event shows bare
+        // for that one step instead. Nor in a one-row list, where the heading
+        // would be all there ever was.
+        let height = usize::from(area.height);
+        let mut rows = Self::rows(state, now).skip(self.offset).peekable();
+        let top = rows.next().map(|row| match row {
+            Row::Event { event, .. }
+                if self.offset > 0
+                    && height >= 2
+                    && matches!(rows.peek(), Some(Row::Event { .. })) =>
+            {
+                Row::Day(event.start.date())
+            }
+            row => row,
+        });
+        let items: Vec<ListItem> = top
+            .into_iter()
+            .chain(rows.take(height.saturating_sub(1)))
             .map(|row| match row {
                 Row::Day(day) => ListItem::new(Line::from(TextSpan::styled(
                     crate::grid::truncate(
-                        &crate::glyphs::utility(&day_label(*day, today)),
+                        &crate::glyphs::utility(&day_label(day, today)),
                         usize::from(area.width),
                     ),
                     Style::default()
                         .fg(theme.label)
                         .add_modifier(Modifier::BOLD),
                 ))),
-                Row::Event {
+                Row::Event { event, in_progress } => ListItem::new(event_line(
                     event,
                     in_progress,
-                    show_location,
-                    width,
-                } => ListItem::new(event_line(
-                    event,
-                    *in_progress,
-                    *show_location,
-                    *width,
+                    self.show_location,
+                    area.width,
                     theme,
                 )),
             })
@@ -1123,40 +1183,200 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The wheel scrolls the agenda one row at a time and stops at the ends.
-    /// `handle_mouse` here had never been executed by a test.
+    /// The scroll keys and the wheel have to move what is on screen. Until
+    /// 1.19.2 they moved a `ListState` the list was never drawn with, and the
+    /// test that covered them asserted that state rather than the screen — so
+    /// it passed with nothing moving, and every event below the bottom of the
+    /// panel was out of reach. This one reads the rendered rows.
     #[test]
-    fn the_wheel_scrolls_the_agenda_and_stops_at_the_last_event() {
+    fn scrolling_moves_what_is_on_screen_and_stops_at_both_ends() {
         let mut panel =
             AgendaPanel::new(&AgendaConfig::default(), PathBuf::from("/nonexistent.ics"));
-        let now = Zoned::now();
-        panel.shown.events = (0..3)
-            .map(|i| ical::Event {
-                summary: format!("event {i}"),
-                location: None,
-                start: now.checked_add(Span::new().hours(i + 1)).unwrap(),
-                end: Some(now.checked_add(Span::new().hours(i + 2)).unwrap()),
-                all_day: false,
+        let today = Zoned::now().date();
+        let tomorrow = today.tomorrow().expect("a tomorrow");
+        // Two headings and twelve events: fourteen rows in a panel of six.
+        panel.shown.events = (0..12)
+            .map(|i: i8| {
+                let day = if i < 6 { today } else { tomorrow };
+                event(day, 8 + i % 6, &format!("event {i:02}"), false)
             })
             .collect();
-        let wheel = |kind| MouseEvent {
-            kind,
-            column: 1,
-            row: 1,
-            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        panel.shown.built_for = Some(today);
+        let key = |panel: &mut AgendaPanel, code| {
+            panel.handle_key(KeyEvent::from(code));
         };
-        for _ in 0..10 {
-            panel.handle_mouse(wheel(MouseEventKind::ScrollDown), Rect::new(0, 0, 40, 10));
+        let wheel = |panel: &mut AgendaPanel, kind| {
+            let event = MouseEvent {
+                kind,
+                column: 1,
+                row: 1,
+                modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+            };
+            panel.handle_mouse(event, Rect::new(0, 0, 40, 6));
+        };
+
+        let first = screen(&mut panel, 40, 6);
+        assert!(first[1].contains("event 00"), "{first:#?}");
+        assert!(
+            !first.iter().any(|row| row.contains("event 05")),
+            "{first:#?}"
+        );
+
+        key(&mut panel, KeyCode::Char('j'));
+        let moved = screen(&mut panel, 40, 6);
+        assert!(
+            moved[0].contains("TODAY"),
+            "the day stays on top: {moved:#?}"
+        );
+        assert!(
+            moved[1].contains("event 01"),
+            "j moves the view a row: {moved:#?}"
+        );
+        assert!(moved[5].contains("event 05"), "{moved:#?}");
+
+        for _ in 0..50 {
+            wheel(&mut panel, MouseEventKind::ScrollDown);
+        }
+        let bottom = screen(&mut panel, 40, 6);
+        assert!(
+            bottom[5].contains("event 11"),
+            "the last event is reachable: {bottom:#?}"
+        );
+        assert!(
+            bottom[0].contains("TOMORROW"),
+            "under its day's heading: {bottom:#?}"
+        );
+        assert!(
+            bottom[1].contains("event 07"),
+            "and the view stops there: {bottom:#?}"
+        );
+
+        key(&mut panel, KeyCode::Char('j'));
+        assert_eq!(
+            screen(&mut panel, 40, 6),
+            bottom,
+            "past the end, nothing moves"
+        );
+
+        key(&mut panel, KeyCode::Char('g'));
+        assert_eq!(screen(&mut panel, 40, 6), first, "g returns to the top");
+
+        key(&mut panel, KeyCode::PageDown);
+        assert_eq!(
+            screen(&mut panel, 40, 6),
+            bottom,
+            "ten rows is past the end here"
+        );
+
+        for _ in 0..50 {
+            wheel(&mut panel, MouseEventKind::ScrollUp);
         }
         assert_eq!(
-            panel.scroll.selected(),
-            Some(2),
-            "down stops at the last event"
+            screen(&mut panel, 40, 6),
+            first,
+            "and the wheel stops at the top"
         );
-        for _ in 0..10 {
-            panel.handle_mouse(wheel(MouseEventKind::ScrollUp), Rect::new(0, 0, 40, 10));
+
+        key(&mut panel, KeyCode::Char('G'));
+        assert_eq!(
+            screen(&mut panel, 40, 6),
+            bottom,
+            "G goes to the last event"
+        );
+    }
+
+    /// At every step from the top to the bottom, no heading sits directly on
+    /// another. A day's heading kept on top over its last event would have read
+    /// as "nothing today" above `TOMORROW`, under a border counting today's
+    /// events; at that one step the event shows instead.
+    #[test]
+    fn a_heading_never_stands_over_nothing_while_scrolling() {
+        let mut panel =
+            AgendaPanel::new(&AgendaConfig::default(), PathBuf::from("/nonexistent.ics"));
+        let today = Zoned::now().date();
+        let tomorrow = today.tomorrow().expect("a tomorrow");
+        panel.shown.events = (0..8)
+            .map(|i: i8| {
+                let day = if i < 4 { today } else { tomorrow };
+                event(day, 8 + i % 4, &format!("event {i:02}"), false)
+            })
+            .collect();
+        panel.shown.built_for = Some(today);
+        let heading = |row: &str| row.contains("TODAY") || row.contains("TOMORROW");
+
+        for height in 2..=6 {
+            panel.handle_key(KeyEvent::from(KeyCode::Char('g')));
+            for step in 0..12 {
+                let rows = screen(&mut panel, 40, height);
+                for pair in rows.windows(2) {
+                    assert!(
+                        !(heading(&pair[0]) && heading(&pair[1])),
+                        "height {height}, step {step}: {rows:#?}"
+                    );
+                }
+                panel.handle_key(KeyEvent::from(KeyCode::Char('j')));
+            }
         }
-        assert_eq!(panel.scroll.selected(), Some(0), "up stops at the first");
+    }
+
+    /// A scroll is bounded again on every draw, because the panel can grow and
+    /// the calendar can shrink under it. Left alone, an offset past the new
+    /// end shows blank rows with the top of the agenda out of reach of `k`.
+    #[test]
+    fn a_taller_panel_or_a_shorter_calendar_pulls_the_scroll_back() {
+        let mut panel =
+            AgendaPanel::new(&AgendaConfig::default(), PathBuf::from("/nonexistent.ics"));
+        let today = Zoned::now().date();
+        panel.shown.events = (0..12)
+            .map(|i: i8| event(today, 8 + i, &format!("event {i:02}"), false))
+            .collect();
+        panel.shown.built_for = Some(today);
+        screen(&mut panel, 40, 6);
+        panel.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        screen(&mut panel, 40, 6);
+
+        let taller = screen(&mut panel, 40, 13);
+        assert!(taller[0].contains("TODAY"), "{taller:#?}");
+        assert!(
+            taller[1].contains("event 00"),
+            "all of it fits again: {taller:#?}"
+        );
+
+        panel.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        screen(&mut panel, 40, 6);
+        panel.shown.events.truncate(3);
+        let shorter = screen(&mut panel, 40, 6);
+        assert!(shorter[1].contains("event 00"), "{shorter:#?}");
+        assert!(shorter[3].contains("event 02"), "{shorter:#?}");
+    }
+
+    /// The panel drawn at `width` by `height`, one string per row.
+    fn screen(panel: &mut AgendaPanel, width: u16, height: u16) -> Vec<String> {
+        use crate::panel::RenderContext;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = crate::theme::Theme::default();
+        let gradients = theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("backend");
+        terminal
+            .draw(|f| {
+                panel.render(
+                    f,
+                    Rect::new(0, 0, width, height),
+                    RenderContext {
+                        theme: &theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .expect("draws");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
     }
 
     fn tz() -> TimeZone {
@@ -1338,7 +1558,7 @@ mod tests {
             ..State::default()
         };
         let now = date(2026, 8, 1).at(8, 0, 0, 0).to_zoned(tz()).unwrap();
-        let rows = AgendaPanel::rows(&state, &now, true, 60);
+        let rows: Vec<Row> = AgendaPanel::rows(&state, &now).collect();
 
         let headings = rows.iter().filter(|r| matches!(r, Row::Day(_))).count();
         assert_eq!(headings, 2, "one heading per day, not per event");
@@ -1354,9 +1574,9 @@ mod tests {
         let during = date(2026, 8, 1).at(9, 30, 0, 0).to_zoned(tz()).unwrap();
         let after = date(2026, 8, 1).at(10, 30, 0, 0).to_zoned(tz()).unwrap();
 
-        let marked = |now: &Zoned| match &AgendaPanel::rows(&state, now, true, 60)[1] {
-            Row::Event { in_progress, .. } => *in_progress,
-            Row::Day(_) => unreachable!("row 1 is the event"),
+        let marked = |now: &Zoned| match AgendaPanel::rows(&state, now).nth(1) {
+            Some(Row::Event { in_progress, .. }) => in_progress,
+            _ => unreachable!("row 1 is the event"),
         };
         assert!(marked(&during), "the meeting you are in must stand out");
         assert!(!marked(&after));
