@@ -324,6 +324,12 @@ fn event_from(block: &[&str], tz: &TimeZone) -> Result<Option<Parsed>, String> {
 }
 
 /// Resolve a `DTSTART`-shaped property to a moment, and whether it is all-day.
+///
+/// The moment stays in the zone it was written in — UTC for a trailing `Z`,
+/// the `TZID` zone, or the reader's for a floating time — because that is the
+/// zone a rule repeats in: a meeting at 00:30 on the 1st in London is on the
+/// 31st in New York, and "monthly" means the 1st. [`Recurrence::expand`]
+/// steps in this zone and hands each occurrence over in the reader's.
 fn moment(property: &Property<'_>, tz: &TimeZone) -> Result<(Zoned, bool), String> {
     let value = property.value.trim();
 
@@ -345,11 +351,10 @@ fn moment(property: &Property<'_>, tz: &TimeZone) -> Result<(Zoned, bool), Strin
     // A trailing `Z` means UTC, and beats any TZID — a line carrying both is
     // malformed, and the `Z` is the one with a single meaning.
     if value.ends_with('Z') {
-        let stamp: Timestamp = civil
+        let zoned = civil
             .to_zoned(TimeZone::UTC)
-            .map_err(|e| format!("`{value}`: {e}"))?
-            .timestamp();
-        return Ok((stamp.to_zoned(tz.clone()), false));
+            .map_err(|e| format!("`{value}`: {e}"))?;
+        return Ok((zoned, false));
     }
 
     // A named zone, if we recognise it. An unknown TZID falls back to local
@@ -363,8 +368,7 @@ fn moment(property: &Property<'_>, tz: &TimeZone) -> Result<(Zoned, bool), Strin
 
     let zoned = civil
         .to_zoned(zone)
-        .map_err(|e| format!("`{value}`: {e}"))?
-        .with_time_zone(tz.clone());
+        .map_err(|e| format!("`{value}`: {e}"))?;
     Ok((zoned, false))
 }
 
@@ -372,21 +376,41 @@ fn parse_date(value: &str) -> Option<Date> {
     if value.len() < 8 {
         return None;
     }
-    let year: i16 = value.get(0..4)?.parse().ok()?;
-    let month: i8 = value.get(4..6)?.parse().ok()?;
-    let day: i8 = value.get(6..8)?.parse().ok()?;
+    let year: i16 = digits(value.get(0..4)?)?;
+    let month: i8 = digits(value.get(4..6)?)?;
+    let day: i8 = digits(value.get(6..8)?)?;
     Date::new(year, month, day).ok()
+}
+
+/// A field of plain ASCII digits, parsed. `str::parse` alone also takes a
+/// sign, so `T+1+2+3` read as 01:02:03 and `T12-100` as minute −1.
+fn digits<T: std::str::FromStr>(field: &str) -> Option<T> {
+    if field.is_empty() || !field.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    field.parse().ok()
 }
 
 fn parse_datetime(value: &str) -> Option<DateTime> {
     let day = parse_date(value)?;
     let rest = value.get(8..)?.strip_prefix('T')?;
-    let hour: i8 = rest.get(0..2)?.parse().ok()?;
-    let minute: i8 = rest.get(2..4)?.parse().ok()?;
-    let second: i8 = rest.get(4..6).unwrap_or("00").parse().ok()?;
-    // Leap seconds exist in the wild and jiff will not accept :60.
-    let second = second.min(59);
-    Some(day.at(hour, minute, second, 0))
+    let hour: i8 = digits(rest.get(0..2)?)?;
+    let minute: i8 = digits(rest.get(2..4)?)?;
+    let second: i8 = match rest.get(4..6) {
+        Some(field) => digits(field)?,
+        None => 0,
+    };
+    // Not in RFC 5545, but ISO 8601 allows `24:00:00` for the end of a day and
+    // some exporters write it: the midnight that begins the next one.
+    if (hour, minute, second) == (24, 0, 0) {
+        return Some(day.tomorrow().ok()?.to_datetime(Time::midnight()));
+    }
+    // A leap second, which jiff does not represent: the minute's last second.
+    let second = if second == 60 { 59 } else { second };
+    // `Time::new`, never `Date::at`: that one **panics** on a time that does
+    // not exist, and every figure here comes out of somebody else's file.
+    let time = Time::new(hour, minute, second, 0).ok()?;
+    Some(day.to_datetime(time))
 }
 
 /// Parse an RFC 5545 duration, e.g. `PT1H30M`, `P2D`, `-PT15M`.
@@ -566,6 +590,9 @@ impl Recurrence {
         until: &Zoned,
     ) -> Vec<Event> {
         let skip: BTreeSet<Timestamp> = exceptions.iter().copied().collect();
+        // The rule repeats in its own zone (see `moment`); the reader sees each
+        // occurrence in theirs.
+        let reader = from.time_zone().clone();
         let length: Option<Span> = event
             .end
             .as_ref()
@@ -583,8 +610,8 @@ impl Recurrence {
                 return None;
             }
             Some(Event {
-                start,
-                end,
+                start: start.with_time_zone(reader.clone()),
+                end: end.map(|end| end.with_time_zone(reader.clone())),
                 ..event.clone()
             })
         };
@@ -603,13 +630,32 @@ impl Recurrence {
 
         let mut out = Vec::new();
         let mut produced = 0u32;
-        let mut cursor = event.start.date();
+        let origin = event.start.date();
         let time = event.start.time();
         let tz = event.start.time_zone().clone();
+        let last_day = until.with_time_zone(tz.clone()).date();
 
-        for _ in 0..MAX_STEPS {
-            if cursor > until.date() {
+        for step in 0..MAX_STEPS {
+            // Measured from the origin each time, never from the previous
+            // occurrence. jiff constrains a date that does not exist to the
+            // end of its month, so 31 January plus a month is 28 February —
+            // and stepping on from *that* put every later occurrence on the
+            // 28th.
+            let Some(cursor) = nth_step(origin, *freq, *interval, step) else {
                 break;
+            };
+            if cursor > last_day {
+                break;
+            }
+            // RFC 5545 §3.3.10: an instance on a date that does not exist —
+            // the 31st of a short month, 29 February outside a leap year — is
+            // ignored and not counted. jiff's constrained date is how one
+            // shows itself: the day of the month came back different. Both
+            // days are in the rule's own zone, which is what keeps an event on
+            // the 1st in UTC from being read as the 31st in New York and losing
+            // every short month.
+            if matches!(freq, Freq::Monthly | Freq::Yearly) && cursor.day() != origin.day() {
+                continue;
             }
 
             // For a weekly rule with BYDAY, the cursor names a week and each
@@ -654,37 +700,36 @@ impl Recurrence {
                     out.push(event);
                 }
             }
-
-            // The fallible setters, not `days`/`weeks`/`months`/`years`. Those
-            // **panic** when the figure is outside what a `Span` can hold, and
-            // `INTERVAL` comes straight out of the file: `FREQ=DAILY` with
-            // `INTERVAL=999999999` is 999 million days against a limit of about
-            // seven million, and it brought the dashboard down.
-            //
-            // Deliberately not a constant of our own. Encoding jiff's bounds
-            // here would be a second copy of a number that belongs to a
-            // dependency, and would go quietly wrong the first time that
-            // dependency changed it — the same reasoning as the TOML nesting
-            // bound in `themes`. Ask jiff instead, and treat a refusal as a rule
-            // that has run out of road.
-            let step = Span::new();
-            let step = match freq {
-                Freq::Daily => step.try_days(i64::from(*interval)),
-                Freq::Weekly => step.try_weeks(i64::from(*interval)),
-                Freq::Monthly => step.try_months(i64::from(*interval)),
-                Freq::Yearly => step.try_years(i64::from(*interval)),
-            };
-            let Ok(step) = step else {
-                break;
-            };
-            match cursor.checked_add(step) {
-                Ok(next) => cursor = next,
-                Err(_) => break,
-            }
         }
 
         out
     }
+}
+
+/// The date `step` intervals after `origin`, or `None` once the rule has run
+/// out of road.
+///
+/// The fallible setters, not `days`/`weeks`/`months`/`years`. Those **panic**
+/// when the figure is outside what a `Span` can hold, and `INTERVAL` comes
+/// straight out of the file: `FREQ=DAILY` with `INTERVAL=999999999` is 999
+/// million days against a limit of about seven million, and it brought the
+/// dashboard down.
+///
+/// Deliberately not a constant of our own. Encoding jiff's bounds here would be
+/// a second copy of a number that belongs to a dependency, and would go quietly
+/// wrong the first time that dependency changed it — the same reasoning as the
+/// TOML nesting bound in `themes`. Ask jiff instead, and treat a refusal as a
+/// rule that has run out of road.
+fn nth_step(origin: Date, freq: Freq, interval: i32, step: usize) -> Option<Date> {
+    let n = i64::from(interval).checked_mul(i64::try_from(step).ok()?)?;
+    let span = Span::new();
+    let span = match freq {
+        Freq::Daily => span.try_days(n),
+        Freq::Weekly => span.try_weeks(n),
+        Freq::Monthly => span.try_months(n),
+        Freq::Yearly => span.try_years(n),
+    };
+    origin.checked_add(span.ok()?).ok()
 }
 
 /// Most steps a single rule may take while expanding.
@@ -763,7 +808,10 @@ mod tests {
     /// strings for the byte-slicing panic that `starts_with_ci` now prevents,
     /// the quoted colons for `Property::parse`'s quote tracking, the enormous
     /// `COUNT` and `INTERVAL` for the expansion bound, the lone `BEGIN:` and
-    /// `END:` for the nesting counter.
+    /// `END:` for the nesting counter, and the hours, minutes and seconds out
+    /// of range — `25`, `60`, and a `-` where a digit belongs — for the panic
+    /// jiff's `Date::at` raised on them. The corpus had varied every part of a
+    /// date-time except the time, which is how that panic survived Phase 2.
     const FRAGMENTS: &[&str] = &[
         "BEGIN:VEVENT",
         "END:VEVENT",
@@ -799,6 +847,15 @@ mod tests {
         "RRULE:",
         "EXDATE:20260601T120000Z",
         "EXDATE:nonsense",
+        "DTSTART:20260601T250000Z",
+        "DTSTART:20260601T126000Z",
+        "DTSTART:20260601T12-100Z",
+        "DTEND:20260601T240000",
+        "EXDATE:20260601T1200-5",
+        "RRULE:FREQ=DAILY;UNTIL=20260610T250000Z",
+        "DTSTART:20260131T090000",
+        "RRULE:FREQ=MONTHLY",
+        "RRULE:FREQ=YEARLY;INTERVAL=3",
         "abcé",
         "ab日本",
         "日本語日本語",
@@ -1313,6 +1370,180 @@ END:VEVENT",
                 date(2026, 8, 14),
             ]
         );
+    }
+
+    /// jiff's `Date::at` panics on a time that does not exist, and the hour,
+    /// minute and second come straight out of somebody else's file. The panic
+    /// landed on the agenda's reader thread: the terminal was restored under a
+    /// dashboard still drawing, and the agenda never read the file again. A
+    /// sign is not a digit either, though `str::parse` takes one.
+    #[test]
+    fn an_impossible_time_is_skipped_and_said_rather_than_a_panic() {
+        for value in [
+            "20260601T250000Z",
+            "20260601T240100",
+            "20260601T126000Z",
+            "20260601T120099",
+            "20260601T12-100Z",
+            "20260601T1200-5",
+            "20260601T-10000",
+            "20260601T+1+2+3",
+        ] {
+            let c = parse_all(&format!(
+                "BEGIN:VEVENT\r\nDTSTART:{value}\r\nSUMMARY:x\r\nEND:VEVENT"
+            ));
+            assert!(c.events.is_empty(), "{value}: {:?}", c.events);
+            assert!(
+                c.skipped.iter().any(|reason| reason.contains(value)),
+                "{value} should be reported as unreadable: {:?}",
+                c.skipped
+            );
+        }
+    }
+
+    /// `T240000` is not in RFC 5545, but ISO 8601 allows it for the end of a
+    /// day and some exporters write it. Refusing it lost the whole event when
+    /// it was the `DTEND`, and cut the last day off an `UNTIL`; it is the
+    /// midnight that begins the next day.
+    #[test]
+    fn twenty_four_hundred_is_the_midnight_that_ends_the_day() {
+        let c = parse_all(
+            "BEGIN:VEVENT\r\nDTSTART:20260601T090000\r\nDTEND:20260601T240000\r\n\
+             SUMMARY:all day long\r\nEND:VEVENT",
+        );
+        assert_eq!(c.events.len(), 1, "skipped: {:?}", c.skipped);
+        let end = c.events[0].end.as_ref().expect("an end");
+        assert_eq!((end.date(), end.hour()), (date(2026, 6, 2), 0));
+
+        let c = parse_all(
+            "BEGIN:VEVENT\r\nDTSTART:20260601T090000\r\n\
+             RRULE:FREQ=DAILY;UNTIL=20260610T240000\r\nSUMMARY:x\r\nEND:VEVENT",
+        );
+        let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+        assert_eq!(days, (1..=10).collect::<Vec<i8>>(), "the 10th is inside it");
+    }
+
+    /// A broken time in `UNTIL` falls back to the date it carries, read the way
+    /// this parser reads a date-only `UNTIL` — midnight UTC at its start — so a
+    /// broken rule ends early rather than running on. A time the `.ics` gets
+    /// wrong in `EXDATE` is ignored like any other unreadable exception.
+    #[test]
+    fn a_broken_time_in_until_ends_the_rule_at_its_date() {
+        let c = parse_all(
+            "BEGIN:VEVENT\r\nDTSTART:20260601T090000\r\n\
+             RRULE:FREQ=DAILY;UNTIL=20260610T250000Z\r\nSUMMARY:x\r\nEND:VEVENT",
+        );
+        let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+        assert_eq!(days, (1..=9).collect::<Vec<i8>>());
+    }
+
+    /// RFC 5545 §3.3.10: an instance that falls on a date which does not exist
+    /// is ignored and not counted. jiff clamps 31 January plus a month to 28
+    /// February instead, and stepping on from the clamped date put every later
+    /// occurrence on the 28th — a rent reminder three days early for the rest
+    /// of the year, and the real ones gone.
+    #[test]
+    fn a_monthly_rule_skips_the_months_that_lack_its_day() {
+        let (from, to) = window((2026, 1, 1), (2026, 12, 31));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART:20260131T090000\r\n\
+                 RRULE:FREQ=MONTHLY;COUNT=4\r\nSUMMARY:rent\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        let days: Vec<_> = c.events.iter().map(|e| e.start.date()).collect();
+        assert_eq!(
+            days,
+            vec![
+                date(2026, 1, 31),
+                date(2026, 3, 31),
+                date(2026, 5, 31),
+                date(2026, 7, 31),
+            ],
+            "February, April and June have no 31st, and COUNT does not spend itself on them"
+        );
+    }
+
+    /// A rule repeats in the zone it was written in. An event at 03:00 UTC on
+    /// the 1st is on the 31st, or the 30th, or the 28th, in New York; read
+    /// there, "the month has no 31st" would have dropped five real meetings a
+    /// year. Expanded in UTC, every month has a 1st.
+    #[test]
+    fn a_monthly_rule_keeps_its_day_in_its_own_zone() {
+        let (from, to) = window((2026, 1, 1), (2027, 1, 1));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART:20260201T030000Z\r\n\
+                 RRULE:FREQ=MONTHLY;COUNT=12\r\nSUMMARY:x\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        // February 2026 to January 2027: the twelfth, 1 January at 03:00 UTC,
+        // is the evening of 31 December in New York, inside the window.
+        assert_eq!(c.events.len(), 12, "skipped: {:?}", c.skipped);
+        for event in &c.events {
+            let utc = event.start.with_time_zone(TimeZone::UTC);
+            assert_eq!((utc.day(), utc.hour()), (1, 3), "{}", event.start);
+            assert_eq!(
+                event.start.time_zone(),
+                &tz(),
+                "and is shown in the reader's zone"
+            );
+        }
+        assert_eq!(c.events[0].start.date(), date(2026, 1, 31));
+    }
+
+    /// `BYDAY` names weekdays in the rule's own zone. A Monday 00:30 meeting
+    /// in London is a Sunday evening one in New York; expanded in New York,
+    /// `BYDAY=MO` put it on Monday evenings instead, a day late every week.
+    #[test]
+    fn a_weekly_rule_names_its_weekdays_in_its_own_zone() {
+        let (from, to) = window((2026, 8, 1), (2026, 9, 1));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART;TZID=Europe/London:20260803T003000\r\n\
+                 RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=3\r\nSUMMARY:x\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        let shown: Vec<_> = c
+            .events
+            .iter()
+            .map(|e| (e.start.date(), e.start.hour(), e.start.minute()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (date(2026, 8, 2), 19, 30),
+                (date(2026, 8, 9), 19, 30),
+                (date(2026, 8, 16), 19, 30),
+            ]
+        );
+    }
+
+    /// The same rule a year at a time: a birthday on 29 February happens in
+    /// leap years, not on the 28th of the others.
+    #[test]
+    fn a_yearly_rule_on_the_twenty_ninth_of_february_waits_for_a_leap_year() {
+        let (from, to) = window((2024, 1, 1), (2029, 1, 1));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20240229\r\n\
+                 RRULE:FREQ=YEARLY\r\nSUMMARY:leap\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        let days: Vec<_> = c.events.iter().map(|e| e.start.date()).collect();
+        assert_eq!(days, vec![date(2024, 2, 29), date(2028, 2, 29)]);
     }
 
     #[test]
