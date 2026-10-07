@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calendar starts at the top again.
   The panel also stops building a line for every event in the window on
   every frame, and builds only the ones on screen.
+- **`SECURITY.md` describes the program that ships.** It still called
+  mirador pre-1.0 with 0.7.x supported, said it contacts exactly two hosts
+  when the default dashboard also reads three news feeds, and left feeds,
+  calendars and plugin output out of the inputs worth reporting on. It now
+  lists every host by panel, every file read and written, every program it
+  can start, and puts a hostile feed, `.ics` file or plugin message in
+  scope.
 
 ### Security
 
