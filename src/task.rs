@@ -779,7 +779,8 @@ energy_level = \"high\"
         let id = store.add(task(0, "done thing"));
         store.with_task(id, |t| t.toggle_done(today()));
 
-        assert!(store.view(SortMode::Smart, false, "", today()).is_empty());
+        let view = store.view(SortMode::Smart, false, "", today());
+        assert!(view.is_empty(), "{view:?}");
         assert_eq!(store.view(SortMode::Smart, true, "", today()).len(), 1);
     }
 

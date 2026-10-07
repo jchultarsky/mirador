@@ -424,7 +424,8 @@ mod tests {
         // Not XML at all.
         assert!(parse("<<<not xml").is_err() || parse("<<<not xml").unwrap().is_empty());
         // Valid XML, no items.
-        assert!(parse("<html><body>hello</body></html>").unwrap().is_empty());
+        let stories = parse("<html><body>hello</body></html>").unwrap();
+        assert!(stories.is_empty(), "{stories:?}");
     }
 
     #[test]

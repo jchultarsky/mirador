@@ -75,6 +75,22 @@ This cuts the other way too, and it is worth knowing before you go hunting.
 old floor does not. That is the gate working, not CI failing. Compare the
 `rust-version` each side is using before concluding anything is broken.
 
+**The lint and docs jobs run a pinned toolchain, 1.99.0, not floating
+`stable`.** Both deny warnings, so on a floating toolchain the first pull
+request after each Rust release goes red for code it did not touch: 1.99,
+released on 2026-10-01, four days after 1.19.1 was cut, added
+`clippy::assert_is_empty`, and 21 test assertions that had passed for months
+failed it. A local clippy on a newer compiler can therefore report lints CI
+does not, which is the disagreement above arriving from the other side.
+Moving the pin is a deliberate commit, and the version is written in five
+places in `.github/workflows/ci.yml` — each job's `toolchain` and step name,
+and the lint job's comment — plus `.github/dependabot.yml` and this
+paragraph. Run clippy and rustdoc on the new version and fix what they
+report in the same commit. That lint is silenced by any assertion message,
+so give it one that prints the value, `assert!(v.is_empty(), "{v:?}")`,
+which is what the lint wants; its own suggestion,
+`assert_eq!(v, [] as [T; 0])`, reads worse.
+
 The crate enables `clippy::pedantic`. When a lint is genuinely wrong, add a
 targeted `#[allow]` *with a comment saying why* — do not widen the allow list
 in `Cargo.toml`.

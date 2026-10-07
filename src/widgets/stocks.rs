@@ -1219,7 +1219,11 @@ mod tests {
     #[test]
     fn a_symbol_can_be_added_and_persists() {
         let (mut p, guard) = panel("add", &[]);
-        assert!(p.watchlist.symbols().is_empty());
+        assert!(
+            p.watchlist.symbols().is_empty(),
+            "{:?}",
+            p.watchlist.symbols()
+        );
 
         press(&mut p, KeyCode::Char('a'));
         assert!(p.captures_input(), "the entry field must swallow globals");
@@ -1371,7 +1375,11 @@ mod tests {
         let (mut p, _g) = panel("last", &["AAPL"]);
         press(&mut p, KeyCode::Char('d'));
         press(&mut p, KeyCode::Char('y'));
-        assert!(p.watchlist.symbols().is_empty());
+        assert!(
+            p.watchlist.symbols().is_empty(),
+            "{:?}",
+            p.watchlist.symbols()
+        );
         assert_eq!(p.list_state.selected(), None);
     }
 

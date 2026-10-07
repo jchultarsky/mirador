@@ -1721,7 +1721,7 @@ mod tests {
         // Esc is not in the map and still clears a filter.
         p.filter = "task".into();
         assert_eq!(press_outcome(&mut p, KeyCode::Esc), KeyOutcome::Consumed);
-        assert!(p.filter.is_empty());
+        assert!(p.filter.is_empty(), "{:?}", p.filter);
     }
 
     fn press_outcome(panel: &mut TodoPanel, code: KeyCode) -> KeyOutcome {
@@ -2096,7 +2096,7 @@ mod tests {
         press(&mut p, KeyCode::Char('d'));
         press(&mut p, KeyCode::Char('y'));
         assert!(p.store.tasks().is_empty());
-        assert!(p.view.is_empty());
+        assert!(p.view.is_empty(), "{:?}", p.view);
     }
 
     #[test]

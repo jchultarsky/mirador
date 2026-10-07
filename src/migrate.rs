@@ -352,7 +352,7 @@ mod tests {
         let (out, changes) = migrate_text("[network]\nrx = \"green\"\n");
         assert!(out.contains("rx = \"green\""));
         assert!(!out.contains("# rx"), "must not touch another section");
-        assert!(changes.is_empty());
+        assert!(changes.is_empty(), "{changes:?}");
     }
 
     #[test]
@@ -370,7 +370,7 @@ mod tests {
         let input = "[weather]\nlocation = \"Boston\"\nforecast_hours = 8\n";
         let (out, changes) = migrate_text(input);
         assert_eq!(out, input);
-        assert!(changes.is_empty());
+        assert!(changes.is_empty(), "{changes:?}");
     }
 
     #[test]

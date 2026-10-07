@@ -1925,7 +1925,8 @@ mod tests {
                 Some(Action::Quit)
             );
         }
-        assert!(map.keys(Action::Theme).is_empty());
+        let keys = map.keys(Action::Theme);
+        assert!(keys.is_empty(), "{keys:?}");
         let hints = map.bindings();
         assert!(hints.iter().any(|b| b.key == "q" && b.primary));
         assert!(hints.iter().any(|b| b.key == "x" && !b.primary));

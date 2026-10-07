@@ -1658,7 +1658,7 @@ mod tests {
             unreachable!()
         };
         assert!(form.error.is_some(), "and say why");
-        assert!(p.store.notes().is_empty());
+        assert!(p.store.notes().is_empty(), "{:?}", p.store.notes());
     }
 
     #[test]
@@ -1947,7 +1947,7 @@ mod tests {
         press(&mut p, KeyCode::Esc);
         p.filter = "note".into();
         press(&mut p, KeyCode::Esc);
-        assert!(p.filter.is_empty());
+        assert!(p.filter.is_empty(), "{:?}", p.filter);
     }
 
     /// A note is prose somebody wrote, and prose contains emoji. Handing that

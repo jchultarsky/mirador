@@ -587,7 +587,8 @@ mod tests {
     #[test]
     fn meter_handles_zero_width_and_zero_maximum() {
         let g = Gradient::flat(c(1, 1, 1));
-        assert!(meter_spans(5, 10, 0, &g, Style::default()).is_empty());
+        let spans = meter_spans(5, 10, 0, &g, Style::default());
+        assert!(spans.is_empty(), "{spans:?}");
         assert_eq!(meter_spans(5, 0, 4, &g, Style::default()).len(), 4);
     }
 }
