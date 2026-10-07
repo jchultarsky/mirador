@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A calendar with an impossible time no longer crashes the agenda.** An
+  hour of 25, a minute of 60, or a sign where a digit belongs in a
+  `DTSTART`, `DTEND`, `EXDATE` or `UNTIL` made the time library panic on the
+  agenda's reader thread, which left the terminal half-restored under a
+  dashboard still drawing and the agenda never reading the file again. Such
+  an event is now skipped and counted with the others the agenda could not
+  read; a broken `EXDATE` is ignored and a broken `UNTIL` ends the rule at
+  the date it carries. `T240000`, which ISO 8601 allows for the end of a day
+  and some exporters write, is read as the midnight that begins the next.
+- **A monthly event on the 29th, 30th or 31st stays on its day.** The rule
+  was stepped from each occurrence to the next, and a month without that day
+  is clamped to its last, so 31 January became 28 February and then the 28th
+  of every month after. Each occurrence is now measured from the first, and a
+  month that lacks the day is skipped and not counted, as RFC 5545 says. A
+  yearly event on 29 February appears in leap years only.
+- **A repeating event repeats in its own time zone.** Rules were expanded in
+  the reader's zone, so a meeting on Mondays at 00:30 in London
+  (`BYDAY=MO`) appeared in New York on Monday evenings, a day late every
+  week. Each occurrence is now worked out in the zone the event was written
+  in, then shown in yours.
+
 ## [1.19.1] - 2026-09-27
 
 ### Fixed
