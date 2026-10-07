@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`BYDAY=MO`) appeared in New York on Monday evenings, a day late every
   week. Each occurrence is now worked out in the zone the event was written
   in, then shown in yours.
+- **A due date too far away is refused instead of crashing the dashboard.**
+  Typing an offset past what the time library can hold into a task's due
+  field — `99999y`, `999999m`, `9999999d` or `2000000w` — panicked and took
+  everything down with it. It now gets the form's "out of range" line, the
+  same answer as `9000y`, which never panicked but lands past the year 9999,
+  and as a figure too long to read at all.
 
 ## [1.19.1] - 2026-09-27
 
