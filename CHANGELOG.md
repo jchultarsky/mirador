@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.2] - 2026-10-07
+
 ### Fixed
 
 - **A calendar with an impossible time no longer crashes the agenda.** An
@@ -2132,7 +2134,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.19.1...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.19.2...HEAD
+[1.19.2]: https://github.com/jchultarsky/mirador/compare/v1.19.1...v1.19.2
 [1.19.1]: https://github.com/jchultarsky/mirador/compare/v1.19.0...v1.19.1
 [1.19.0]: https://github.com/jchultarsky/mirador/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/jchultarsky/mirador/compare/v1.17.0...v1.18.0
