@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn a_missing_file_loads_as_an_empty_store() {
         let (s, _g) = store("missing");
-        assert!(s.notes().is_empty());
+        assert!(s.notes().is_empty(), "{:?}", s.notes());
     }
 
     #[test]
@@ -359,7 +359,8 @@ mod tests {
 
         assert_eq!(s.view("invoice"), vec![id], "the body must be searchable");
         assert_eq!(s.view("MEETING"), vec![id], "matching is case-insensitive");
-        assert!(s.view("nothing here").is_empty());
+        let found = s.view("nothing here");
+        assert!(found.is_empty(), "{found:?}");
         assert_eq!(s.view("   "), vec![id], "a blank filter matches everything");
     }
 

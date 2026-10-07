@@ -636,7 +636,7 @@ mod tests {
         let body = r#"{"chart":{"result":[{"meta":{"symbol":"X",
                        "regularMarketPrice":5.0,"previousClose":4.0}}],"error":null}}"#;
         let q = parse_chart(body).unwrap();
-        assert!(q.series.is_empty());
+        assert!(q.series.is_empty(), "{:?}", q.series);
         assert!((q.change() - 1.0).abs() < f64::EPSILON);
     }
 
@@ -763,7 +763,7 @@ mod tests {
         let (mut list, _g) = watchlist("blank", &[]);
         assert!(!list.add(""));
         assert!(!list.add("   "));
-        assert!(list.symbols().is_empty());
+        assert!(list.symbols().is_empty(), "{:?}", list.symbols());
     }
 
     #[test]

@@ -72,10 +72,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
+      # Pinned, not `stable`, and the reason is the `-D warnings` below. A new
+      # stable release adds lints, and on a floating toolchain the first pull
+      # request after it goes red for code it did not touch: Rust 1.99, out
+      # four days after 1.19.1 was cut, added `clippy::assert_is_empty`, and
+      # 21 test assertions that had passed for months would have failed the
+      # next PR. Moving this number is a deliberate commit that also fixes
+      # whatever the new version reports; CLAUDE.md lists every place it is
+      # written. Keep the docs job below on the same version.
+      - name: Install Rust 1.99
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
         with:
-          toolchain: stable
+          toolchain: "1.99.0"
           components: rustfmt, clippy
 
       - name: Cache cargo
@@ -111,10 +119,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Rust
+      # Pinned for the same reason as the lint job, and to the same version:
+      # this one denies rustdoc's warnings.
+      - name: Install Rust 1.99
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch @ 2026-07
         with:
-          toolchain: stable
+          toolchain: "1.99.0"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

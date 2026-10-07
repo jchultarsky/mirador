@@ -1236,7 +1236,7 @@ END:VEVENT",
     #[test]
     fn an_event_without_a_start_is_skipped_without_being_called_an_error() {
         let c = parse_all("BEGIN:VEVENT\r\nSUMMARY:no start\r\nEND:VEVENT");
-        assert!(c.events.is_empty());
+        assert!(c.events.is_empty(), "{:?}", c.events);
         assert!(c.skipped.is_empty(), "not worth reporting: {:?}", c.skipped);
     }
 
@@ -1250,7 +1250,7 @@ END:VEVENT",
     #[test]
     fn an_unreadable_time_is_reported_rather_than_swallowed() {
         let c = parse_all("BEGIN:VEVENT\r\nDTSTART:not-a-date\r\nSUMMARY:x\r\nEND:VEVENT");
-        assert!(c.events.is_empty());
+        assert!(c.events.is_empty(), "{:?}", c.events);
         assert_eq!(c.skipped.len(), 1, "the reason must survive");
         assert!(c.skipped[0].contains("not-a-date"), "{:?}", c.skipped);
     }
@@ -1401,7 +1401,7 @@ END:VEVENT",
             started.elapsed() < std::time::Duration::from_secs(5),
             "expansion did not terminate promptly"
         );
-        assert!(!c.events.is_empty());
+        assert!(!c.events.is_empty(), "skipped: {:?}", c.skipped);
         assert!(c.events.len() <= 4_000, "the cap did not hold");
     }
 

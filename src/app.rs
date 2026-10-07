@@ -3473,7 +3473,8 @@ mod tests {
     #[test]
     fn degenerate_distributions_do_not_panic() {
         assert_eq!(distribute(0, &[1, 1], &[None, None]), vec![0, 0]);
-        assert!(distribute(10, &[], &[]).is_empty());
+        let shares = distribute(10, &[], &[]);
+        assert!(shares.is_empty(), "{shares:?}");
         assert_eq!(
             distribute(10, &[0, 0], &[None, None]).iter().sum::<u16>(),
             10

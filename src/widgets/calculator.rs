@@ -807,7 +807,7 @@ mod tests {
         enter(&mut panel);
         assert_eq!(panel.tape.len(), 1);
         assert_eq!(panel.tape[0].expression, "2+3*4");
-        assert!(panel.typing.is_empty());
+        assert!(panel.typing.is_empty(), "{:?}", panel.typing);
     }
 
     /// The tape feeds like a tape: newest at the bottom, beside the cursor.
