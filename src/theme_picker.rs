@@ -294,17 +294,17 @@ impl ThemePicker {
 
         lines.push(Line::default());
         // The keep key is the one `[theme_picker.keys]` gave it; Esc always
-        // puts the theme back, whatever else does.
+        // puts the theme back, whatever else does. Both are spelled as `Key`
+        // spells them and never re-cased: `y` and `Y` are different keys, and
+        // the label face once turned a `keep = "y"` into a footer naming the
+        // one that does nothing.
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let mut footer = Vec::new();
         if let Some(keep) = self.keys.keys(ThemePickerAction::Keep).first() {
-            footer.push(Span::styled(
-                crate::glyphs::utility(&keep.to_string()),
-                key_style,
-            ));
+            footer.push(Span::styled(keep.to_string(), key_style));
             footer.push(Span::styled(" keep  ", Style::default().fg(theme.muted)));
         }
-        footer.push(Span::styled(crate::glyphs::utility("esc"), key_style));
+        footer.push(Span::styled("Esc", key_style));
         footer.push(Span::styled(" put back", Style::default().fg(theme.muted)));
         lines.push(Line::from(footer));
         lines
@@ -550,7 +550,9 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect();
-        assert_eq!(footer, "Y keep  ESC put back");
+        // As `Key` spells it, never re-cased: `y` and `Y` are different keys,
+        // and the footer used to name the one that does nothing.
+        assert_eq!(footer, "y keep  Esc put back");
     }
 
     #[test]

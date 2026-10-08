@@ -93,10 +93,13 @@ Watch Log event or stderr diagnostic.
 Each placement owns one child process. Stdin and stdout carry UTF-8 JSON Lines;
 stderr is a diagnostic stream. On removal or normal application exit, Mirador
 sends `shutdown`, allows 300 ms for cleanup, then terminates a child that
-remains. The exit path waits — a 750 ms join grace, then 250 ms to abort,
-about one second in all — for the process supervisor to finish that
-grace-then-terminate sequence before terminal restoration. A failed panel can
-be restarted with `r`.
+remains. A well-formed message received after `shutdown` is ignored, so a
+frame already in flight does not cut the cleanup short; one the host would
+refuse at any time — malformed, over a bound below, or naming another
+protocol — still ends the process at once. The exit path waits — a 750 ms
+join grace, then 250 ms to abort, about one second in all — for the process
+supervisor to finish that grace-then-terminate sequence before terminal
+restoration. A failed panel can be restarted with `r`.
 
 ## Bounds
 

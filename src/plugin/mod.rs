@@ -473,9 +473,17 @@ impl PluginPanel {
                 height,
             );
         }
-        if !shared.stderr.trim().is_empty() && lines.len() < usize::from(height) {
-            lines.push(Line::from(""));
-            for line in shared.stderr.lines().take(3) {
+        let room = usize::from(height).saturating_sub(lines.len());
+        if !shared.stderr.trim().is_empty() && room > 0 {
+            // The blank row is spacing and the stderr is information, so with
+            // room for only one it is the spacing that goes.
+            let room = if room > 1 {
+                lines.push(Line::from(""));
+                room - 1
+            } else {
+                room
+            };
+            for line in stderr_tail(&shared.stderr, width, room) {
                 push_status_text(
                     &mut lines,
                     line,
@@ -721,6 +729,34 @@ impl Drop for PluginPanel {
     }
 }
 
+/// The lines of a plugin's stderr worth showing in `rows` rows of `width`:
+/// the last three that are not blank, with the earliest given up first when
+/// they wrap to more rows than there are.
+///
+/// The end is the part that says what went wrong — a traceback finishes on
+/// its error. This showed the first three through 1.19.2, so a plugin that
+/// logged its way through startup and then died showed the startup for ever.
+fn stderr_tail(stderr: &str, width: u16, rows: usize) -> Vec<&str> {
+    let mut tail = Vec::with_capacity(3);
+    let mut used = 0usize;
+    for line in stderr
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(3)
+    {
+        let needs = usize::from(crate::grid::wrapped_height(line, width));
+        // The last line is kept whatever it costs; it is the one that matters.
+        if !tail.is_empty() && used.saturating_add(needs) > rows {
+            break;
+        }
+        used = used.saturating_add(needs);
+        tail.push(line);
+    }
+    tail.reverse();
+    tail
+}
+
 fn push_status_text(
     lines: &mut Vec<Line<'static>>,
     text: &str,
@@ -732,10 +768,15 @@ fn push_status_text(
     if remaining == 0 {
         return;
     }
-    for row in crate::grid::wrap(text, usize::from(width))
-        .into_iter()
-        .take(remaining)
-    {
+    let mut rows = crate::grid::wrap(text, usize::from(width));
+    // Rows that fill the room look finished whether or not more followed, so
+    // a text cut by height says so on the last row it keeps.
+    let cut = rows.len() > remaining;
+    rows.truncate(remaining);
+    if cut && let Some(last) = rows.last_mut() {
+        *last = format!("{}…", last.trim_end());
+    }
+    for row in rows {
         lines.push(Line::from(Span::styled(
             crate::grid::truncate(&row, usize::from(width)),
             style,
@@ -1166,6 +1207,81 @@ mod tests {
         assert!(apply_message(frame(2, None), &panel.shared));
         assert!(panel.sync());
         assert_eq!(panel.title, "negotiated");
+    }
+
+    /// The protocol promises the *last* few lines of stderr, and the panel drew
+    /// the first three — so a plugin that logged its way through startup and
+    /// then died showed its startup for ever, and never the line that said
+    /// what went wrong. Where the room is short it is the earlier lines that
+    /// give way, and a blank line is not one of the few.
+    #[test]
+    fn a_failed_plugin_shows_the_end_of_its_stderr() {
+        let mut panel = detached_panel(InputPolicy::default());
+        panel.phase = Phase::Failed("exit status: 1".into());
+        panel.shared.lock().unwrap().stderr =
+            "boot: reading config\nboot: connecting\nboot: connected\n\
+             ValueError: no such shelf\n\n"
+                .into();
+        let lines = |panel: &PluginPanel, width, height| -> Vec<String> {
+            panel
+                .status_lines(&crate::theme::Theme::default(), width, height)
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        let shown = |height| lines(&panel, 60, height).join("\n");
+
+        let roomy = shown(20);
+        assert!(
+            !roomy.contains("boot: reading config"),
+            "the first of four is not among the last three:\n{roomy}"
+        );
+        for line in ["boot: connecting", "boot: connected", "ValueError"] {
+            assert!(roomy.contains(line), "{line}:\n{roomy}");
+        }
+
+        // The headline, the reason, the blank and one row: that row is the
+        // last line.
+        let short = shown(4);
+        assert!(short.contains("ValueError"), "{short}");
+        assert!(!short.contains("boot:"), "{short}");
+        // No room for the blank as well: the line is drawn rather than the
+        // spacing above it.
+        let shortest = shown(3);
+        assert!(shortest.contains("ValueError"), "{shortest}");
+
+        // The last line is kept whatever it costs, so it is the one most
+        // likely to be cut by height — and a cut that ends on a whole row
+        // looks like the whole error. Where rows are dropped, the last one
+        // drawn says so; where nothing is, nothing does.
+        panel.shared.lock().unwrap().stderr = "boot\nTraceback (most recent call last): \
+             File \"/home/u/plugin.py\", line 12, in main ValueError: the shelf \
+             named 'Fiction' does not exist on this server\n"
+            .into();
+        let (mut cut, mut whole) = (false, false);
+        // At width 30 the headline and the reason take three rows, so the
+        // stderr is first drawn at four.
+        for height in 4..=20 {
+            let rows = lines(&panel, 30, height);
+            let last = rows.last().map(String::as_str).unwrap_or_default();
+            let screen = rows.join("\n");
+            if screen.contains("on this server") {
+                whole = true;
+                assert!(!screen.contains('…'), "nothing was cut:\n{screen}");
+            } else {
+                cut = true;
+                assert!(
+                    last.ends_with('…'),
+                    "the error was cut at height {height} and the last row does not say so:\n{screen}"
+                );
+            }
+        }
+        assert!(cut && whole, "the sweep must see the line cut and whole");
     }
 
     /// Every JSON object inside a fenced `json` block of

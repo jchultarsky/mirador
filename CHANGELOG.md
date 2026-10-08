@@ -329,6 +329,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now as quiet as the first read at startup, including when a read of the
   old file was already under way, and an event added to it later is still
   reported.
+- **The `w` dialog scrolls on a short terminal.** It drew every widget mirador
+  has with no window over them, so a terminal shorter than the list cut the
+  bottom rows, footer first, while the cursor went on moving into them: `End`
+  then `space` switched a panel on or off with nothing on screen saying which.
+  The list now scrolls to keep the cursor in view, and the status and footer
+  under it stay drawn down to a five-row terminal, the blank line above them
+  giving way first. With room for everything, every widget is drawn at once,
+  as before.
+- **The `t` dialog's footer names the key you set.** It drew the keep key in
+  capitals, so `keep = "y"` under `[theme_picker.keys]` was shown as `Y`,
+  which is a different key and does nothing. Keys are now spelled as you
+  wrote them, and both pickers spell `Esc` the way the key map does.
+- **A plugin gets its 300 ms to clean up when it is closed.** Mirador tells a
+  plugin to shut down and allows it 300 ms before ending it, but anything the
+  plugin sent in that time — most often the frame it was already drawing —
+  was treated as a protocol error and the process was killed at once. A
+  plugin that saves its state on the way out could be stopped halfway through
+  the save. A well-formed message sent during the grace is now ignored; a
+  malformed one still ends the process at once.
+- **A failed plugin shows the end of its error output.** The protocol
+  promises the last few lines of a plugin's stderr in its panel, and the panel
+  showed the first three — so a plugin that logged its startup and then
+  crashed showed the startup, never the line saying what went wrong. It now
+  shows the last three, giving up the earliest first when the panel is short,
+  and a line the panel's height cuts ends in `…` rather than looking whole.
 
 ## [1.19.2] - 2026-10-07
 
