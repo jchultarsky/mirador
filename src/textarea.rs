@@ -14,7 +14,7 @@ use std::ops::Range;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::textfield::byte_at;
+use crate::textfield::{byte_at, word_start};
 
 #[derive(Debug, Clone)]
 pub struct TextArea {
@@ -340,6 +340,39 @@ impl TextArea {
         self.move_end();
     }
 
+    /// Delete from the cursor to the end of its line. The line break stays:
+    /// Delete at the end of a line is what pulls the next one up.
+    ///
+    /// This and the two below act on the cursor's line and nothing else. A
+    /// selection is let go first and the chord acts from the cursor, the
+    /// selection's moving end, rather than deleting the selection as typing
+    /// does. (Left and Right do something else again: they jump to the
+    /// selection's edge.) A selection can span lines, and a chord
+    /// that says "to the end of the line" must not take a line break because
+    /// something happened to be selected.
+    fn delete_to_line_end(&mut self) {
+        self.selection_anchor = None;
+        let line = &mut self.lines[self.row];
+        line.truncate(byte_at(line, self.col));
+    }
+
+    /// Delete from the start of the cursor's line to the cursor.
+    fn delete_to_line_start(&mut self) {
+        self.selection_anchor = None;
+        let line = &mut self.lines[self.row];
+        line.replace_range(..byte_at(line, self.col), "");
+        self.col = 0;
+    }
+
+    /// Delete the word before the cursor, stopping at the start of its line.
+    fn delete_word_before(&mut self) {
+        self.selection_anchor = None;
+        let line = &mut self.lines[self.row];
+        let start = word_start(line, self.col);
+        line.replace_range(byte_at(line, start)..byte_at(line, self.col), "");
+        self.col = start;
+    }
+
     /// Handle a key, returning whether it was used.
     ///
     /// Deliberately does not claim Esc or Tab: those belong to the form around
@@ -349,8 +382,31 @@ impl TextArea {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            // The one chord the two editors spell differently, and on
+            // purpose: a body has a selection to make, where a one-line field
+            // has no selection and goes to its start. The chords after it mean
+            // what they mean in `TextField` and in a shell.
             KeyCode::Char('a') if ctrl => {
                 self.select_all();
+                true
+            }
+            // The shell's line chords, which every one-line field has always
+            // had. On one line they do exactly what the field does; here they
+            // stop at the line's ends.
+            KeyCode::Char('e') if ctrl => {
+                self.end();
+                true
+            }
+            KeyCode::Char('k') if ctrl => {
+                self.delete_to_line_end();
+                true
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.delete_to_line_start();
+                true
+            }
+            KeyCode::Char('w') if ctrl => {
+                self.delete_word_before();
                 true
             }
             // Alt is excluded as well as Ctrl, which it was not: `Alt+x` typed
@@ -674,6 +730,130 @@ mod tests {
         let mut a = TextArea::new();
         assert!(!a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert_eq!(a.value(), "", "Ctrl+C must not insert a `c`");
+    }
+
+    fn ctrl(a: &mut TextArea, c: char) -> bool {
+        chord(a, KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    /// Put the cursor at `(row, col)` with nothing selected.
+    fn at(a: &mut TextArea, row: usize, col: usize) {
+        while a.cursor().0 > row {
+            a.up();
+        }
+        while a.cursor().0 < row {
+            a.down();
+        }
+        a.home();
+        for _ in 0..col {
+            a.right();
+        }
+        assert_eq!(a.cursor(), (row, col), "the fixture put the cursor there");
+    }
+
+    /// The shell's line chords, which every one-line field has always had and
+    /// the body dropped on the floor. Each acts on the line the cursor is on
+    /// and on no other, and the lines either side are there to show it.
+    #[test]
+    fn the_line_chords_edit_only_the_line_the_cursor_is_on() {
+        let text = "one two\nthree four five\nsix";
+        // From row 1, column 11: after `three four `, before `five`.
+        for (c, want, cursor) in [
+            ('e', text, (1, 15)),
+            ('k', "one two\nthree four \nsix", (1, 11)),
+            ('u', "one two\nfive\nsix", (1, 0)),
+            ('w', "one two\nthree five\nsix", (1, 6)),
+        ] {
+            let mut a = area(text);
+            at(&mut a, 1, 11);
+            assert!(ctrl(&mut a, c), "Ctrl+{c} is used, not dropped");
+            assert_eq!(a.value(), want, "Ctrl+{c}");
+            assert_eq!(a.cursor(), cursor, "Ctrl+{c}");
+        }
+    }
+
+    /// None of them reaches past a line break. Delete at the end of a line
+    /// pulls the next one up, and Backspace at the start joins it to the one
+    /// above; "to the end of the line" and "to its start" have nothing left
+    /// to take there, and a word before the cursor ends where the line does.
+    #[test]
+    fn the_line_chords_never_delete_a_line_break() {
+        let text = "one\n  two\nthree";
+        for (c, row, col) in [('u', 1, 0), ('w', 1, 0), ('k', 0, 3), ('k', 1, 5)] {
+            let mut a = area(text);
+            at(&mut a, row, col);
+            assert!(ctrl(&mut a, c), "Ctrl+{c} at ({row}, {col}) is used");
+            assert_eq!(a.value(), text, "Ctrl+{c} at ({row}, {col})");
+            assert_eq!(a.cursor(), (row, col), "Ctrl+{c} at ({row}, {col})");
+        }
+
+        // Only an indent before the cursor: the word stops at the line's
+        // start rather than going on to take `one` from the line above.
+        let mut a = area(text);
+        at(&mut a, 1, 2);
+        ctrl(&mut a, 'w');
+        assert_eq!(a.value(), "one\ntwo\nthree");
+        assert_eq!(a.cursor(), (1, 0));
+    }
+
+    /// A selection is let go first, and the chord then does what it says
+    /// from the cursor, the selection's moving end. Deleting the selection
+    /// instead, as typing does, would let Ctrl+K or Ctrl+W take a selection
+    /// that spans lines, and the line break with it.
+    #[test]
+    fn a_line_chord_collapses_a_selection_and_acts_from_the_cursor() {
+        let text = "alpha beta\ngamma delta";
+        // Selected from row 1, column 5 up to row 0, column 5, which leaves
+        // the cursor, the moving end, after `alpha`.
+        for (c, want, cursor) in [
+            ('e', text, (0, 10)),
+            ('k', "alpha\ngamma delta", (0, 5)),
+            ('u', " beta\ngamma delta", (0, 0)),
+            ('w', " beta\ngamma delta", (0, 0)),
+        ] {
+            let mut a = area(text);
+            at(&mut a, 1, 5);
+            chord(&mut a, KeyCode::Up, KeyModifiers::SHIFT);
+            assert_eq!(a.selected_text().as_deref(), Some(" beta\ngamma"));
+            assert!(ctrl(&mut a, c), "Ctrl+{c}");
+            assert_eq!(a.value(), want, "Ctrl+{c}");
+            assert_eq!(a.cursor(), cursor, "Ctrl+{c}");
+            assert!(!a.has_selection(), "Ctrl+{c} leaves nothing selected");
+        }
+    }
+
+    /// The two editors take the same chords, and on one line they do the
+    /// same thing with them. Ctrl+A is the one documented difference: it
+    /// selects the whole body here and goes to the start of a one-line field.
+    /// The body ignored E, K, U and W for as long as the title had them —
+    /// the disagreement the comment on the Alt arm warns about.
+    #[test]
+    fn both_editors_take_the_same_chords_and_agree_on_one_line() {
+        let text = "one two three";
+        for c in 'a'..='z' {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+            let mut field = crate::textfield::TextField::with_value(text);
+            let mut a = area(text);
+            assert_eq!(
+                field.handle_key(key),
+                a.handle_key(key),
+                "the editors disagree about whether Ctrl+{c} is theirs"
+            );
+        }
+        for c in ['e', 'k', 'u', 'w'] {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL);
+            let mut field = crate::textfield::TextField::with_value(text);
+            let mut a = area(text);
+            // Before `three`, after the space a word chord has to step over.
+            for _ in 0..5 {
+                field.left();
+                a.left();
+            }
+            field.handle_key(key);
+            a.handle_key(key);
+            assert_eq!(a.value(), field.value(), "Ctrl+{c}");
+            assert_eq!(a.cursor(), (0, field.cursor()), "Ctrl+{c}");
+        }
     }
 
     #[test]

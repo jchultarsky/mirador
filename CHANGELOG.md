@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A note's body takes the line keys every one-line field has.** `Ctrl+E`
+  goes to the end of the line, and `Ctrl+U`, `Ctrl+K` and `Ctrl+W` delete to
+  its start, to its end and the word before the cursor. They did nothing in
+  the body, though the title above it has always had them. Each acts on the
+  cursor's line and never takes a line break. A selection is let go first
+  rather than deleted, and the key acts from the cursor, the selection's
+  moving end. `Ctrl+A` still selects the whole body, and still goes to the
+  start of a one-line field. The README is where the four are listed: the
+  `?` overlay cannot open while a note is being edited, since `?` is typed
+  into it.
+
 ### Fixed
 
 - **The key map's explanations arrive whole.** At its widest the dialog gave
@@ -48,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dense for that budget, such as one heavy in combining marks, stopped where
   the budget did, over rows left blank and with nothing to say the rest was
   missing. It now ends in `…`.
+- **`Esc` in the notes search box clears the search.** It closed the box and
+  left the half-typed term filtering the list, where the task filter's `Esc`
+  drops it and the README says both do.
+- **The notes title and search line draw their caret where typing lands.**
+  The caret was drawn after the text wherever the cursor was, so after
+  `Home` or an arrow it sat at the end while typing went in elsewhere. A
+  title longer than its field lost the caret off the edge, and a search
+  longer than its line lost it to the `…` that cut the term. The watchlist's
+  `symbol` line had the same fault and has the same fix.
 
 ## [1.21.0] - 2026-10-08
 

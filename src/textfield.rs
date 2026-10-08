@@ -26,6 +26,21 @@ impl TextField {
         Self { value, cursor }
     }
 
+    /// The same field in upper case, the cursor between the same two letters.
+    ///
+    /// For a field that is drawn in capitals, so its window can be cut from
+    /// what is drawn. Case mapping is not one to one: `ß` becomes `SS`, one
+    /// cell becoming two, so a window cut to the typed text's width and then
+    /// uppercased can be twice as wide as its field. The cursor is counted
+    /// again over the uppercased text before it, for the same reason.
+    pub fn uppercased(&self) -> Self {
+        let before = &self.value[..byte_at(&self.value, self.cursor)];
+        Self {
+            value: self.value.to_uppercase(),
+            cursor: before.to_uppercase().chars().count(),
+        }
+    }
+
     /// The current text.
     pub fn value(&self) -> &str {
         &self.value
@@ -89,14 +104,7 @@ impl TextField {
 
     /// Delete from the cursor back to the start of the previous word.
     pub fn delete_word_before(&mut self) {
-        let chars: Vec<char> = self.value.chars().collect();
-        let mut i = self.cursor;
-        while i > 0 && chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
-        while i > 0 && !chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
+        let i = word_start(&self.value, self.cursor);
         let start = byte_at(&self.value, i);
         let end = byte_at(&self.value, self.cursor);
         self.value.replace_range(start..end, "");
@@ -164,6 +172,11 @@ impl TextField {
     /// cursor's column within that window. Scrolls horizontally to keep the
     /// cursor visible in a field narrower than its contents.
     ///
+    /// This is the window for a caret drawn *over* a cell — the terminal's
+    /// own cursor, which the task form and the prompts move there — so the
+    /// text may fill every cell. A caret drawn as a cell of its own wants
+    /// [`TextField::visible_inline`].
+    ///
     /// **Both figures are display cells, not characters** — invariant 9, and it
     /// is not pedantry here either. This measured in `chars()` until it was
     /// reviewed: a field 6 columns wide holding `北京市中心` saw five characters,
@@ -175,18 +188,55 @@ impl TextField {
         if width == 0 {
             return (String::new(), 0);
         }
+        // One cell held back behind the cursor, for the cursor itself when
+        // it is past the last character.
+        let (_, before, window) = self.window(width - 1, width);
+        (window, before)
+    }
+
+    /// The window of text to display in a field `width` cells wide with the
+    /// caret drawn inline, as a cell of its own between two characters, and
+    /// the byte offset in that window where the caret goes. `None` only for
+    /// a field with no cells at all, which has no room for a caret.
+    ///
+    /// The notes title and search line draw their caret this way, and they
+    /// used to draw it after whatever [`TextField::visible`] returned: at the
+    /// end of the text wherever the cursor was, and once the text filled the
+    /// field, in a cell past the edge where nobody saw it. Here the text is
+    /// held to one cell less than the field, so the caret always fits, and
+    /// its offset is counted in characters from the window's start rather
+    /// than recovered from a column — a combining mark before the cursor is
+    /// a character and no cells, and a column cannot say which side of it
+    /// the caret is on.
+    pub fn visible_inline(&self, width: usize) -> (String, Option<usize>) {
+        if width == 0 {
+            return (String::new(), None);
+        }
+        let (start, _, window) = self.window(width - 1, width - 1);
+        // Every character from `start` to the cursor is in the window: the
+        // walk back took no more than `width - 1` cells of them, and the fill
+        // forward allows that many.
+        let caret = byte_at(&window, self.cursor - start);
+        (window, Some(caret))
+    }
+
+    /// The text that keeps the cursor in view: the index of its first
+    /// character, the cells between it and the cursor, and the text from it
+    /// that fits in `fill` cells, having walked back from the cursor no more
+    /// than `keep` cells. `keep` must not exceed `fill`, or the cursor could
+    /// fall outside what is returned.
+    fn window(&self, keep: usize, fill: usize) -> (usize, usize, String) {
         let chars: Vec<char> = self.value.chars().collect();
         let cells = |c: char| crate::grid::char_width(c);
 
-        // Walk back from the cursor while the text still fits, keeping one cell
-        // free for the caret itself. Where the old code could subtract indices,
-        // this has to accumulate: a step left is worth one cell or two.
-        let budget = width - 1;
+        // Walk back from the cursor while the text still fits in `keep`.
+        // Where the old code could subtract indices, this has to accumulate:
+        // a step left is worth one cell or two.
         let mut start = self.cursor;
         let mut before = 0usize;
         while start > 0 {
             let w = cells(chars[start - 1]);
-            if before + w > budget {
+            if before + w > keep {
                 break;
             }
             before += w;
@@ -199,13 +249,13 @@ impl TextField {
         let mut drawn = 0usize;
         for &c in &chars[start..] {
             let w = cells(c);
-            if drawn + w > width {
+            if drawn + w > fill {
                 break;
             }
             window.push(c);
             drawn += w;
         }
-        (window, before)
+        (start, before, window)
     }
 }
 
@@ -220,6 +270,20 @@ pub(crate) fn byte_at(text: &str, index: usize) -> usize {
     text.char_indices()
         .nth(index)
         .map_or(text.len(), |(byte, _)| byte)
+}
+
+/// The character index where the word before `index` starts: back over any
+/// whitespace, then back over the word.
+///
+/// Ctrl+W in both editors deletes from here to the cursor. Each hands it the
+/// text the chord may reach — the whole value of a one-line field, and only
+/// the cursor's own line in a note body — so neither can take a line break.
+pub(crate) fn word_start(text: &str, index: usize) -> usize {
+    text[..byte_at(text, index)]
+        .trim_end()
+        .trim_end_matches(|c: char| !c.is_whitespace())
+        .chars()
+        .count()
 }
 
 #[cfg(test)]
@@ -443,6 +507,59 @@ mod tests {
         let (text, col) = field.visible(20);
         assert_eq!(text, "日本語", "it all fits");
         assert_eq!(col, 2, "one wide glyph precedes the caret, so two cells");
+    }
+
+    /// An inline caret is a cell of its own, so the window and the caret
+    /// together fit the field; it sits exactly between the characters the
+    /// cursor is between, counted in characters so that a combining mark
+    /// cannot move it; and the window shows as much of what comes before the
+    /// cursor as there is room for, rather than scrolling early.
+    #[test]
+    fn an_inline_caret_fits_and_sits_where_typing_lands() {
+        for source in [
+            "abcdefghijklmnopqrst",
+            "北京市中心の天気予報です",
+            "aé日b🦀cd",
+            "cafe\u{301} au lait, s'il vous pla\u{ee}t, plai\u{302}t",
+            "🦀🦀🦀🦀🦀🦀",
+        ] {
+            let full: Vec<char> = source.chars().collect();
+            for len in 0..=full.len() {
+                let value: String = full[..len].iter().collect();
+                for cursor in 0..=len {
+                    let mut field = TextField::with_value(value.clone());
+                    for _ in cursor..len {
+                        field.left();
+                    }
+                    let (before, after) = value.split_at(byte_at(&value, cursor));
+                    for width in 1..12usize {
+                        let case = format!("{value:?} cursor={cursor} width={width}");
+                        let (text, caret) = field.visible_inline(width);
+                        let caret = caret.unwrap_or_else(|| panic!("{case}: no caret"));
+                        let drawn = crate::grid::display_width(&text);
+                        assert!(drawn < width, "{case}: {drawn} cells and a caret");
+                        assert!(text.is_char_boundary(caret), "{case}: {text:?} at {caret}");
+                        let (shown, rest) = text.split_at(caret);
+                        assert!(before.ends_with(shown), "{case}: {shown:?} before");
+                        assert!(after.starts_with(rest), "{case}: {rest:?} after");
+                        if let Some(next) = before[..before.len() - shown.len()].chars().last() {
+                            let room = width - 1 - crate::grid::display_width(shown);
+                            assert!(
+                                crate::grid::char_width(next) > room,
+                                "{case}: {next:?} would have fitted in {room} cells"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_inline_caret_has_no_room_in_a_field_of_no_cells() {
+        let f = TextField::with_value("abc");
+        assert_eq!(f.visible_inline(0), (String::new(), None));
+        assert_eq!(f.visible_inline(1), (String::new(), Some(0)));
     }
 
     #[test]

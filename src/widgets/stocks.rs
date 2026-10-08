@@ -769,7 +769,7 @@ impl StocksPanel {
     /// cell of `…` is the whole difference between a message the reader knows
     /// is abridged and one they do not.
     fn status_line(&self, theme: &Theme, board: &Board, width: u16) -> Option<Line<'static>> {
-        let line = self.status_text(theme, board)?;
+        let line = self.status_text(theme, board, width)?;
         Some(crate::grid::assemble(vec![line.spans], width))
     }
 
@@ -787,7 +787,7 @@ impl StocksPanel {
     /// is deliberate: the alternative was a permanently blank row, and the
     /// moment the row appears is a moment the panel's contents have changed
     /// anyway.
-    fn status_text(&self, theme: &Theme, board: &Board) -> Option<Line<'static>> {
+    fn status_text(&self, theme: &Theme, board: &Board, width: u16) -> Option<Line<'static>> {
         match (&self.mode, &self.status) {
             (Mode::ConfirmRemove { symbol }, _) => Some(Line::from(Span::styled(
                 format!("remove {symbol}?  y / n"),
@@ -795,14 +795,28 @@ impl StocksPanel {
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
             ))),
-            (Mode::Add(field), _) => Some(Line::from(vec![
-                Span::styled("symbol  ", Style::default().fg(theme.accent)),
-                Span::styled(
-                    field.value().to_uppercase(),
-                    Style::default().fg(theme.text),
-                ),
-                Span::styled("▏", Style::default().fg(theme.accent)),
-            ])),
+            (Mode::Add(field), _) => {
+                // The window, with the caret where the next key lands. It
+                // followed the whole symbol, so after Home it sat at the end,
+                // and a symbol longer than the line lost it to the `…` that
+                // cut it. Cut from the uppercased text, since that is what is
+                // drawn: a letter can change length in upper case, which would
+                // move the offset, and width too — a window of eleven `ß` is
+                // twenty-two cells of `S`, and the `…` took the caret again.
+                const LABEL: &str = "symbol  ";
+                let accent = Style::default().fg(theme.accent);
+                let text = Style::default().fg(theme.text);
+                let room = usize::from(width).saturating_sub(LABEL.len());
+                let (window, caret) = field.uppercased().visible_inline(room);
+                let (before, after) = window.split_at(caret.unwrap_or(window.len()));
+                let mut spans = vec![Span::styled(LABEL, accent)];
+                spans.push(Span::styled(before.to_string(), text));
+                if caret.is_some() {
+                    spans.push(Span::styled("▏", accent));
+                }
+                spans.push(Span::styled(after.to_string(), text));
+                Some(Line::from(spans))
+            }
             (_, Some((message, is_error))) => Some(Line::from(Span::styled(
                 message.clone(),
                 Style::default().fg(if *is_error { theme.error } else { theme.muted }),
@@ -1402,6 +1416,78 @@ mod tests {
         assert_eq!(p.watchlist.symbols().len(), 1);
         let (message, _) = p.status.clone().expect("a duplicate must be reported");
         assert!(message.contains("already"), "got `{message}`");
+    }
+
+    /// The Add line's caret is drawn where the next key lands. It followed
+    /// the whole symbol, so after Home it sat at the end while typing went in
+    /// at the start, and a symbol longer than the line lost it to the `…`
+    /// that cut the symbol — the notes title's and search line's defect, in
+    /// the one other field that drew its caret by hand.
+    #[test]
+    fn the_add_caret_is_drawn_where_typing_lands() {
+        let (mut p, _g) = panel("add-caret", &["AAPL"]);
+        stop_fetching(&p);
+        let theme = Theme::default();
+        let row = |p: &StocksPanel, width: u16| -> String {
+            p.status_line(&theme, &Vec::new(), width)
+                .expect("the Add line has something to say")
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect()
+        };
+
+        press(&mut p, KeyCode::Char('a'));
+        type_str(&mut p, "brk.b");
+        assert_eq!(row(&p, 40), "symbol  BRK.B▏");
+        press(&mut p, KeyCode::Home);
+        assert_eq!(row(&p, 40), "symbol  ▏BRK.B", "Home puts it first");
+        for _ in 0..3 {
+            press(&mut p, KeyCode::Right);
+        }
+        assert_eq!(
+            row(&p, 40),
+            "symbol  BRK▏.B",
+            "and it moves with the cursor"
+        );
+
+        // Twelve cells after the label: eleven of symbol and the caret's.
+        press(&mut p, KeyCode::End);
+        type_str(&mut p, "cdefghijkl");
+        assert_eq!(
+            row(&p, 20),
+            "symbol  BCDEFGHIJKL▏",
+            "a long symbol keeps it"
+        );
+
+        // A dotless `ı` is two bytes and its capital one, so a caret placed
+        // in the uppercased text by the typed text's offset lands a byte late.
+        press(&mut p, KeyCode::Esc);
+        press(&mut p, KeyCode::Char('a'));
+        type_str(&mut p, "ıa");
+        press(&mut p, KeyCode::Left);
+        assert_eq!(row(&p, 40), "symbol  I▏A", "cut before it is uppercased");
+
+        // A `ß` is one cell and its capital `SS` two, so a window cut to the
+        // typed text's width and then uppercased is twice as wide as the line
+        // that holds it, and the `…` took the caret with the rest.
+        press(&mut p, KeyCode::Esc);
+        press(&mut p, KeyCode::Char('a'));
+        type_str(&mut p, &"ß".repeat(15));
+        assert_eq!(
+            row(&p, 20),
+            format!("symbol  {}▏", "S".repeat(11)),
+            "a symbol that widens in upper case keeps it"
+        );
+        press(&mut p, KeyCode::Home);
+        for _ in 0..3 {
+            press(&mut p, KeyCode::Right);
+        }
+        assert_eq!(
+            row(&p, 20),
+            format!("symbol  {}▏{}", "S".repeat(6), "S".repeat(5)),
+            "and the caret sits after the third, where typing lands"
+        );
     }
 
     #[test]
