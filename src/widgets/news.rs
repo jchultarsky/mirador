@@ -242,8 +242,10 @@ impl NewsPanel {
 
         // An hour is the floor as well as the default. A dashboard left open
         // for a week should not be re-reading somebody's feed every minute
-        // because a config said so.
-        let interval = Duration::from_secs(config.refresh_minutes.max(60) * 60);
+        // because a config said so. `Config::validate` stops it at a year;
+        // the multiply saturates anyway, because the floor runs before it and
+        // a wrapped product is the tight loop the floor exists to prevent.
+        let interval = Duration::from_secs(config.refresh_minutes.max(60).saturating_mul(60));
         let feeds: Vec<(String, String)> = config
             .feeds
             .iter()

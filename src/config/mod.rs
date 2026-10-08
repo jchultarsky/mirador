@@ -447,7 +447,7 @@ impl Config {
         }
 
         // Poll intervals are multiplied out to seconds and then to a `Duration`,
-        // and both `.max(1)` guards only the low end. An absurd value from a
+        // and each one's `.max` floor guards only the low end. An absurd value from a
         // hand-edited config overflows the multiply in release, wraps to a tiny
         // interval, and turns a polite once-every-thirty-minutes fetch into a
         // tight loop against somebody else's free API — the one failure mode
@@ -468,6 +468,13 @@ impl Config {
                  Leave it out to use the default of 120.",
                 self.stocks.refresh_secs,
                 A_YEAR_IN_MINUTES * 60
+            );
+        }
+        if self.news.refresh_minutes > A_YEAR_IN_MINUTES {
+            anyhow::bail!(
+                "`[news].refresh_minutes` is {}; the maximum is {A_YEAR_IN_MINUTES} \
+                 (one year). Leave it out to use the default of 60.",
+                self.news.refresh_minutes
             );
         }
 
@@ -1518,6 +1525,29 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         assert!(Config::default().validate().is_ok());
         let config: Config = toml::from_str("[weather]\nrefresh_minutes = 1440").expect("parses");
         assert!(config.validate().is_ok(), "a day is a legitimate setting");
+    }
+
+    /// The news feed's interval is the third poll multiplied out unchecked,
+    /// and it was missed when the other two were bounded. 2^62 minutes is a
+    /// legal TOML integer that passed validation, and times sixty it wraps
+    /// to exactly zero: a debug build panicked building the panel, and a
+    /// release build fetched every feed with no wait at all — the `.max(60)`
+    /// floor runs before the multiply, so it guards nothing here.
+    #[test]
+    fn a_news_refresh_too_long_to_multiply_out_is_refused() {
+        let parse = |minutes: u64| -> Config {
+            toml::from_str(&format!("[news]\nrefresh_minutes = {minutes}")).expect("parses")
+        };
+        let err = parse(1 << 62).validate().expect_err("must be refused");
+        assert!(
+            format!("{err:#}").contains("`[news].refresh_minutes`"),
+            "the error must name the key: {err:#}"
+        );
+        assert!(parse(A_YEAR_IN_MINUTES + 1).validate().is_err());
+        assert!(
+            parse(A_YEAR_IN_MINUTES).validate().is_ok(),
+            "a year is the limit, not past it"
+        );
     }
 
     /// The three `[pomodoro]` lengths were bounded only from below, and the
