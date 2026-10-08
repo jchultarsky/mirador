@@ -11,6 +11,8 @@
 //! their weight. When space runs short, columns are dropped from the *end* of
 //! the optional list rather than every column being squeezed into illegibility.
 
+use std::borrow::Cow;
+
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -46,17 +48,7 @@ pub fn truncate(text: &str, width: usize) -> String {
     }
 
     // Take characters while they fit, keeping one cell back for the ellipsis.
-    let budget = width - 1;
-    let mut out = String::new();
-    let mut used = 0usize;
-    for c in text.chars() {
-        let w = char_width(c);
-        if used + w > budget {
-            break;
-        }
-        out.push(c);
-        used += w;
-    }
+    let mut out = text[..prefix_fitting(text, width - 1)].to_string();
     out.push('…');
     out
 }
@@ -64,6 +56,27 @@ pub fn truncate(text: &str, width: usize) -> String {
 /// Display width of a single character, treating unprintables as zero-width.
 pub fn char_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// The byte length of the longest prefix of `text` that fits in `cells`
+/// terminal cells, walked a character at a time and stopping at the first
+/// that does not fit.
+///
+/// **The one cell-budget walk in the module.** [`truncate`], [`break_lines`]
+/// and [`assemble`] each wrote their own, and the third had drifted: it
+/// measured each character as a one-character string, which allocated for
+/// every character and disagreed with [`char_width`] about the ones a string
+/// measure counts differently — a control character, a cell to the string and
+/// none to ratatui, which never draws it.
+fn prefix_fitting(text: &str, cells: usize) -> usize {
+    let mut used = 0usize;
+    for (at, c) in text.char_indices() {
+        used += char_width(c);
+        if used > cells {
+            return at;
+        }
+    }
+    text.len()
 }
 
 /// Break `text` into rows of at most `width` cells, handing each to `emit`.
@@ -110,16 +123,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
             // A single word longer than the row breaks inside itself, rather
             // than running off the edge.
             while used > width {
-                let mut cut = start;
-                let mut taken = 0usize;
-                for c in line[start..cursor].chars() {
-                    let cw = char_width(c);
-                    if taken + cw > width {
-                        break;
-                    }
-                    taken += cw;
-                    cut += c.len_utf8();
-                }
+                let mut cut = start + prefix_fitting(&line[start..cursor], width);
                 // Always take at least one character. A glyph wider than the
                 // whole row — any CJK character or emoji in a one-cell column —
                 // otherwise fits nowhere, so nothing is taken, nothing is
@@ -510,23 +514,29 @@ impl Grid {
         let style = Style::default()
             .fg(theme.label)
             .add_modifier(Modifier::BOLD);
-
-        let mut spans = Vec::new();
-        for (column, width, _) in &self.resolved {
-            if *width == 0 {
-                continue;
-            }
-            if !spans.is_empty() {
-                spans.push(Span::raw(" ".repeat(GUTTER as usize)));
-            }
-            let text = crate::glyphs::utility(column.label);
-            spans.push(Span::styled(fit(&text, *width, column.align), style));
-        }
-        Line::from(spans)
+        self.line(|column, _| (Cow::Owned(crate::glyphs::utility(column.label)), style))
     }
 
     /// A data row. Extra cells are ignored; missing cells render blank.
     pub fn row(&self, cells: &[Span<'_>]) -> Line<'static> {
+        // Indexed by the column's declared position, not its surviving one,
+        // so a dropped column takes its own value with it rather than shifting
+        // every later value under the wrong header.
+        self.line(|_, declared| match cells.get(declared) {
+            Some(span) => (Cow::Borrowed(span.content.as_ref()), span.style),
+            None => (Cow::Borrowed(""), Style::default()),
+        })
+    }
+
+    /// One line of the grid, with `cell` saying what goes in each surviving
+    /// column — given the column and its declared position — and in what
+    /// style.
+    ///
+    /// The header and the rows were this loop written out twice, and the
+    /// sweep over every grid records that only one of them was wrong the first
+    /// time. The gutter, the dropped columns and the fit to each width are
+    /// decided here, once, for both.
+    fn line<'a>(&self, cell: impl Fn(&Column, usize) -> (Cow<'a, str>, Style)) -> Line<'static> {
         let mut spans = Vec::new();
         for (column, width, declared) in &self.resolved {
             if *width == 0 {
@@ -535,14 +545,8 @@ impl Grid {
             if !spans.is_empty() {
                 spans.push(Span::raw(" ".repeat(GUTTER as usize)));
             }
-            // Indexed by the column's declared position, not its surviving
-            // one, so a dropped column takes its own value with it rather than
-            // shifting every later value under the wrong header.
-            let (content, style) = match cells.get(*declared) {
-                Some(span) => (span.content.as_ref(), span.style),
-                None => ("", Style::default()),
-            };
-            spans.push(Span::styled(fit(content, *width, column.align), style));
+            let (content, style) = cell(column, *declared);
+            spans.push(Span::styled(fit(&content, *width, column.align), style));
         }
         Line::from(spans)
     }
@@ -599,21 +603,12 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
                     }
                     // This span's share is its own width, or whatever is left
                     // of the abridged text — the ellipsis included — if the cut
-                    // fell inside or at the end of it.
-                    let take = display_width(&span.content).min(display_width(&abridged));
-                    let mut cells = 0;
-                    let split = abridged
-                        .char_indices()
-                        .find(|(_, c)| {
-                            let w = display_width(&c.to_string());
-                            if cells + w > take {
-                                return true;
-                            }
-                            cells += w;
-                            false
-                        })
-                        .map_or(abridged.len(), |(i, _)| i);
-                    let rest = abridged.split_off(split);
+                    // fell inside or at the end of it. The width is the walk's
+                    // own measure, a character at a time: measured as a string
+                    // it disagrees with the walk over `☀` and its emoji
+                    // selector, and the walk then ran into the next span.
+                    let own: usize = span.content.chars().map(char_width).sum();
+                    let rest = abridged.split_off(prefix_fitting(&abridged, own));
                     spans.push(Span::styled(
                         std::mem::replace(&mut abridged, rest),
                         span.style,
@@ -701,6 +696,42 @@ mod tests {
 
         // Nothing at all.
         assert_eq!(text(&assemble(vec![part()], 0)), "");
+    }
+
+    /// An abridged part gives each span back its own text, in its own style.
+    ///
+    /// The split used to measure a span as a string and then walk the
+    /// abridged text a character at a time, and the two measures disagree:
+    /// `☀` with the emoji selector is two cells as a string and one as its
+    /// characters, so the walk ran a cell past the span and took the next
+    /// one's first letter into the sun's style. Both sides are the character
+    /// walk's measure now. The control character holds the walk itself to
+    /// [`char_width`]: measured as a one-character string, the way the walk in
+    /// `assemble` used to, it is a cell, where `char_width` — and ratatui,
+    /// which never draws it — make it none.
+    #[test]
+    fn an_abridged_part_gives_each_span_its_own_text() {
+        use ratatui::style::{Color, Style};
+        let (lead_style, rest_style) = (Style::new().fg(Color::Red), Style::new().fg(Color::Blue));
+        for lead in ["\u{2600}\u{fe0f}", "a\u{7}"] {
+            let line = assemble(
+                vec![vec![
+                    Span::styled(lead, lead_style),
+                    Span::styled("bcdef", rest_style),
+                ]],
+                4,
+            );
+            let spans: Vec<(&str, Style)> = line
+                .spans
+                .iter()
+                .map(|span| (span.content.as_ref(), span.style))
+                .collect();
+            assert_eq!(
+                spans,
+                [(lead, lead_style), ("bc\u{2026}", rest_style)],
+                "{lead:?}"
+            );
+        }
     }
 
     use ratatui::Terminal;
@@ -1190,8 +1221,9 @@ mod tests {
     /// Swept over every width rather than the handful a panel is usually given,
     /// because the widths that broke this were the ones nobody pictures: a
     /// tiling window manager quartering a screen, a pane dragged narrow. Both
-    /// the header and a row are measured — they are built by separate loops,
-    /// and only one of them was wrong the first time.
+    /// the header and a row are measured — they were built by separate loops,
+    /// and only one of them was wrong the first time. They share `Grid::line`
+    /// now, but not their content, and either could still overflow alone.
     #[test]
     fn no_grid_in_the_program_ever_overflows_its_width() {
         let cells = [

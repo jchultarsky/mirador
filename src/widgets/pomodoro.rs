@@ -1069,12 +1069,15 @@ mod tests {
         assert_eq!(minutes, 240, "but no further than the config");
     }
 
-    /// `[pomodoro]` bounds a phase only from below, so a hand-edited length
-    /// can be further off than a clock can count, and `+` on an `Instant` or
-    /// a `SystemTime` panics past its range. `SystemTime` on Windows runs out
+    /// `Config::validate` refuses a phase longer than a year, but the panel is
+    /// built from whatever `PomodoroConfig` it is handed and checks nothing
+    /// itself, so it keeps its own guard behind that bound: a length the
+    /// config refuses still starts, up to the most minutes a `u64` of seconds
+    /// can hold. Past what a clock can count, `+` on an
+    /// `Instant` or a `SystemTime` panics. `SystemTime` on Windows runs out
     /// in the year 30828, far sooner than `Instant` there, so reading the wall
-    /// clock as well brought the panic within reach of a figure that used to
-    /// start. Such a phase runs to the horizon instead.
+    /// clock as well brought the panic within reach of a figure the config
+    /// used to accept. Such a phase runs to the horizon instead.
     #[test]
     fn a_phase_too_long_for_the_clocks_starts_rather_than_panicking() {
         let mut p = PomodoroPanel::new(PomodoroConfig {

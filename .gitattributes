@@ -1,0 +1,5 @@
+# LF in every checkout, Windows included. `include_str!` embeds a file's
+# bytes as git wrote them, so a CRLF checkout of assets/default_config.toml
+# changed what the Windows build printed and wrote on first run, and twice
+# broke a test that looked for "\n" in it on Windows CI only.
+* text=auto eol=lf
