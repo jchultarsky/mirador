@@ -27,7 +27,7 @@
 //!   from.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -137,10 +137,7 @@ fn opted_out_given(read: impl Fn(&str) -> Option<String>) -> bool {
 }
 
 fn set(slot: &Found, value: Option<String>) {
-    match slot.lock() {
-        Ok(mut guard) => *guard = value,
-        Err(poisoned) => *poisoned.into_inner() = value,
-    }
+    *slot.lock().unwrap_or_else(PoisonError::into_inner) = value;
 }
 
 /// The version this binary was built as.

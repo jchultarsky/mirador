@@ -38,7 +38,7 @@
 //! nothing.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use jiff::Zoned;
@@ -425,20 +425,11 @@ impl NewsPanel {
     }
 
     fn snapshot(&self) -> State {
-        match self.state.lock() {
-            Ok(guard) => State {
-                stories: guard.stories.clone(),
-                fetched: guard.fetched,
-                error: guard.error.clone(),
-            },
-            Err(poisoned) => {
-                let guard = poisoned.into_inner();
-                State {
-                    stories: guard.stories.clone(),
-                    fetched: guard.fetched,
-                    error: guard.error.clone(),
-                }
-            }
+        let guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        State {
+            stories: guard.stories.clone(),
+            fetched: guard.fetched,
+            error: guard.error.clone(),
         }
     }
 }
@@ -989,10 +980,7 @@ fn fetch_loop(
         // panel said `Reading…` for as long as it ran.
         let replace = !stories.is_empty() || failures.is_empty();
         let failed = (!failures.is_empty()).then(|| failures.join("; "));
-        let mut guard = match state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = state.lock().unwrap_or_else(PoisonError::into_inner);
         if replace {
             guard.stories = stories;
             guard.fetched = Some(Instant::now());
@@ -1001,9 +989,8 @@ fn fetch_loop(
         drop(guard);
         generation.fetch_add(1, Ordering::Release);
 
-        let woke = crate::poll::wait(interval, stop, || match refresh.lock() {
-            Ok(mut flag) => std::mem::replace(&mut *flag, false),
-            Err(poisoned) => std::mem::replace(&mut *poisoned.into_inner(), false),
+        let woke = crate::poll::wait(interval, stop, || {
+            std::mem::take(&mut *refresh.lock().unwrap_or_else(PoisonError::into_inner))
         });
         if woke == crate::poll::Wake::Stop {
             return;

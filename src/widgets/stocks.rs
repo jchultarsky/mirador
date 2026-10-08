@@ -15,7 +15,7 @@
 //! panel edit it — mirador deliberately never rewrites its config.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
@@ -459,10 +459,10 @@ impl StocksPanel {
     fn snapshot(&self) -> Board {
         // A poisoned lock means the fetch thread panicked; recover the value
         // rather than taking the dashboard down with one panel.
-        match self.board.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        self.board
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Copy the board into what the frames draw if it has moved since the
@@ -532,10 +532,7 @@ impl StocksPanel {
     /// earlier and left the board waiting out the whole interval.
     fn publish_request(&self, refresh: bool) {
         let symbols = self.watchlist.symbols().to_vec();
-        let mut guard = match self.request.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.request.lock().unwrap_or_else(PoisonError::into_inner);
         guard.symbols = symbols;
         guard.refresh |= refresh;
     }
@@ -548,10 +545,7 @@ impl StocksPanel {
     /// them the watchlist changed before the next fetch landed.
     fn reseed_board(&self) {
         {
-            let mut guard = match self.board.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
+            let mut guard = self.board.lock().unwrap_or_else(PoisonError::into_inner);
             let existing = std::mem::take(&mut *guard);
             *guard = self
                 .watchlist
@@ -902,13 +896,11 @@ fn poll_rounds(
             return;
         }
 
-        let symbols = {
-            let guard = match request.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            guard.symbols.clone()
-        };
+        let symbols = request
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .symbols
+            .clone();
 
         last_poll = Some(Instant::now());
         for symbol in &symbols {
@@ -930,11 +922,8 @@ fn poll_rounds(
 
 /// Whether a refresh was asked for, leaving the request clear.
 fn take_refresh(request: &Mutex<Request>) -> bool {
-    let mut guard = match request.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    std::mem::replace(&mut guard.refresh, false)
+    let mut guard = request.lock().unwrap_or_else(PoisonError::into_inner);
+    std::mem::take(&mut guard.refresh)
 }
 
 /// Merge one symbol's result into the shared board, ignoring symbols that were
@@ -949,10 +938,7 @@ fn update(
     result: anyhow::Result<Quote>,
 ) {
     {
-        let mut guard = match board.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = board.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(slot) = guard.iter_mut().find(|(s, _)| s == symbol) {
             match result {
                 Ok(quote) => {

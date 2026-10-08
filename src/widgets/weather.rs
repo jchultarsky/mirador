@@ -11,7 +11,7 @@
 //! layout left the reader to infer.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -403,10 +403,10 @@ impl WeatherPanel {
 
     /// Point the panel at a different place and fetch it now.
     pub fn set_location(&mut self, to: String) {
-        match self.config.lock() {
-            Ok(mut guard) => guard.location = to,
-            Err(poisoned) => poisoned.into_inner().location = to,
-        }
+        self.config
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .location = to;
         if let Ok(mut flag) = self.refresh.lock() {
             *flag = true;
         }
@@ -468,20 +468,17 @@ impl WeatherPanel {
     /// 24 forecast slots and two `String`s, four times a frame between them and
     /// `render`.
     fn with_state<T>(&self, f: impl FnOnce(&State) -> T) -> T {
-        match self.state.lock() {
-            Ok(guard) => f(&guard),
-            Err(poisoned) => f(&poisoned.into_inner()),
-        }
+        f(&self.state.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     fn snapshot(&self) -> State {
         // A poisoned lock means the fetch thread panicked. Recover the value
         // rather than propagating the panic into the render loop: one dead
         // panel should not take the dashboard with it.
-        match self.state.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Bring [`Shown`] up to date: copy the shared state, and restate its
@@ -533,10 +530,10 @@ fn coordinates_configured(config: &Arc<Mutex<WeatherConfig>>) -> bool {
 
 /// The weather settings as they stand, which the panel may have changed.
 fn settings(config: &Arc<Mutex<WeatherConfig>>) -> WeatherConfig {
-    match config.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
+    config
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 /// Fetch now, then every `refresh_minutes`, until `stop` is set.
@@ -611,9 +608,8 @@ fn poll(
             }
         }
 
-        let woke = crate::poll::wait(interval, stop, || match refresh.lock() {
-            Ok(mut flag) => std::mem::replace(&mut *flag, false),
-            Err(poisoned) => std::mem::replace(&mut *poisoned.into_inner(), false),
+        let woke = crate::poll::wait(interval, stop, || {
+            std::mem::take(&mut *refresh.lock().unwrap_or_else(PoisonError::into_inner))
         });
         if woke == crate::poll::Wake::Stop {
             return;
@@ -639,10 +635,7 @@ fn reason(error: &anyhow::Error) -> String {
 /// The generation is bumped *after* the write and with `Release`, so a panel
 /// that sees the new number is guaranteed to see the data behind it.
 fn update(state: &Arc<Mutex<State>>, generation: &Arc<AtomicU64>, f: impl FnOnce(&mut State)) {
-    match state.lock() {
-        Ok(mut guard) => f(&mut guard),
-        Err(poisoned) => f(&mut poisoned.into_inner()),
-    }
+    f(&mut state.lock().unwrap_or_else(PoisonError::into_inner));
     generation.fetch_add(1, Ordering::Release);
 }
 

@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use jiff::civil::Date;
@@ -431,46 +431,27 @@ impl AgendaPanel {
     /// Its first read is as quiet as startup's, which is decided by
     /// `known_from` when the read lands rather than by clearing anything here.
     pub fn set_path(&mut self, to: PathBuf) {
-        match self.path.lock() {
-            Ok(mut guard) => *guard = to,
-            Err(poisoned) => *poisoned.into_inner() = to,
-        }
+        *self.path.lock().unwrap_or_else(PoisonError::into_inner) = to;
         // Another calendar starts at its top, not wherever this one was left.
         self.offset = 0;
         self.ask_for_reload();
     }
 
     fn snapshot(&self) -> State {
-        match self.state.lock() {
-            Ok(guard) => State {
-                events: guard.events.clone(),
-                error: guard.error.clone(),
-                skipped: guard.skipped,
-                read_at: guard.read_at,
-                built_for: guard.built_for,
-                built_until: guard.built_until,
-                source: guard.source.clone(),
-            },
-            Err(poisoned) => {
-                let guard = poisoned.into_inner();
-                State {
-                    events: guard.events.clone(),
-                    error: guard.error.clone(),
-                    skipped: guard.skipped,
-                    read_at: guard.read_at,
-                    built_for: guard.built_for,
-                    built_until: guard.built_until,
-                    source: guard.source.clone(),
-                }
-            }
+        let guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        State {
+            events: guard.events.clone(),
+            error: guard.error.clone(),
+            skipped: guard.skipped,
+            read_at: guard.read_at,
+            built_for: guard.built_for,
+            built_until: guard.built_until,
+            source: guard.source.clone(),
         }
     }
 
     fn ask_for_reload(&self) {
-        match self.reload.lock() {
-            Ok(mut flag) => *flag = true,
-            Err(poisoned) => *poisoned.into_inner() = true,
-        }
+        *self.reload.lock().unwrap_or_else(PoisonError::into_inner) = true;
     }
 
     /// The rows to draw: a heading per day, then that day's events.
@@ -569,10 +550,7 @@ fn read_calendar(path: &std::path::Path) -> std::io::Result<String> {
 
 /// The path as it stands, which the panel may have changed since the last pass.
 fn current_path(path: &Arc<Mutex<PathBuf>>) -> PathBuf {
-    match path.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
+    path.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 /// Read the file, parse it, and publish — then wait, and do it again.
@@ -636,15 +614,11 @@ fn read_loop(
             },
         };
 
-        match state.lock() {
-            Ok(mut guard) => *guard = next,
-            Err(poisoned) => *poisoned.into_inner() = next,
-        }
+        *state.lock().unwrap_or_else(PoisonError::into_inner) = next;
         generation.fetch_add(1, Ordering::Release);
 
-        let woke = crate::poll::wait(interval, stop, || match reload.lock() {
-            Ok(mut flag) => std::mem::replace(&mut *flag, false),
-            Err(poisoned) => std::mem::replace(&mut *poisoned.into_inner(), false),
+        let woke = crate::poll::wait(interval, stop, || {
+            std::mem::take(&mut *reload.lock().unwrap_or_else(PoisonError::into_inner))
         });
         if woke == crate::poll::Wake::Stop {
             return;
@@ -745,10 +719,7 @@ impl Panel for AgendaPanel {
         // several times that, for ever. Panel::alert's own documentation says
         // it must not allocate when it has nothing to say, which is nearly
         // always; this is that promise kept.
-        let guard = match self.state.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if guard.error.is_some() {
             return None;
         }

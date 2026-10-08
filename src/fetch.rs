@@ -25,8 +25,8 @@ use ureq::config::IpFamily;
 
 /// What [`get`] says under `cfg(test)` instead of making a request.
 ///
-/// Worded unlike `quote::http_get`'s own refusal, so that the stocks test
-/// pinning that one still fails if it is removed.
+/// `quote`'s `the_network_is_refused_while_testing` looks for its last words,
+/// `under cfg(test)`, to tell this refusal from a failure on the wire.
 const REFUSED: &str = "fetch::get makes no requests under cfg(test)";
 
 /// A blocking GET with a timeout, returning the body as a string.
@@ -264,13 +264,15 @@ mod tests {
     }
 
     /// "No test touches the network", held where every request goes through
-    /// rather than by each caller. `quote::http_get` refused for itself since
-    /// #147; weather, news and the update check call `get` directly, and only
-    /// `widgets::build` refusing their panels kept the first two off the wire.
-    /// A panel built any other way — `new` rather than `offline` — would have
-    /// gone out to Open-Meteo. The address is loopback's discard port, so with
-    /// the guard deleted this fails on a refused connect and still sends nothing
-    /// off the machine.
+    /// rather than by each caller. `quote::http_get` refused for itself from
+    /// #147 until this guard took its place; weather, news and the update
+    /// check call `get` directly, and only `widgets::build` refusing their
+    /// panels kept the first two off the wire. A panel built any other way —
+    /// `new` rather than `offline` — would have gone out to Open-Meteo. The
+    /// address is loopback's discard port, so with the guard deleted this
+    /// fails on a refused connect — and sends nothing off the machine unless
+    /// a proxy variable routes it through one, since `ureq` reads
+    /// `ALL_PROXY` and its siblings and does not exempt loopback.
     #[test]
     fn every_request_is_refused_while_testing() {
         let err = get("http://127.0.0.1:9/", Duration::from_secs(1), None)

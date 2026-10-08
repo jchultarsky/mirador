@@ -2089,10 +2089,11 @@ impl App {
         if !self.show_update_hint {
             return None;
         }
-        let latest = match self.update.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }?;
+        let latest = self
+            .update
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
         Some(format!("mirador {latest} is out   mirador --update "))
     }
 
