@@ -23,28 +23,88 @@
 
 use std::path::{Path, PathBuf};
 
-/// The notes, with line endings normalised.
+/// A file in the repository, named from its root, read at test time with its
+/// line endings normalised.
 ///
-/// `read_to_string` hands back whatever line endings are on disk. A checkout
-/// made through git is LF everywhere since `.gitattributes` asked for it, but
-/// that binds git and nothing else: a packager's tarball, or a checkout with
-/// its own settings, can still be CRLF, and a naive comparison would then fail
-/// there and nowhere else. The same trap, met through `include_str!`, has
-/// already cost this repository one confusing CI failure; see the
-/// `layout_edit` sweep.
-fn notes() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("CLAUDE.md");
-    std::fs::read_to_string(&path)
+/// The one door every test that reads a repository file *at run time* goes
+/// through — the notes, the README, the CHANGELOG, the plugin protocol
+/// document, and every source file [`source_files`] walks. There were four
+/// hand-written copies of this until 2026-10-08, one of them in another
+/// module, and one statement of why they normalise.
+///
+/// Files taken in at *compile time* do not come through here. `main.rs`
+/// reads its own source with `include_str!`, and `prompt.rs` the sources of
+/// the three panels that open prompts; `layout_edit` reads the shipped config
+/// that way, and other tests read that config as `config::DEFAULT_CONFIG`
+/// and the bundled themes as `themes::BUNDLED`, the copies the binary
+/// carries. `include_str!` keeps whatever line endings are on disk too, so a
+/// test of that kind that splits or compares by line normalises for itself,
+/// as `layout_edit`'s sweep and `keymap`'s shipped-config test do.
+///
+/// Why: `read_to_string` hands back whatever line endings are on disk. A
+/// checkout made through git is LF everywhere since `.gitattributes` asked for
+/// it, but that binds git and nothing else: a packager's tarball, or a
+/// checkout with its own settings, can still be CRLF, and a naive comparison
+/// would then fail there and nowhere else. The same trap, met through
+/// `include_str!`, has already cost this repository one confusing CI failure;
+/// see the `layout_edit` sweep.
+///
+/// A file that cannot be read panics with its path. A test reading nothing
+/// would pass for the wrong reason.
+pub(crate) fn repo_text(name: &str) -> String {
+    read(&Path::new(env!("CARGO_MANIFEST_DIR")).join(name))
+}
+
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
         .replace("\r\n", "\n")
 }
 
-/// The README, with line endings normalised for the same reason as `notes`.
+/// Every `.rs` file under `dir`, a directory named from the repository root,
+/// as its path relative to `dir` and its text, in path order.
+///
+/// The one walker every test that sweeps the source goes through. There were
+/// five, and they disagreed about the one thing that matters in a guard: three
+/// returned quietly on a directory they could not read and two panicked. The
+/// quiet ones found nothing, and a sweep that finds nothing passes any check
+/// that asks only that what it found was allowed — which is the test that
+/// cannot fail, arrived at through a typo in a path. This one panics instead.
+pub(crate) fn source_files(dir: &str) -> Vec<(PathBuf, String)> {
+    fn walk(root: &Path, dir: &Path, into: &mut Vec<(PathBuf, String)>) {
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+                .path();
+            if path.is_dir() {
+                walk(root, &path, into);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("a walked file stays below where the walk began")
+                    .to_path_buf();
+                into.push((relative, read(&path)));
+            }
+        }
+    }
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+    let mut files = Vec::new();
+    walk(&root, &root, &mut files);
+    files.sort();
+    files
+}
+
+/// The notes.
+fn notes() -> String {
+    repo_text("CLAUDE.md")
+}
+
+/// The README.
 fn readme() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
-        .replace("\r\n", "\n")
+    repo_text("README.md")
 }
 
 /// The number a word in the README spells, `one` to `twenty` or in digits.
@@ -171,25 +231,11 @@ fn readme_key_tables() -> std::collections::BTreeMap<&'static str, Vec<String>> 
 
 /// Every `.rs` file under `src/`, concatenated.
 fn sources() -> String {
-    fn walk(dir: &Path, into: &mut String) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, into);
-            } else if path.extension().is_some_and(|e| e == "rs")
-                && let Ok(text) = std::fs::read_to_string(&path)
-            {
-                into.push_str(&text);
-                into.push('\n');
-            }
-        }
-    }
-
     let mut all = String::new();
-    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut all);
+    for (_, text) in source_files("src") {
+        all.push_str(&text);
+        all.push('\n');
+    }
     all
 }
 
@@ -342,10 +388,7 @@ mod tests {
     /// entry in this module: true-looking prose that no build step reads.
     #[test]
     fn every_released_version_has_a_changelog_link() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("CHANGELOG.md");
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
-            .replace("\r\n", "\n");
+        let text = repo_text("CHANGELOG.md");
 
         let versions: Vec<String> = text
             .lines()
@@ -426,49 +469,6 @@ mod tests {
                 .any(|word| word == file || word == stem)
         }
 
-        fn walk(
-            root: &Path,
-            dir: &Path,
-            map: &str,
-            inspected: &mut usize,
-            missing: &mut Vec<String>,
-        ) {
-            for entry in std::fs::read_dir(dir)
-                .expect("source directory must be readable")
-                .flatten()
-            {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(root, &path, map, inspected, missing);
-                    continue;
-                }
-                if path.extension().is_none_or(|extension| extension != "rs") {
-                    continue;
-                }
-
-                let relative = path
-                    .strip_prefix(root)
-                    .expect("walked source stays below src")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                if relative == "main.rs" {
-                    continue;
-                }
-                *inspected += 1;
-
-                let Some((directory, file)) = relative.split_once('/') else {
-                    if !map.contains(&relative) {
-                        missing.push(relative);
-                    }
-                    continue;
-                };
-                let entry = directory_entry(map, directory);
-                if entry.is_empty() || (file != "mod.rs" && !names_module(&entry, file)) {
-                    missing.push(relative);
-                }
-            }
-        }
-
         let notes = notes();
         let map = notes
             .split("## Architecture")
@@ -476,10 +476,26 @@ mod tests {
             .and_then(|rest| rest.split("```").nth(1))
             .expect("CLAUDE.md must carry an ```-fenced map under `## Architecture`");
 
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut missing = Vec::new();
         let mut inspected = 0usize;
-        walk(&root, &root, map, &mut inspected, &mut missing);
+        for (path, _) in source_files("src") {
+            let relative = path.to_string_lossy().replace('\\', "/");
+            if relative == "main.rs" {
+                continue;
+            }
+            inspected += 1;
+
+            let Some((directory, file)) = relative.split_once('/') else {
+                if !map.contains(&relative) {
+                    missing.push(relative);
+                }
+                continue;
+            };
+            let entry = directory_entry(map, directory);
+            if entry.is_empty() || (file != "mod.rs" && !names_module(&entry, file)) {
+                missing.push(relative);
+            }
+        }
         missing.sort();
 
         assert!(
@@ -726,6 +742,16 @@ mod tests {
         assert_eq!(cell("`j` / `k`, `↑` / `↓`"), ["j", "k", "↑", "↓"]);
         assert_eq!(cell("`PageUp` / `PageDown`"), ["PgDn", "PgUp"]);
         assert_eq!(cell("`Space`"), ["space"]);
+    }
+
+    /// A sweep pointed at a directory that is not there must say so, not
+    /// sweep nothing. Three of the five walkers this replaced returned quietly
+    /// on an unreadable directory, and one of them guarded an assertion that a
+    /// sweep finding nothing satisfies.
+    #[test]
+    #[should_panic(expected = "reading")]
+    fn a_source_sweep_of_a_missing_directory_fails_loudly() {
+        source_files("src/no_such_directory");
     }
 
     /// The discriminator is empirical, so it is worth knowing when it stops

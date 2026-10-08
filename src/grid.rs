@@ -12,6 +12,7 @@
 //! the optional list rather than every column being squeezed into illegibility.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -147,15 +148,30 @@ fn glyph_width(glyph: &str) -> usize {
 /// it was measured for. The test that was supposed to catch this only ever fed
 /// it ASCII.
 ///
-/// Rows are emitted as slices of `text`, so nothing here allocates. Measured in
-/// cells rather than characters, per the rule the whole module exists for.
-fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
+/// Rows are emitted as byte ranges into `text`, so nothing here allocates, and
+/// a caller that needs to know where a row came from — [`wrap_line`], mapping
+/// it back onto styled spans — is handed the offset rather than left to
+/// recover it. Measured in cells rather than characters, per the rule the
+/// whole module exists for.
+fn break_lines(text: &str, width: usize, mut emit: impl FnMut(Range<usize>)) {
     if width == 0 {
         return;
     }
 
     let mut any = false;
-    for line in text.lines() {
+    // Where the current line starts in `text`. Lines are split the way
+    // `str::lines` splits them, which is what this walked before it reported
+    // offsets: a `\n` ends a line, and a `\r` directly before it goes with
+    // it. A lone `\r` is text, and so is one at the very end with no `\n`.
+    let mut offset = 0usize;
+    for terminated in text.split_inclusive('\n') {
+        let line = terminated
+            .strip_suffix('\n')
+            .map_or(terminated, |line| line.strip_suffix('\r').unwrap_or(line));
+        let base = offset;
+        offset += terminated.len();
+        let mut emit = |row: Range<usize>| emit(base + row.start..base + row.end);
+
         // Byte offsets into `line`: where the row being built starts, and how
         // far the words consumed so far reach.
         let mut start = 0usize;
@@ -166,7 +182,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
         for word in line.split_inclusive(' ') {
             let w = walked_width(word);
             if used > 0 && used + w > width {
-                emit(&line[start..cursor]);
+                emit(start..cursor);
                 (any, emitted_here) = (true, true);
                 start = cursor;
                 used = 0;
@@ -196,7 +212,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
                         None => break,
                     }
                 }
-                emit(&line[start..cut]);
+                emit(start..cut);
                 (any, emitted_here) = (true, true);
                 start = cut;
                 used = walked_width(&line[start..cursor]);
@@ -209,14 +225,14 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
         // `wrap("🌞🌞", 1)` came out as three rows, the last one empty. A
         // genuinely empty source line still gets its row, hence `emitted_here`.
         if start < cursor || !emitted_here {
-            emit(&line[start..cursor]);
+            emit(start..cursor);
             any = true;
         }
     }
 
     // An empty string has no lines at all, and still occupies one row.
     if !any {
-        emit(&text[..0]);
+        emit(0..0);
     }
 }
 
@@ -228,7 +244,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
 /// than by a test that has to remember to try a wide glyph.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let mut out = Vec::new();
-    break_lines(text, width, |line| out.push(line.to_string()));
+    break_lines(text, width, |row| out.push(text[row].to_string()));
     out
 }
 
@@ -241,11 +257,11 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 /// style boundary splits it. In that exceptional case the row is collapsed
 /// and truncated as one span so it still cannot cross the requested edge.
 /// Embedded `\n` and `\r\n` are accepted as hard line boundaries. Their bytes
-/// are skipped by mapping each wrapped row back to its absolute source range,
-/// so a delimiter can never drift the styled-byte cursor or become a slice
-/// panic. If an internal range ever stops landing on UTF-8 boundaries, the row
-/// falls back to the line style instead of trusting an assertion in release
-/// code.
+/// are skipped because [`break_lines`] hands back each row as its range in the
+/// joined text, so a delimiter can never drift the styled-byte cursor or
+/// become a slice panic.
+///
+/// The line's own style goes on every row, the collapsed one included.
 pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
@@ -255,24 +271,22 @@ pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
         .iter()
         .map(|span| span.content.as_ref())
         .collect();
-    let base = text.as_ptr() as usize;
     let mut output = Vec::new();
-    break_lines(&text, width, |row| {
-        let spans = (row.as_ptr() as usize)
-            .checked_sub(base)
-            .filter(|start| start.saturating_add(row.len()) <= text.len())
-            .and_then(|start| styled_byte_range(&line.spans, start, start + row.len()));
+    break_lines(&text, width, |range| {
+        let row = &text[range.clone()];
+        let spans = styled_byte_range(&line.spans, range.start, range.end);
         let style = spans
             .as_ref()
             .and_then(|spans| spans.first())
             .map_or(line.style, |span| span.style);
         let spans = spans.unwrap_or_else(|| vec![Span::styled(row.to_string(), style)]);
         let rendered_width: usize = spans.iter().map(|span| walked_width(&span.content)).sum();
-        if rendered_width > width {
-            output.push(Line::from(Span::styled(truncate(row, width), style)));
+        let row = if rendered_width > width {
+            Line::from(Span::styled(truncate(row, width), style))
         } else {
-            output.push(Line::from(spans).style(line.style));
-        }
+            Line::from(spans)
+        };
+        output.push(row.style(line.style));
     });
     output
 }
@@ -316,14 +330,21 @@ fn styled_byte_range(source: &[Span<'_>], start: usize, end: usize) -> Option<Ve
 /// Wrapping here first means its wrapper never runs, and the wrapping is the
 /// one in this module, which is measured in cells and tested against a corpus
 /// of wide glyphs and combining marks.
+///
+/// The rows are exactly [`wrap`]'s, joined by `\n`. A separator goes before
+/// every row but the first, counted rather than inferred from what has been
+/// written so far: an empty first row writes nothing, and asking whether
+/// anything had been written dropped a blank line the text began with.
 pub fn wrapped(text: &str, width: u16) -> String {
     let width = usize::from(width);
     let mut out = String::with_capacity(text.len());
-    break_lines(text, width, |line| {
-        if !out.is_empty() {
+    let mut first = true;
+    break_lines(text, width, |row| {
+        if !first {
             out.push('\n');
         }
-        out.push_str(line);
+        first = false;
+        out.push_str(&text[row]);
     });
     out
 }
@@ -835,15 +856,23 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::widgets::{Paragraph, Wrap};
 
-    /// The two must agree: a panel sizes itself with one and draws with the
-    /// other, so a disagreement puts content outside the box measured for it.
+    /// The three must agree: a panel sizes itself with `wrapped_height` and
+    /// draws with `wrap` or `wrapped`, so a disagreement puts content outside
+    /// the box measured for it, or leaves a measured row unused.
     ///
-    /// They are one function with two consumers now, so this cannot fail by
-    /// drift any more — but it could once, and for a long time it did not
-    /// notice. Every sample was ASCII, and the bug was that `wrapped_height`
-    /// measured an over-long word by subtracting `width` a row at a time, which
-    /// is only right when every glyph is one cell. The wide glyphs and the
-    /// widths below 8 are the part of this test that ever had a chance.
+    /// The row count cannot drift any more, since all three consume one
+    /// function — but it could once, and for a long time this did not notice.
+    /// Every sample was ASCII, and the bug was that `wrapped_height` measured
+    /// an over-long word by subtracting `width` a row at a time, which is only
+    /// right when every glyph is one cell. The wide glyphs and the widths below
+    /// 8 are the part of this test that ever had a chance.
+    ///
+    /// What can still drift is how a consumer puts the rows together, and
+    /// `wrapped` did: it wrote a separator only once something had been
+    /// written, so an empty first row read as nothing yet. `"\nabc"` came out
+    /// as `"abc"`, one row where two were measured and the blank line the
+    /// author wrote gone. No sample began with a newline and nothing compared
+    /// `wrapped` with `wrap`; the corpus starts with one about a time in six.
     #[test]
     fn wrapping_produces_exactly_as_many_rows_as_it_measures() {
         let samples = [
@@ -863,13 +892,25 @@ mod tests {
             // the same and measures zero cells.
             "\u{0301}\u{0301}leading marks",
             "blank\n\nline in the middle",
+            "\nblank line first",
+            "\n\n",
         ];
-        for text in samples {
+        let corpus = samples
+            .iter()
+            .map(ToString::to_string)
+            .chain(crashing_corpus());
+        for text in corpus {
             for width in 1..40u16 {
+                let rows = wrap(&text, usize::from(width));
                 assert_eq!(
-                    u16::try_from(wrap(text, usize::from(width)).len()).unwrap(),
-                    wrapped_height(text, width),
-                    "`{text}` at {width}"
+                    u16::try_from(rows.len()).unwrap(),
+                    wrapped_height(&text, width),
+                    "{text:?} at {width}"
+                );
+                assert_eq!(
+                    wrapped(&text, width),
+                    rows.join("\n"),
+                    "{text:?} at {width}"
                 );
             }
         }
@@ -975,45 +1016,28 @@ mod tests {
     /// it now comes through [`wrap_line`] instead.
     #[test]
     fn only_the_known_delete_confirmation_uses_ratatuis_own_wrapper() {
-        fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, needle, found);
-                } else if path.extension().is_some_and(|e| e == "rs")
-                    // This module's own tests use the wrapper deliberately, to
-                    // prove it still panics. Testing the thing is not using it.
-                    && path.file_name().is_some_and(|n| n != "grid.rs")
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    for line in text.lines() {
-                        let trimmed = line.trim_start();
-                        // Prose about the rule is not a use of it.
-                        if trimmed.starts_with("//") {
-                            continue;
-                        }
-                        if line.contains(needle) {
-                            let name = path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string();
-                            found.push(format!("{name}: {}", trimmed.trim_end()));
-                        }
-                    }
+        // Split so this test's own source is not a match.
+        let needle = concat!(".wr", "ap(");
+
+        let mut found = Vec::new();
+        for (path, text) in crate::docs::source_files("src") {
+            // This module's own tests use the wrapper deliberately, to prove
+            // it still panics. Testing the thing is not using it.
+            if path == std::path::Path::new("grid.rs") {
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            for line in text.lines() {
+                let trimmed = line.trim_start();
+                // Prose about the rule is not a use of it.
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if line.contains(needle) {
+                    found.push(format!("{name}: {}", trimmed.trim_end()));
                 }
             }
         }
-
-        // Split so this test's own source is not a match.
-        let needle = concat!(".wr", "ap(");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-
-        let mut found = Vec::new();
-        walk(&root, needle, &mut found);
         found.sort();
 
         assert_eq!(
@@ -1057,12 +1081,12 @@ mod tests {
     /// only thing there is to count.
     #[test]
     fn every_hand_built_composite_line_in_a_widget_is_accounted_for() {
-        // Each entry is a module and how many composite lines it may build.
+        // Each entry is a module and exactly how many composite lines it
+        // builds.
         // A line is exempt only when its width is *already* bounded — every
         // span truncated to a computed room, or the whole thing measured before
         // it is built.
         const ALLOWED: &[(&str, usize, &str)] = &[
-            ("agenda.rs", 1, "the row's summary is truncated to `room`"),
             (
                 "battery.rs",
                 1,
@@ -1071,8 +1095,8 @@ mod tests {
             ),
             (
                 "notes.rs",
-                2,
-                "search field and caret, both cut to the pane",
+                1,
+                "the search field, assembled to the pane by `status_line`",
             ),
             ("stocks.rs", 1, "the add field, assembled by `status_line`"),
             (
@@ -1087,48 +1111,54 @@ mod tests {
             ),
         ];
 
-        fn walk(dir: &std::path::Path, needle: &str, found: &mut Vec<String>) {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, needle, found);
-                } else if path.extension().is_some_and(|e| e == "rs")
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    // Tests build lines to assert about them, which is not
-                    // drawing one.
-                    let body = text.split("mod tests").next().unwrap_or(&text);
-                    for line in body.lines() {
-                        if line.trim_start().starts_with("//") {
-                            continue;
-                        }
-                        if line.contains(needle) {
-                            found.push(
-                                path.file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string(),
-                            );
-                        }
+        // Split so this test's own source is not a match.
+        let needle = concat!("Line::fr", "om(vec![");
+        let mut found = Vec::new();
+        // External panel output is bounded by the same invariant as an in-tree
+        // widget. Sweep both implementation trees so moving composition behind
+        // the process boundary cannot make this guard pass vacuously.
+        for directory in ["src/widgets", "src/plugin"] {
+            for (path, text) in crate::docs::source_files(directory) {
+                // Tests build lines to assert about them, which is not
+                // drawing one.
+                let body = text.split("mod tests").next().unwrap_or(&text);
+                for line in body.lines() {
+                    if line.trim_start().starts_with("//") {
+                        continue;
+                    }
+                    if line.contains(needle) {
+                        found.push(
+                            path.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string(),
+                        );
                     }
                 }
             }
         }
 
-        // Split so this test's own source is not a match.
-        let needle = concat!("Line::fr", "om(vec![");
-        let mut found = Vec::new();
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        // External panel output is bounded by the same invariant as an in-tree
-        // widget. Sweep both implementation trees so moving composition behind
-        // the process boundary cannot make this guard pass vacuously.
-        for directory in ["widgets", "plugin"] {
-            walk(&source.join(directory), needle, &mut found);
+        // Both directions, and each with its own advice, because the two
+        // failures want opposite fixes. Fewer than allowed is an allowance to
+        // retire: one nothing uses is a hole the next line in that module walks
+        // through without anyone being asked about it, and while this checked
+        // only `actual <= allowed` two had opened — `agenda.rs` kept one for a
+        // row #239 had moved onto `assemble`, and `notes.rs` was allowed two
+        // lines and built one. It is also what makes a sweep that reads nothing
+        // fail, rather than pass by finding nothing to object to. More than
+        // allowed is a new line to justify, and that is the loop after this
+        // one: a single `assert_eq!` here caught it first and told the author
+        // to raise the count to match.
+        for (module, allowed, _) in ALLOWED {
+            let actual = found.iter().filter(|f| f == module).count();
+            assert!(
+                actual >= *allowed,
+                "{module} is allowed {allowed} composite line(s) and builds only \
+                 {actual}. Bring the count down to what is there, or take the \
+                 entry out: an allowance that outlives its line passes the next \
+                 one unexamined."
+            );
         }
-
         for name in &found {
             let allowed = ALLOWED
                 .iter()
@@ -1143,8 +1173,8 @@ mod tests {
                  cut by the terminal, which cannot tell a value from a fragment \
                  — `↑ 6.4 KB` where a rate was meant, `+52.0` where a price was. \
                  Build it with `grid::assemble` so whole parts are dropped \
-                 instead, or bound every span yourself and add the module here \
-                 with the reason."
+                 instead, or bound every span yourself and account for the line \
+                 in `ALLOWED` with the reason."
             );
         }
     }
@@ -1256,6 +1286,65 @@ mod tests {
             .map(|span| display_width(&span.content))
             .sum();
         assert!(rendered_width <= 2, "rendered width was {rendered_width}");
+    }
+
+    /// A line's own style belongs to every row it wraps to, whichever way the
+    /// row was built.
+    ///
+    /// `wrap_line` builds a row one of two ways: the source spans copied
+    /// across, or — when a joined emoji split by a style boundary would draw
+    /// wider than it measures — the row collapsed into one truncated span. Only
+    /// the first applied `line.style`, so a red line came back with its
+    /// collapsed rows in the terminal's own colour. Latent: nothing that
+    /// reaches this sets a line style today (the help overlay and plugin
+    /// output both build a bare `Line::from`), so the first caller to style a
+    /// line would have met it on the one row that also held an emoji.
+    #[test]
+    fn a_wrapped_line_keeps_its_line_style_on_every_branch() {
+        let red = Style::default().fg(ratatui::style::Color::Red);
+        let bold = Style::default().add_modifier(Modifier::BOLD);
+        let italic = Style::default().add_modifier(Modifier::ITALIC);
+
+        let copied = wrap_line(
+            &Line::from(vec![
+                Span::styled("a", bold),
+                Span::raw("b"),
+                Span::raw("cd"),
+            ])
+            .style(red),
+            2,
+        );
+        let collapsed = wrap_line(
+            &Line::from(vec![
+                Span::styled("👩", bold),
+                Span::styled("\u{200d}💻", italic),
+            ])
+            .style(red),
+            2,
+        );
+
+        // Each half has to have taken its own branch, or this checks one
+        // branch twice and passes for the wrong reason. A row of one span
+        // cannot say which it took, since collapsing it builds the same span,
+        // so the copied half's first row is two: only copying keeps both.
+        assert_eq!(copied.len(), 2, "{copied:?}");
+        assert_eq!(
+            copied[0].spans.len(),
+            2,
+            "a row that fits must take the copying branch: {copied:?}"
+        );
+        assert_eq!(copied[1].spans[0].style, Style::default(), "{copied:?}");
+        assert_eq!(collapsed.len(), 1, "{collapsed:?}");
+        assert_eq!(
+            collapsed[0].spans.len(),
+            1,
+            "the joined emoji must take the collapsing branch: {collapsed:?}"
+        );
+        assert_eq!(collapsed[0].spans[0].style, bold, "{collapsed:?}");
+
+        for row in copied.iter().chain(&collapsed) {
+            assert_eq!(row.style, red, "a row lost its line's style: {row:?}");
+        }
     }
 
     #[test]
@@ -1442,28 +1531,15 @@ mod tests {
     /// stops being complete, and the failure mode is silence.
     #[test]
     fn every_grid_in_the_program_is_on_this_list() {
-        fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
-            for entry in std::fs::read_dir(dir).unwrap().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, found);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    let text = std::fs::read_to_string(&path).unwrap();
-                    // Counted, not merely detected: a module can declare more
-                    // than one column set, and the clock does (#265).
-                    let declared = text.matches(concat!(": &[", "Column] = &[")).count();
-                    for _ in 0..declared {
-                        found.push(path.file_stem().unwrap().to_string_lossy().into_owned());
-                    }
-                }
+        let mut found = Vec::new();
+        for (path, text) in crate::docs::source_files("src") {
+            // Counted, not merely detected: a module can declare more than
+            // one column set, and the clock does (#265).
+            let declared = text.matches(concat!(": &[", "Column] = &[")).count();
+            for _ in 0..declared {
+                found.push(path.file_stem().unwrap().to_string_lossy().into_owned());
             }
         }
-
-        let mut found = Vec::new();
-        walk(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            &mut found,
-        );
         found.sort();
 
         let mut listed: Vec<String> = EVERY_GRID.iter().map(|(n, _)| (*n).to_string()).collect();

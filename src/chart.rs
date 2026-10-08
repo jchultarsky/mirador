@@ -425,19 +425,26 @@ pub fn meter_line(percent: u16, width: u16, fill: Color, track: Color) -> Vec<Sp
         .collect()
 }
 
-/// A horizontal bar meter.
+/// A horizontal bar meter, one span per cell, to be drawn as a `Paragraph`.
 ///
 /// The gradient is indexed by each cell's *position*, not by the value, so a
 /// bar at 40% shows the cool end of the ramp and a bar at 95% runs the whole
 /// way to hot. The unfilled tail keeps the same glyph in the track colour, so
 /// the meter's footprint never changes as the value moves.
+///
+/// It returned bare `(char, Style)` pairs until 2026-10-08, despite the name,
+/// and so each caller wrote its own loop into the buffer with its own bound
+/// and its own idea of what an index that does not fit a `u16` means. Spans
+/// go into a `Paragraph`, which clips to its rect, so neither caller needs a
+/// loop any more — and the cells borrow one static glyph, so the only
+/// allocation is the `Vec`, sized to the screen as [`meter_line`]'s is.
 pub fn meter_spans(
     value: u64,
     max: u64,
     width: u16,
     gradient: &Gradient,
     track: Style,
-) -> Vec<(char, Style)> {
+) -> Vec<Span<'static>> {
     let width = width as usize;
     if width == 0 {
         return Vec::new();
@@ -452,9 +459,9 @@ pub fn meter_spans(
         .map(|i| {
             if i < filled {
                 let pct = i64::try_from((i + 1) * 100 / width).unwrap_or(100);
-                ('■', Style::default().fg(gradient.at(pct)))
+                Span::styled("■", Style::default().fg(gradient.at(pct)))
             } else {
-                ('■', track)
+                Span::styled("■", track)
             }
         })
         .collect()
@@ -771,7 +778,7 @@ mod tests {
         assert!(
             meter_spans(100, 100, 10, &g, track)
                 .iter()
-                .all(|(c, _)| *c == '■')
+                .all(|span| span.content == "■")
         );
     }
 
