@@ -236,7 +236,7 @@ pub struct AgendaPanel {
     keys: PanelKeymap<AgendaAction>,
     state: Arc<Mutex<State>>,
     /// Set to ask the reader thread for an immediate re-read.
-    reload: Arc<Mutex<bool>>,
+    reload: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     seen: u64,
     stop: Arc<AtomicBool>,
@@ -303,7 +303,7 @@ impl Drop for AgendaPanel {
 impl AgendaPanel {
     pub fn new(config: &AgendaConfig, path: PathBuf) -> Self {
         let state = Arc::new(Mutex::new(State::default()));
-        let reload = Arc::new(Mutex::new(false));
+        let reload = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
 
@@ -382,7 +382,7 @@ impl AgendaPanel {
             crate::prompt::Outcome::Submitted(answer) => {
                 let path = crate::prompt::expand_tilde(&answer);
                 if !answer.is_empty()
-                    && let Err(e) = std::fs::metadata(&path)
+                    && let Err(e) = calendar_file(&path)
                 {
                     prompt.reject(format!("{e}"));
                     return;
@@ -469,7 +469,9 @@ impl AgendaPanel {
     }
 
     fn ask_for_reload(&self) {
-        *self.reload.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        // `Release`, after `set_path` has written the path, so the reader that
+        // takes the flag reads the new calendar rather than the old one again.
+        self.reload.store(true, Ordering::Release);
     }
 
     /// The rows to draw: a heading per day, then that day's events.
@@ -635,8 +637,18 @@ const MAX_CALENDAR: u64 = 10 * 1024 * 1024;
 ///
 /// Checked before reading rather than after: the point is not to notice that
 /// something enormous was loaded, it is not to load it.
+///
+/// Checked twice, because the first check takes the file's word for its size.
+/// A file can grow between the two calls, and some regular files — Linux's
+/// `/proc` — say 0 whatever they hold, so the size is the cheap early refusal
+/// with the better message, and the read itself stops a byte past the limit —
+/// the same rule as a theme file, where asking how big a file is and reading
+/// it are two different facts.
+///
+/// Anything but a regular file is refused before either, by
+/// [`calendar_file`].
 fn read_calendar(path: &std::path::Path) -> std::io::Result<String> {
-    let size = std::fs::metadata(path)?.len();
+    let size = calendar_file(path)?.len();
     if size > MAX_CALENDAR {
         return Err(std::io::Error::other(format!(
             "the calendar is {} MB, over the {} MB limit — mirador reads a \
@@ -645,7 +657,79 @@ fn read_calendar(path: &std::path::Path) -> std::io::Result<String> {
             MAX_CALENDAR / (1024 * 1024)
         )));
     }
-    std::fs::read_to_string(path)
+    read_capped(std::fs::File::open(path)?, MAX_CALENDAR)
+}
+
+/// What `path` names, once it is known to be a regular file, following any
+/// symbolic link to get there.
+///
+/// Everything else is refused before it is opened, because opening is where
+/// a pipe waits: `open` on a FIFO blocks until something opens the other end,
+/// and the agenda has one reader thread, so a pipe nobody wrote to stopped the
+/// panel reading until a restart. A device is refused with it — `/dev/zero`
+/// has no end, and no device is a calendar — and so is a directory, which the
+/// OS would refuse anyway, only later and in its own words.
+///
+/// The reason leads with what the path is, since the `f` prompt cuts it to
+/// one line.
+fn calendar_file(path: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+    let meta = std::fs::metadata(path)?;
+    if meta.is_file() {
+        return Ok(meta);
+    }
+    Err(std::io::Error::other(format!(
+        "{}, not a calendar file",
+        what_is_not_a_file(meta.file_type())
+    )))
+}
+
+/// A path that is not a regular file, named the way a person would.
+fn what_is_not_a_file(kind: std::fs::FileType) -> &'static str {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if kind.is_fifo() {
+            return "a pipe";
+        }
+        if kind.is_char_device() || kind.is_block_device() {
+            return "a device";
+        }
+        if kind.is_socket() {
+            return "a socket";
+        }
+    }
+    if kind.is_dir() {
+        "a directory"
+    } else {
+        "something other than a file"
+    }
+}
+
+/// All of `reader` as text, or a refusal once it runs past `cap` bytes.
+///
+/// One byte past the cap is read, so a source of exactly `cap` bytes is
+/// accepted and anything longer is known to be longer. The length is checked
+/// before the text is, because a cut can fall inside a character: an
+/// oversized calendar in any script but ASCII would otherwise be refused as
+/// not being text, which is true of the fragment and not of the file.
+fn read_capped(reader: impl std::io::Read, cap: u64) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    reader.take(cap.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        return Err(std::io::Error::other(format!(
+            "the calendar is over the {} MB limit — mirador reads a calendar \
+             into memory, so it will not open one this large",
+            cap / (1024 * 1024)
+        )));
+    }
+    // Worded as `fs::read_to_string` words it, which is what this replaced.
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+    })
 }
 
 /// The path as it stands, which the panel may have changed since the last pass.
@@ -659,8 +743,8 @@ fn read_loop(
     days: u16,
     interval: Duration,
     state: &Arc<Mutex<State>>,
-    reload: &Arc<Mutex<bool>>,
-    stop: &Arc<AtomicBool>,
+    reload: &AtomicBool,
+    stop: &AtomicBool,
     generation: &Arc<AtomicU64>,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -688,9 +772,9 @@ fn read_loop(
                     }
                 }
                 // A missing file is the unconfigured case, not a failure.
-                // Anything else — a permission problem, a directory where a
-                // file should be — keeps the message the OS gave, which is the
-                // one that says what to do about it.
+                // Anything else — a permission problem, a pipe where a file
+                // should be — keeps the message it came with, which is the one
+                // that says what to do about it.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => State {
                     error: Some(Trouble::NoFile),
                     read_at: Some(Instant::now()),
@@ -717,9 +801,7 @@ fn read_loop(
         *state.lock().unwrap_or_else(PoisonError::into_inner) = next;
         generation.fetch_add(1, Ordering::Release);
 
-        let woke = crate::poll::wait(interval, stop, || {
-            std::mem::take(&mut *reload.lock().unwrap_or_else(PoisonError::into_inner))
-        });
+        let woke = crate::poll::wait(interval, stop, || reload.swap(false, Ordering::AcqRel));
         if woke == crate::poll::Wake::Stop {
             return;
         }
@@ -1584,6 +1666,117 @@ mod tests {
         assert!(read_calendar(&small).is_ok());
     }
 
+    /// The bound on the read itself, against a source with no end at all.
+    /// `read_calendar` refuses a pipe or a device before opening it, so what
+    /// this bound still meets is a regular file that says less than it holds:
+    /// one that grew after its size was read, or one of Linux's `/proc` files,
+    /// which say 0 whatever is in them.
+    #[test]
+    fn a_read_is_cut_off_a_byte_past_the_limit_however_long_the_source() {
+        use std::io::Read;
+        // Lengths, not text: a failure would otherwise print ten megabytes.
+        let err = read_capped(std::io::repeat(b'X'), MAX_CALENDAR)
+            .map(|text| text.len())
+            .expect_err("must refuse");
+        let message = err.to_string();
+        assert!(message.contains("limit"), "says why: {message}");
+        assert!(
+            message.contains("10 MB"),
+            "and what the limit is: {message}"
+        );
+
+        // Exactly at the cap is a calendar; one byte over is not.
+        let cap = 64;
+        let at = read_capped(std::io::repeat(b'X').take(cap), cap).expect("at the cap");
+        assert_eq!(at.len() as u64, cap);
+        assert!(read_capped(std::io::repeat(b'X').take(cap + 1), cap).is_err());
+
+        // A cut inside a character is reported as the limit, not as bad text:
+        // sixty-five bytes of `é` end on half of one.
+        let accents = "é".repeat(100);
+        let err = read_capped(accents.as_bytes(), cap).expect_err("over the cap");
+        assert!(err.to_string().contains("limit"), "{err}");
+        // While text that is not text, inside the limit, still says so.
+        let err = read_capped(&[0xFFu8, 0xFE][..], cap).expect_err("not UTF-8");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// A pipe is refused before it is opened, because opening is where a
+    /// pipe waits: `open` on a FIFO blocks until something opens the other
+    /// end. The agenda has one reader thread, so a calendar path naming a
+    /// pipe nobody writes to stopped the panel reading for good — every later
+    /// `r` and `f` set a flag nothing looked at again, and `reloading…` stayed
+    /// up until a restart. Neither bound could see it: the size check because
+    /// a pipe says it is empty whatever is behind it, and the capped read
+    /// because the read never began. A pipe somebody *is* writing to is
+    /// refused the same way; it used to pass the size check and be read
+    /// whole, 12 MB against the 10 MB limit, which is what the capped read
+    /// was first written for.
+    ///
+    /// The read runs on a thread so that a failure here fails rather than
+    /// hangs, and a reader left waiting is let go by opening the other end.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_nobody_writes_to_is_refused_before_it_is_opened() {
+        let dir = TempDir::new("ics-fifo");
+        let path = dir.join("cal.ics");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("running mkfifo");
+        assert!(made.success(), "mkfifo failed");
+
+        let (sent, outcome) = std::sync::mpsc::channel();
+        let reader = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                let _ = sent.send(read_calendar(&path).map(|text| text.len()));
+            })
+        };
+        let Ok(outcome) = outcome.recv_timeout(Duration::from_secs(5)) else {
+            // The reader is waiting in `open`: opening the writing end lets
+            // it through, and closing it at once hands it an end of file.
+            drop(std::fs::OpenOptions::new().write(true).open(&path));
+            let _ = reader.join();
+            panic!("read_calendar was still waiting on a pipe with no writer after 5 s");
+        };
+        reader.join().expect("the reader thread");
+        let message = outcome.expect_err("a pipe must be refused").to_string();
+        assert!(
+            message.starts_with("a pipe"),
+            "says what it is, first, for a status cut to the panel: {message}"
+        );
+
+        // Nor is a directory a calendar, and it says so the same way.
+        let message = read_calendar(&dir)
+            .expect_err("a directory must be refused")
+            .to_string();
+        assert!(message.starts_with("a directory"), "{message}");
+    }
+
+    /// The `f` prompt checks a path before taking it, and a pipe is refused
+    /// there too — taking it would hand the reader thread a path it must not
+    /// open.
+    #[cfg(unix)]
+    #[test]
+    fn f_refuses_a_pipe_where_it_was_typed() {
+        let dir = TempDir::new("agenda-prompt-fifo");
+        let path = dir.join("cal.ics");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("running mkfifo");
+        assert!(made.success(), "mkfifo failed");
+        let mut panel = AgendaPanel::new(&AgendaConfig::default(), path.clone());
+        let key = |code| KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
+
+        // The prompt opens on the panel's own path, so Enter submits the pipe.
+        panel.handle_key(key(KeyCode::Char('f')));
+        panel.handle_key(key(KeyCode::Enter));
+        let prompt = panel.asking.as_ref().expect("a pipe keeps the prompt open");
+        assert_eq!(prompt.value(), path.display().to_string());
+    }
+
     #[test]
     fn a_notice_never_lands_on_top_of_an_event() {
         // The bug this exists for, seen on screen before it was found in the
@@ -1727,6 +1920,49 @@ mod tests {
             .generation
             .store(panel.seen + 1, std::sync::atomic::Ordering::Release);
         panel.tick();
+    }
+
+    /// `r` and `f` set a flag the reader's wait reads once a slice, and the
+    /// read has to *take* it: a wait that never looks leaves the key dead
+    /// until `refresh_secs` is up, and one that looks without clearing reads
+    /// the calendar four times a second from then on.
+    /// `a_landed_reload_takes_its_own_message_down` fakes the read landing;
+    /// this runs the real loop against a real file.
+    #[test]
+    fn a_reload_asked_for_ends_the_wait_and_is_taken() {
+        let dir = TempDir::new("agenda-reload");
+        let path = Arc::new(Mutex::new(dir.join("cal.ics")));
+        std::fs::write(dir.join("cal.ics"), "BEGIN:VCALENDAR\nEND:VCALENDAR\n").unwrap();
+        let state = Arc::new(Mutex::new(State::default()));
+        let reload = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let thread = {
+            let (path, state, reload, stop, generation) = (
+                Arc::clone(&path),
+                Arc::clone(&state),
+                Arc::clone(&reload),
+                Arc::clone(&stop),
+                Arc::clone(&generation),
+            );
+            std::thread::spawn(move || {
+                let hour = Duration::from_hours(1);
+                read_loop(&path, 1, hour, &state, &reload, &stop, &generation);
+            })
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while generation.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        thread.join().expect("the reader thread");
+
+        assert!(
+            generation.load(Ordering::Acquire) >= 2,
+            "the reload did not end the wait"
+        );
+        assert!(!reload.load(Ordering::Acquire), "and the request was taken");
     }
 
     /// The bug: `reloading…` was set when the reload was *asked for* and cleared

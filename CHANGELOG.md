@@ -70,6 +70,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   title longer than its field lost the caret off the edge, and a search
   longer than its line lost it to the `…` that cut the term. The watchlist's
   `symbol` line had the same fault and has the same fix.
+- **The weather's forecast opens on the hour in progress for the whole of
+  that hour.** Open-Meteo stamps its current conditions every fifteen
+  minutes, and the table compared that stamp with each hour's to the minute,
+  so from `:15` to `:59` the hour already under way counted as past and the
+  table began at the next one, beside an observation stamped `at 14:15`.
+  It compares to the hour now.
+- **A quote whose day's change cannot be stated is refused rather than
+  drawn as `inf`.** Numbers too large for the parser were already refused,
+  but two it accepts can still overflow once subtracted or divided — a price
+  of `1e308` against a close of `-1e308` printed `+inf` in the change column,
+  and against a close of `1e-10` printed `+inf%`. A price that had moved from
+  a close of zero printed the whole price as the day's change beside
+  `+0.00%`, because no percentage can be taken of zero. The row now falls
+  back as for any failed fetch, to the last good price with its age or to
+  `–`, and says `numbers out of range in the response`.
+- **A calendar path naming a pipe, a device or a directory is refused, by `f`
+  and by the reader alike.** The 10 MB limit was checked against the size the
+  file reported before reading, and a pipe reports 0, so `f` pointed at a FIFO
+  read it whole. A pipe nobody was writing to was worse: opening one waits for
+  a writer, so the agenda stopped reading until a restart and `reloading…`
+  never went away. Anything but a regular file is now refused before it is
+  opened, saying what it is — `a pipe, not a calendar file` — so `/dev/zero`
+  is no longer read until memory runs out, ending the
+  dashboard. The read itself now stops a byte past the limit and says so.
+- **The day's percentage runs the way the day's change does when the
+  previous close was below zero.** A close can be negative — oil futures
+  settled at −37.63 in April 2020 — and the percentage took the close's sign,
+  so a rise from −10 to −5 read `+5.00` beside `-50.00%`. It is measured
+  against the close's size now, and reads `+50.00%`.
 
 ## [1.21.0] - 2026-10-08
 
