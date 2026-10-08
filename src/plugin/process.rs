@@ -108,16 +108,56 @@ pub(super) struct Runtime {
     /// rather than the queue, so `shutdown` does not wait for room behind
     /// input the child has not read yet — see [`writer_loop`].
     stopping: Arc<AtomicBool>,
+    /// Set while a `tick` is in the queue, so there is never more than one
+    /// — see [`Runtime::send_tick`]. The writer clears it as it takes the
+    /// tick out.
+    tick_pending: Arc<AtomicBool>,
     supervisor: mpsc::Sender<SupervisorCommand>,
     supervisor_thread: Option<JoinHandle<()>>,
 }
 
 impl Runtime {
     pub(super) fn send(&self, message: HostMessage) -> Result<(), TrySendError<HostMessage>> {
+        debug_assert!(
+            !matches!(message, HostMessage::Tick),
+            "a tick goes through `send_tick`, which keeps it to one in the queue"
+        );
         let Some(events) = self.events.as_ref() else {
             return Err(TrySendError::Disconnected(message));
         };
         events.try_send(message)
+    }
+
+    /// Queue a `tick` unless one is already waiting.
+    ///
+    /// A tick is a cue to redraw, not a clock: it carries nothing, so two
+    /// waiting say no more than one. Queued on every poll like input, they
+    /// piled up behind a plugin that had stopped reading as soon as the pipe
+    /// was full — 4,096 of them on macOS, two minutes and a quarter at
+    /// 33 ms on a focused panel capturing input, seventeen minutes at the
+    /// dashboard's default 250 ms otherwise — and took all 256 places in
+    /// 256 polls more, after which every key was dropped under a notice
+    /// that blamed input. Now the queue holds at most one, however many
+    /// polls pass, and the rest of it is left for input. Ticks already in
+    /// the pipe are beyond reach and still arrive.
+    ///
+    /// The writer clears the flag *before* writing the tick it takes out,
+    /// so a tick raised while that write blocks is queued, not folded into
+    /// one already gone. A tick that finds no room clears it again, so the
+    /// next poll tries afresh rather than finding one "waiting" that
+    /// never went in. `&mut self` keeps this to one caller at a time, which
+    /// is what makes clearing it on failure safe.
+    pub(super) fn send_tick(&mut self) {
+        if self.tick_pending.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let queued = self
+            .events
+            .as_ref()
+            .is_some_and(|events| events.try_send(HostMessage::Tick).is_ok());
+        if !queued {
+            self.tick_pending.store(false, Ordering::Release);
+        }
     }
 
     pub(super) fn abort(&self) {
@@ -174,6 +214,7 @@ impl Runtime {
             Self {
                 events: Some(events),
                 stopping: Arc::new(AtomicBool::new(false)),
+                tick_pending: Arc::new(AtomicBool::new(false)),
                 supervisor,
                 supervisor_thread: Some(supervisor_thread),
             },
@@ -225,15 +266,18 @@ pub(super) fn spawn_process(
     let (event_tx, event_rx) = mpsc::sync_channel(EVENT_QUEUE);
     let (supervisor_tx, supervisor_rx) = mpsc::channel();
     let stopping = Arc::new(AtomicBool::new(false));
+    let tick_pending = Arc::new(AtomicBool::new(false));
 
     let writer_shared = Arc::clone(shared);
     let writer_supervisor = supervisor_tx.clone();
     let writer_stopping = Arc::clone(&stopping);
+    let writer_tick_pending = Arc::clone(&tick_pending);
     thread::spawn(move || {
         writer_loop(
             stdin,
             &event_rx,
             &writer_stopping,
+            &writer_tick_pending,
             &writer_shared,
             &writer_supervisor,
         );
@@ -271,6 +315,7 @@ pub(super) fn spawn_process(
     let runtime = Runtime {
         events: Some(event_tx),
         stopping,
+        tick_pending,
         supervisor: supervisor_tx,
         supervisor_thread: Some(supervisor_thread),
     };
@@ -287,14 +332,18 @@ pub(super) fn spawn_process(
 /// written is beyond reach: a child that has stopped reading holds this
 /// thread in a write only once the pipe's own buffer is full, so if it reads
 /// again inside its grace it reads that buffer first and then `shutdown`,
-/// not the queue's backlog of ticks as well, which it would be killed
-/// halfway through. The one exception is `hello`, which is never
-/// skipped: the protocol says `shutdown` may *follow* it during startup,
-/// and a plugin should not be told to stop by a host that never said hello.
+/// not the queue's backlog as well, which it would be killed halfway
+/// through. The one exception is `hello`, which is never skipped: the
+/// protocol says `shutdown` may *follow* it during startup, and a plugin
+/// should not be told to stop by a host that never said hello.
+///
+/// A `tick` taken out of the queue clears `tick_pending` before it is
+/// written, which is what lets [`Runtime::send_tick`] queue the next one.
 fn writer_loop(
     mut stdin: impl Write,
     events: &Receiver<HostMessage>,
     stopping: &AtomicBool,
+    tick_pending: &AtomicBool,
     shared: &Arc<Mutex<Shared>>,
     supervisor: &mpsc::Sender<SupervisorCommand>,
 ) {
@@ -316,6 +365,13 @@ fn writer_loop(
             } else {
                 event
             };
+        if matches!(event, HostMessage::Tick) {
+            // Before the write, not after it. A plugin slow to read holds
+            // this thread inside the write, and the refreshes meanwhile
+            // must queue one tick behind it, not find the flag still set
+            // and fold themselves into this one, already out of the queue.
+            tick_pending.store(false, Ordering::Release);
+        }
         if !write(&event) || matches!(event, HostMessage::Shutdown) {
             return;
         }
@@ -1030,9 +1086,12 @@ fn expire_startup(shared: &Arc<Mutex<Shared>>, now: Instant, deadline: Instant) 
 mod tests {
     use std::process::Stdio;
 
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
     use super::*;
-    use crate::panel::Panel;
-    use crate::plugin::{PluginPanel, WireBinding, WireSpan};
+    use crate::panel::{KeyOutcome, Panel};
+    use crate::plugin::tests::detached_panel;
+    use crate::plugin::{InputPolicy, PluginPanel, WireBinding, WireSpan};
 
     const WAITING_CHILD_TEST: &str =
         "plugin::process::tests::child_waits_for_the_parent_to_terminate_it";
@@ -1070,6 +1129,7 @@ mod tests {
             Runtime {
                 events: Some(events),
                 stopping: Arc::new(AtomicBool::new(false)),
+                tick_pending: Arc::new(AtomicBool::new(false)),
                 supervisor,
                 supervisor_thread: Some(supervisor_thread),
             },
@@ -1408,6 +1468,15 @@ mod tests {
         }
     }
 
+    fn key_x() -> HostMessage {
+        HostMessage::Key {
+            key: "x".into(),
+            code: "char".into(),
+            text: Some("x".into()),
+            modifiers: Vec::new(),
+        }
+    }
+
     fn lines_of(written: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
         let bytes = written
             .lock()
@@ -1424,16 +1493,16 @@ mod tests {
     /// `try_send`, so a plugin that had fallen 256 messages behind was never
     /// told — the queue was full, the message was dropped, and the child was
     /// killed at the end of its grace without the one word the protocol
-    /// promises it. Here the child stops reading mid-`hello`, ticks fill the
-    /// queue behind it, the host shuts down, and then the child reads again:
-    /// what follows the `hello` is `shutdown`, not the queue's ticks.
+    /// promises it. Here the child stops reading mid-`hello`, the queue fills
+    /// behind it — one tick, since ticks wait one at a time, and keys in
+    /// every other place — the host shuts down, and then the child reads
+    /// again: what follows the `hello` is `shutdown`, not the queue.
     /// `HeldPipe` has no buffer, so this is the host's queue alone; a real
     /// pipe hands over what it already holds first, as the protocol
     /// document says.
     #[test]
     fn shutdown_reaches_the_plugin_past_a_full_queue() {
         let shared = Arc::new(Mutex::new(Shared::starting()));
-        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
         let (entered_tx, entered) = mpsc::channel();
         let (release, release_rx) = mpsc::channel();
         let written = Arc::new(Mutex::new(Vec::new()));
@@ -1442,40 +1511,18 @@ mod tests {
             release: Some(release_rx),
             written: Arc::clone(&written),
         };
-        let (supervisor, commands) = mpsc::channel();
-        let stopping = Arc::new(AtomicBool::new(false));
-        let writer = {
-            let shared = Arc::clone(&shared);
-            let supervisor = supervisor.clone();
-            let stopping = Arc::clone(&stopping);
-            thread::spawn(move || writer_loop(pipe, &received, &stopping, &shared, &supervisor))
-        };
-        let supervisor_thread = thread::spawn(move || {
-            while let Ok(command) = commands.recv() {
-                if matches!(
-                    command,
-                    SupervisorCommand::Shutdown | SupervisorCommand::Abort
-                ) {
-                    return;
-                }
-            }
-        });
-        let mut runtime = Runtime {
-            events: Some(events),
-            stopping,
-            supervisor,
-            supervisor_thread: Some(supervisor_thread),
-        };
+        let (mut runtime, writer) = runtime_writing_to(pipe, &shared);
 
         runtime.send(hello()).expect("the hello is queued");
         entered.recv().expect("the writer takes the hello");
-        let mut queued = 0;
-        while runtime.send(HostMessage::Tick).is_ok() {
+        runtime.send_tick();
+        let mut queued = 1;
+        while runtime.send(key_x()).is_ok() {
             queued += 1;
         }
         assert_eq!(queued, EVENT_QUEUE, "the queue fills behind the held write");
 
-        assert!(runtime.shutdown(), "the stub supervisor stops");
+        runtime.shutdown();
         drop(release);
         writer.join().expect("the writer finishes");
 
@@ -1498,22 +1545,30 @@ mod tests {
     /// The two ends of the same rule. A `hello` still queued when the host
     /// stops is written before the `shutdown`, never replaced by it — the
     /// protocol lets `shutdown` follow `hello` during startup, not stand in
-    /// for it — and the ticks behind it are skipped. And a writer waiting on
-    /// an empty queue when the host stops still says `shutdown` on its way
-    /// out, since nothing is left in the queue to carry it.
+    /// for it — and the tick and input behind it are skipped. And a writer
+    /// waiting on an empty queue when the host stops still says `shutdown`
+    /// on its way out, since nothing is left in the queue to carry it.
     #[test]
     fn shutdown_follows_a_queued_hello_and_ends_an_empty_queue() {
         let shared = Arc::new(Mutex::new(Shared::starting()));
         let (supervisor, _commands) = mpsc::channel();
         let stopping = AtomicBool::new(true);
+        let tick_pending = AtomicBool::new(true);
 
         let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
         events.try_send(hello()).expect("room");
         events.try_send(HostMessage::Tick).expect("room");
-        events.try_send(HostMessage::Tick).expect("room");
+        events.try_send(key_x()).expect("room");
         drop(events);
         let mut written = Vec::new();
-        writer_loop(&mut written, &received, &stopping, &shared, &supervisor);
+        writer_loop(
+            &mut written,
+            &received,
+            &stopping,
+            &tick_pending,
+            &shared,
+            &supervisor,
+        );
         let lines: Vec<_> = String::from_utf8(written)
             .expect("UTF-8")
             .lines()
@@ -1526,8 +1581,255 @@ mod tests {
         let (events, received) = mpsc::sync_channel::<HostMessage>(EVENT_QUEUE);
         drop(events);
         let mut written = Vec::new();
-        writer_loop(&mut written, &received, &stopping, &shared, &supervisor);
+        writer_loop(
+            &mut written,
+            &received,
+            &stopping,
+            &tick_pending,
+            &shared,
+            &supervisor,
+        );
         assert_eq!(written, b"{\"type\":\"shutdown\"}\n");
+    }
+
+    /// A child's stdin read as fast as it is written: each message is handed
+    /// to the test as it lands, so the test waits on the writer rather than
+    /// sleeping for it.
+    struct ReadingPipe {
+        partial: Vec<u8>,
+        lines: mpsc::Sender<String>,
+    }
+
+    impl Write for ReadingPipe {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            for &byte in bytes {
+                if byte == b'\n' {
+                    let line = String::from_utf8(std::mem::take(&mut self.partial))
+                        .expect("the host writes UTF-8");
+                    let _ = self.lines.send(line);
+                } else {
+                    self.partial.push(byte);
+                }
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Everything on the host's side of a plugin's stdin: a runtime whose
+    /// queue a real `writer_loop` drains into `pipe`, sharing its flags the
+    /// way `spawn_process` wires them. There is no child, so there is no
+    /// supervisor to wait for when it shuts down.
+    fn runtime_writing_to(
+        pipe: impl Write + Send + 'static,
+        shared: &Arc<Mutex<Shared>>,
+    ) -> (Runtime, JoinHandle<()>) {
+        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
+        let (supervisor, _commands) = mpsc::channel();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let tick_pending = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let stopping = Arc::clone(&stopping);
+            let tick_pending = Arc::clone(&tick_pending);
+            let shared = Arc::clone(shared);
+            let supervisor = supervisor.clone();
+            thread::spawn(move || {
+                writer_loop(
+                    pipe,
+                    &received,
+                    &stopping,
+                    &tick_pending,
+                    &shared,
+                    &supervisor,
+                );
+            })
+        };
+        let runtime = Runtime {
+            events: Some(events),
+            stopping,
+            tick_pending,
+            supervisor,
+            supervisor_thread: None,
+        };
+        (runtime, writer)
+    }
+
+    fn capturing() -> InputPolicy {
+        InputPolicy {
+            capture: true,
+            ..InputPolicy::default()
+        }
+    }
+
+    /// A running external panel that captures keys, over
+    /// [`runtime_writing_to`], so its `tick` goes all the way to the pipe.
+    fn panel_writing_to(pipe: impl Write + Send + 'static) -> (PluginPanel, JoinHandle<()>) {
+        let mut panel = detached_panel(capturing());
+        let (runtime, writer) = runtime_writing_to(pipe, &panel.shared);
+        panel.runtime = Some(runtime);
+        (panel, writer)
+    }
+
+    fn press_x(panel: &mut PluginPanel) -> KeyOutcome {
+        panel.handle_key(KeyEvent::from(KeyCode::Char('x')))
+    }
+
+    fn notice_of(panel: &PluginPanel) -> Option<String> {
+        panel
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .notice
+            .clone()
+    }
+
+    /// A plugin that stopped reading had its queue filled by the host's own
+    /// ticks, one every poll — all 256 places in eight seconds at 33 ms on a
+    /// focused panel capturing input, once the pipe behind it was full, and
+    /// in about a minute at the default 250 ms otherwise — after which the
+    /// panel said `plugin input queue is full` about input nobody had typed,
+    /// and dropped every key that was. A tick is a cue, not a count, so
+    /// however many refreshes pass, one waits, and the rest of the queue is
+    /// left for the reader's input. The stub's queue has no writer behind
+    /// it, which is a plugin that has stopped reading with its pipe full.
+    #[test]
+    fn a_plugin_that_stops_reading_has_one_tick_waiting_and_room_for_keys() {
+        let mut panel = detached_panel(capturing());
+        let (runtime, received) = Runtime::stub();
+        panel.runtime = Some(runtime);
+
+        for _ in 0..1_000 {
+            panel.tick();
+        }
+        let pressed = press_x(&mut panel);
+
+        let queued: Vec<HostMessage> = received.try_iter().collect();
+        let ticks = queued
+            .iter()
+            .filter(|message| matches!(message, HostMessage::Tick))
+            .count();
+        assert_eq!(ticks, 1, "a thousand refreshes left {ticks} ticks waiting");
+        assert!(
+            matches!(queued.last(), Some(HostMessage::Key { key, .. }) if key == "x"),
+            "the key did not fit behind the ticks: {} queued, the last {:?}",
+            queued.len(),
+            queued.last()
+        );
+        assert_eq!(
+            notice_of(&panel),
+            None,
+            "the panel blamed input for the host's own ticks"
+        );
+        assert_eq!(pressed, KeyOutcome::Consumed);
+        panel.shutdown();
+    }
+
+    /// A tick that finds the queue full of the reader's own input is dropped
+    /// without a word: it is not input, and the next refresh offers another.
+    /// And coalescing must not make that drop permanent — once the plugin
+    /// reads one message, the next refresh's tick takes the room.
+    #[test]
+    fn a_tick_that_finds_the_queue_full_blames_nobody_and_comes_back() {
+        let mut panel = detached_panel(capturing());
+        let (runtime, received) = Runtime::stub();
+        panel.runtime = Some(runtime);
+        for _ in 0..EVENT_QUEUE {
+            assert_eq!(press_x(&mut panel), KeyOutcome::Consumed);
+        }
+        assert_eq!(notice_of(&panel), None, "every key fitted");
+
+        panel.tick();
+        assert_eq!(
+            notice_of(&panel),
+            None,
+            "a tick with no room is not input dropped"
+        );
+
+        received.try_recv().expect("the plugin reads one key");
+        panel.tick();
+        let queued: Vec<HostMessage> = received.try_iter().collect();
+        assert!(
+            matches!(queued.last(), Some(HostMessage::Tick)),
+            "the tick refused for want of room never came back: {} queued, the last {:?}",
+            queued.len(),
+            queued.last()
+        );
+        panel.shutdown();
+    }
+
+    /// The writer clears the pending tick *before* writing it, not after. A
+    /// plugin slow to read holds the writer inside that write while further
+    /// refreshes raise further ticks; cleared afterwards, the flag would
+    /// still say one was waiting, every one of them would be folded into a
+    /// tick already on its way out, and a plugin that caught up would find
+    /// nothing behind it. Cleared first, the next is queued and the rest
+    /// join it: one more tick, not none and not a backlog.
+    #[test]
+    fn a_tick_raised_during_a_write_is_delivered_once_afterwards() {
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let (mut panel, writer) = panel_writing_to(HeldPipe {
+            entered: Some(entered_tx),
+            release: Some(release_rx),
+            written: Arc::clone(&written),
+        });
+
+        panel.tick();
+        entered.recv().expect("the writer takes the first tick");
+        for _ in 0..10 {
+            panel.tick();
+        }
+        drop(release);
+        // Close the queue without stopping, so the writer writes what is
+        // left in it and leaves, rather than swapping it for `shutdown`.
+        let runtime = panel.runtime.as_mut().expect("the panel has a runtime");
+        drop(runtime.events.take());
+        writer.join().expect("the writer finishes");
+
+        assert_eq!(
+            lines_of(&written),
+            [r#"{"type":"tick"}"#; 2],
+            "ten refreshes during one held write"
+        );
+    }
+
+    /// The other side of coalescing: a plugin that reads as fast as the host
+    /// writes is not starved by it. Each tick is written before the next
+    /// refresh, so each refresh finds none waiting and sends its own.
+    ///
+    /// This catches a writer that never clears the flag. One that clears it
+    /// only after the write is left to
+    /// `a_tick_raised_during_a_write_is_delivered_once_afterwards`: here the
+    /// line reaches the test inside that write and the clear follows a few
+    /// instructions later, a race this test almost never wins. Broken that
+    /// way, it passed thirty runs out of thirty.
+    #[test]
+    fn a_plugin_that_keeps_up_gets_a_tick_every_refresh() {
+        let (lines_tx, lines) = mpsc::channel();
+        let (mut panel, writer) = panel_writing_to(ReadingPipe {
+            partial: Vec::new(),
+            lines: lines_tx,
+        });
+
+        for refresh in 0..20 {
+            panel.tick();
+            assert_eq!(
+                lines.recv_timeout(Duration::from_secs(5)).as_deref(),
+                Ok(r#"{"type":"tick"}"#),
+                "refresh {refresh} sent no tick"
+            );
+        }
+        panel.shutdown();
+        writer.join().expect("the writer finishes");
+        assert_eq!(
+            lines.try_iter().collect::<Vec<_>>(),
+            [r#"{"type":"shutdown"}"#],
+            "anything but the shutdown after the last tick"
+        );
     }
 
     #[test]

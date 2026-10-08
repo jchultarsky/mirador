@@ -563,7 +563,14 @@ impl Panel for PluginPanel {
 
     fn tick(&mut self) -> bool {
         let changed = self.expire_input_barrier() || self.sync();
-        let _ = self.send(HostMessage::Tick);
+        // Not through `send`, whose full-queue notice is about input
+        // dropped. A tick is not input, and one that finds no room loses
+        // nothing: the next poll offers another.
+        if matches!(self.phase, Phase::Running)
+            && let Some(runtime) = &mut self.runtime
+        {
+            runtime.send_tick();
+        }
         changed
     }
 
@@ -1127,7 +1134,7 @@ mod tests {
     use super::process::{apply_message, decode_line, read_limited_line};
     use super::*;
 
-    fn detached_panel(policy: InputPolicy) -> PluginPanel {
+    pub(super) fn detached_panel(policy: InputPolicy) -> PluginPanel {
         PluginPanel {
             spec: PluginConfig {
                 id: "test".into(),
