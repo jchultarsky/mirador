@@ -337,26 +337,30 @@ pub struct Watchlist {
     pub last_error: Option<String>,
 }
 
+/// Owned when read and borrowed when written, so a save does not copy the
+/// list to serialise it.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct WatchlistFile {
+struct WatchlistFile<L = Vec<String>> {
     #[serde(default)]
-    symbols: Vec<String>,
+    symbols: L,
 }
+
+/// The watchlist's header, and what its errors call it.
+const WATCHLIST_FILE: crate::store::TomlFile = crate::store::TomlFile {
+    what: "the watchlist",
+    header: "# mirador watchlist. Safe to edit by hand.\n\
+             # Only the symbols live here — prices are never written to disk.",
+};
 
 impl Watchlist {
     /// Load from `path`, falling back to `seed` when the file does not exist.
     pub fn load(path: impl Into<PathBuf>, seed: &[String]) -> Result<Self> {
         let path = path.into();
-        let (symbols, dirty) = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading the watchlist from {}", path.display()))?;
-            let parsed: WatchlistFile = toml::from_str(&raw)
-                .with_context(|| format!("parsing the watchlist in {}", path.display()))?;
-            (parsed.symbols, false)
-        } else {
+        let (symbols, dirty) = match WATCHLIST_FILE.read::<WatchlistFile>(&path)? {
+            Some(file) => (file.symbols, false),
             // Seeded, and marked dirty so the seed is written out once and the
             // user has a file to edit by hand if they prefer.
-            (seed.to_vec(), !seed.is_empty())
+            None => (seed.to_vec(), !seed.is_empty()),
         };
 
         Ok(Self {
@@ -400,16 +404,12 @@ impl Watchlist {
         if !self.dirty {
             return Ok(());
         }
-        let file = WatchlistFile {
-            symbols: self.symbols.clone(),
-        };
-        let body = toml::to_string_pretty(&file).context("serialising the watchlist")?;
-        let contents = format!(
-            "# mirador watchlist. Safe to edit by hand.\n\
-             # Only the symbols live here — prices are never written to disk.\n\n{body}"
-        );
-
-        crate::store::write_atomic(&self.path, &contents)?;
+        WATCHLIST_FILE.write(
+            &self.path,
+            &WatchlistFile {
+                symbols: self.symbols.as_slice(),
+            },
+        )?;
 
         self.dirty = false;
         Ok(())
@@ -833,6 +833,36 @@ mod tests {
 
         let reloaded = Watchlist::load(guard.0.join("watchlist.toml"), &[]).unwrap();
         assert_eq!(reloaded.symbols(), ["MSFT"]);
+    }
+
+    /// A watchlist exactly as 1.20.0 wrote it, captured from that build: a
+    /// class share and an index, the two symbol shapes that are not letters.
+    const WRITTEN_BY_1_20_0: &str = r#"# mirador watchlist. Safe to edit by hand.
+# Only the symbols live here — prices are never written to disk.
+
+symbols = [
+    "AAPL",
+    "BRK.B",
+    "^GSPC",
+]
+"#;
+
+    /// Reading and writing go through [`crate::store::TomlFile`] now, and a
+    /// file someone keeps by hand must come back exactly as it was. Removed
+    /// before the save, so the comparison is of what the save wrote.
+    #[test]
+    fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
+        let (_, guard) = watchlist("bytes", &[]);
+        let path = guard.0.join("watchlist.toml");
+        std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
+
+        let mut list = Watchlist::load(&path, &["TSLA".to_string()]).unwrap();
+        assert_eq!(list.symbols(), ["AAPL", "BRK.B", "^GSPC"]);
+        std::fs::remove_file(&path).unwrap();
+        list.dirty = true;
+        list.save().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), WRITTEN_BY_1_20_0);
     }
 
     #[test]

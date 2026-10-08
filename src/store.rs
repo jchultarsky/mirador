@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Replace `path`'s contents with `contents`, or leave the file as it was.
 ///
@@ -310,6 +311,53 @@ pub fn report(result: Result<()>, last_error: &mut Option<String>) {
         Ok(()) => None,
         Err(e) => Some(format!("{e:#}")),
     };
+}
+
+/// One of the lists mirador keeps as TOML beside the config — the tasks, the
+/// notes, the watchlist, the world clocks — as far as reading and writing it.
+///
+/// Each of the four stores used to carry its own copy of this, and the next
+/// list would have been a fifth. What stays in a store is what is genuinely
+/// its own: the shape of the file, and what happens when there is none. That
+/// is two policies on purpose — the task list and the notes seed examples and
+/// write them at once, the watchlist and the clocks seed from the config and
+/// leave the write to their panel — so [`TomlFile::read`] says only that there
+/// was nothing to read, and the store decides.
+pub struct TomlFile {
+    /// What the file holds, as an error names it: `tasks`, `the watchlist`.
+    pub what: &'static str,
+    /// The comment the file opens with, without the newline that ends it.
+    pub header: &'static str,
+}
+
+impl TomlFile {
+    /// The file at `path`, or `None` when there is no file there.
+    ///
+    /// "No file" is whatever `Path::exists` says, which is what each store
+    /// asked before this was shared; a store that seeds asks the same
+    /// question, and the two must not disagree about a first run.
+    pub fn read<T: DeserializeOwned>(&self, path: &Path) -> Result<Option<T>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {} from {}", self.what, path.display()))?;
+        toml::from_str(&raw)
+            .map(Some)
+            .with_context(|| format!("parsing {} in {}", self.what, path.display()))
+    }
+
+    /// Replace the file at `path` with `value` under the header, through
+    /// [`write_atomic`].
+    ///
+    /// A borrow, and that is the point of the signature: each store used to
+    /// copy its whole list into a wrapper only to serialise it, and now hands
+    /// over a view of the list where it stands.
+    pub fn write<T: Serialize + ?Sized>(&self, path: &Path, value: &T) -> Result<()> {
+        let body =
+            toml::to_string_pretty(value).with_context(|| format!("serialising {}", self.what))?;
+        write_atomic(path, &format!("{}\n\n{body}", self.header))
+    }
 }
 
 /// The line ending a file already uses.

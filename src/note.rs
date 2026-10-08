@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
@@ -62,11 +62,21 @@ impl Note {
 }
 
 /// Serialisation wrapper so the file reads as a list of `[[note]]` tables.
+///
+/// Owned when read and borrowed when written, as the task file's is, so a
+/// save does not copy every note to serialise it.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct NoteFile {
+struct NoteFile<L = Vec<Note>> {
     #[serde(default, rename = "note")]
-    notes: Vec<Note>,
+    notes: L,
 }
+
+/// The notes file's header, and what its errors call it.
+const FILE: crate::store::TomlFile = crate::store::TomlFile {
+    what: "notes",
+    header: "# mirador notes. Safe to edit by hand or keep in version control.\n\
+             # Fields: id, title, body, created (YYYY-MM-DD), updated.",
+};
 
 /// An owned, persisted collection of notes.
 #[derive(Debug)]
@@ -90,15 +100,10 @@ impl NoteStore {
     /// Load from `path`, treating a missing file as an empty list.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let mut notes = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading notes from {}", path.display()))?;
-            let parsed: NoteFile = toml::from_str(&raw)
-                .with_context(|| format!("parsing notes in {}", path.display()))?;
-            parsed.notes
-        } else {
-            Vec::new()
-        };
+        let mut notes = FILE
+            .read::<NoteFile>(&path)?
+            .map(|file| file.notes)
+            .unwrap_or_default();
 
         let mut next_id = notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
         let dirty =
@@ -206,16 +211,12 @@ impl NoteStore {
             return Ok(());
         }
 
-        let file = NoteFile {
-            notes: self.notes.clone(),
-        };
-        let body = toml::to_string_pretty(&file).context("serialising notes")?;
-        let contents = format!(
-            "# mirador notes. Safe to edit by hand or keep in version control.\n\
-             # Fields: id, title, body, created (YYYY-MM-DD), updated.\n\n{body}"
-        );
-
-        crate::store::write_atomic(&self.path, &contents)?;
+        FILE.write(
+            &self.path,
+            &NoteFile {
+                notes: self.notes.as_slice(),
+            },
+        )?;
 
         self.dirty = false;
         Ok(())
@@ -323,6 +324,49 @@ mod tests {
         let note = &reloaded.notes()[0];
         assert_eq!(note.title, "Groceries");
         assert_eq!(note.body, "milk\neggs", "newlines must survive TOML");
+    }
+
+    /// A notes file exactly as 1.20.0 wrote it, captured from that build's
+    /// store: a body with a blank line, a non-ASCII dash and a quote against
+    /// the closing delimiter, an `updated` stamp, and an empty body.
+    const WRITTEN_BY_1_20_0: &str = r#"# mirador notes. Safe to edit by hand or keep in version control.
+# Fields: id, title, body, created (YYYY-MM-DD), updated.
+
+[[note]]
+id = 1
+title = "Recipe"
+body = """
+Flour
+
+Water — 300 g
+"quoted""""
+created = "2026-10-01"
+updated = "2026-10-03"
+
+[[note]]
+id = 2
+title = "Empty body"
+body = ""
+created = "2026-10-02"
+"#;
+
+    /// Same promise as the task file's: the shared reader and writer in
+    /// [`crate::store`] put back what they were given, byte for byte. The
+    /// file is removed before the save, so the comparison is of what the
+    /// save wrote rather than of what was left standing.
+    #[test]
+    fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
+        let (_, guard) = store("bytes");
+        let path = guard.0.join("notes.toml");
+        std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
+
+        let mut s = NoteStore::load(&path).unwrap();
+        assert_eq!(s.notes().len(), 2, "every note was read");
+        std::fs::remove_file(&path).unwrap();
+        s.dirty = true;
+        s.save().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), WRITTEN_BY_1_20_0);
     }
 
     #[test]

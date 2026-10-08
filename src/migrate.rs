@@ -62,7 +62,9 @@ const RULES: &[Rule] = &[
         // forecast is not four hours of it — so the new default is used and
         // the change is reported rather than guessed at.
         value: "8",
-        why: "the forecast is hourly now, so the day count was replaced with the default of 8 hours",
+        // Read both before the change, in the error that sends people here,
+        // and after it, in the report: so no tense that is true of only one.
+        why: "the forecast is hourly now, and a day count does not convert to hours, so the default of 8 is used",
     },
     Rule::Replace {
         section: "notes",
@@ -85,6 +87,93 @@ const RULES: &[Rule] = &[
         why: "replaced by the [theme.tx_gradient] table",
     },
 ];
+
+impl Rule {
+    /// The section the key has to be in for the rule to touch it.
+    fn section(&self) -> &'static str {
+        match self {
+            Self::Replace { section, .. } | Self::Retire { section, .. } => section,
+        }
+    }
+
+    /// The key the rule is about.
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Replace { from, .. } => from,
+            Self::Retire { key, .. } => key,
+        }
+    }
+
+    /// The change once it is made, in the words a migration reports it in.
+    ///
+    /// A retired key is reported "commented out", the verb
+    /// [`Rule::proposal`] promised and what the file actually gets: it said
+    /// "removed" of a value still there to read.
+    fn change(&self) -> String {
+        match self {
+            Self::Replace {
+                section,
+                from,
+                to,
+                why,
+                ..
+            } => format!("[{section}] {from} -> {to}: {why}"),
+            Self::Retire { section, key, why } => {
+                format!("[{section}] {key} commented out: {why}")
+            }
+        }
+    }
+
+    /// The change before it is made, for the error that sends a reader here.
+    /// [`Rule::change`] is the report afterwards; quoted before the migration
+    /// had run, it told people their value had already been replaced.
+    fn proposal(&self) -> String {
+        match self {
+            Self::Replace {
+                section,
+                from,
+                to,
+                value,
+                why,
+            } => format!("[{section}] {from} will become {to} = {value}: {why}"),
+            Self::Retire { section, key, why } => {
+                format!("[{section}] {key} will be commented out: {why}")
+            }
+        }
+    }
+}
+
+/// The rule that rewrites `line`, if one does, given the table it sits in.
+///
+/// A header falls through here as well and matches nothing: whatever stands
+/// before an `=` in it starts with `[`, and no rule's key does.
+fn rule_for(section: &str, line: &str) -> Option<&'static Rule> {
+    let key = key_of(line)?;
+    RULES
+        .iter()
+        .find(|rule| rule.section() == section && rule.key() == key)
+}
+
+/// What `--migrate-config` will do to the line that byte `at` of `contents`
+/// falls in, or `None` if it will leave that line alone.
+///
+/// For the parse error that sends a reader to the migration, which has to
+/// promise only what the migration does. The parser names the key and a name
+/// is not enough, because every rule is scoped to a table: `forecast_days`
+/// under `[clocks]` was sent here by its name, and then refused. The line is
+/// found by the same walk [`migrate_text`] makes, so the two cannot disagree
+/// about which table it sits in, or about a spelling such as
+/// `weather = { forecast_days = 4 }` that a line-by-line rewrite cannot reach.
+pub fn change_at(contents: &str, at: usize) -> Option<String> {
+    let (_, section, line) = lines_in_sections(contents).find(|&(end, ..)| at < end)?;
+    rule_for(section, line).map(Rule::proposal)
+}
+
+/// Every rule's table and key, so the hint's tests can sweep them all.
+#[cfg(test)]
+pub fn stale_keys() -> impl Iterator<Item = (&'static str, &'static str)> {
+    RULES.iter().map(|rule| (rule.section(), rule.key()))
+}
 
 /// The `[section]` a line opens, if it opens one.
 ///
@@ -114,84 +203,118 @@ fn key_of(line: &str) -> Option<&str> {
     Some(key.trim().trim_matches('"'))
 }
 
+/// Each line of `contents` without its ending, beside the top-level table it
+/// sits in and the byte just past its ending. A header is reported in the
+/// table it opens.
+///
+/// Split as `str::lines` splits — at `\n`, taking a `\r` before it with it —
+/// but by hand, because `lines` does not say where a line ends and
+/// [`change_at`] has to find the line a byte falls in.
+fn lines_in_sections(contents: &str) -> impl Iterator<Item = (usize, &str, &str)> {
+    let mut section = "";
+    let mut end = 0;
+    contents.split_inclusive('\n').map(move |raw| {
+        end += raw.len();
+        let line = raw
+            .strip_suffix('\n')
+            .map_or(raw, |line| line.strip_suffix('\r').unwrap_or(line));
+        if let Some(name) = section_of(line) {
+            section = name;
+        }
+        (end, section, line)
+    })
+}
+
 /// Rewrite `contents`, returning the new text and a description of each change.
 pub fn migrate_text(contents: &str) -> (String, Vec<String>) {
-    // Whatever the file already used. `str::lines()` strips `\r`, so pushing
-    // `\n` would convert a CRLF config to LF and report every line as changed.
+    // Whatever the file already used. A line comes without its `\r`, so
+    // pushing `\n` would convert a CRLF config to LF and report every line as
+    // changed.
     let newline = crate::store::line_ending(contents);
     let mut out = String::with_capacity(contents.len());
     let mut changes = Vec::new();
-    let mut section = String::new();
 
-    for line in contents.lines() {
-        if let Some(name) = section_of(line) {
-            section = name.to_string();
-            out.push_str(line);
-            out.push_str(newline);
-            continue;
-        }
-
-        let Some(key) = key_of(line) else {
+    for (_, section, line) in lines_in_sections(contents) {
+        let Some(rule) = rule_for(section, line) else {
             out.push_str(line);
             out.push_str(newline);
             continue;
         };
 
-        let mut handled = false;
-        for rule in RULES {
-            match rule {
-                Rule::Replace {
-                    section: want,
-                    from,
-                    to,
-                    value,
-                    why,
-                } if section == *want && key == *from => {
-                    // Land `=` in the column the file already used, so a renamed
-                    // key does not break the alignment of the block around it.
-                    // Byte length is the column here: TOML bare keys are ASCII
-                    // and the only thing before them is indent whitespace.
-                    let indent = &line[..line.len() - line.trim_start().len()];
-                    let eq_col = line.find('=').unwrap_or_default();
-                    let pad = eq_col.saturating_sub(indent.len() + to.len()).max(1);
-                    // Writing into a String is infallible.
-                    // `write!` and an explicit ending, not `writeln!`, which
-                    // hard-codes `\n` and would put an LF line into a CRLF file.
-                    let _ = write!(
-                        out,
-                        "{indent}{to}{:pad$}= {value}  # migrated from {from}",
-                        ""
-                    );
-                    out.push_str(newline);
-                    changes.push(format!("[{want}] {from} -> {to}: {why}"));
-                    handled = true;
-                }
-                Rule::Retire {
-                    section: want,
-                    key: k,
-                    why,
-                } if section == *want && key == *k => {
-                    // Commented rather than deleted: the old value stays
-                    // visible so the user can see what their colour was.
-                    let _ = write!(out, "# {}  # removed: {why}", line.trim());
-                    out.push_str(newline);
-                    changes.push(format!("[{want}] {k} removed: {why}"));
-                    handled = true;
-                }
-                _ => {}
+        // Writing into a String is infallible. `write!` and an explicit
+        // ending, not `writeln!`, which hard-codes `\n` and would put an LF
+        // line into a CRLF file.
+        match rule {
+            Rule::Replace {
+                from, to, value, ..
+            } => {
+                // Land `=` in the column the file already used, so a renamed
+                // key does not break the alignment of the block around it.
+                // Byte length is the column here: TOML bare keys are ASCII
+                // and the only thing before them is indent whitespace.
+                let indent = &line[..line.len() - line.trim_start().len()];
+                let eq_col = line.find('=').unwrap_or_default();
+                let pad = eq_col.saturating_sub(indent.len() + to.len()).max(1);
+                let _ = write!(
+                    out,
+                    "{indent}{to}{:pad$}= {value}  # migrated from {from}",
+                    ""
+                );
             }
-            if handled {
-                break;
+            Rule::Retire { why, .. } => {
+                // Commented rather than deleted: the old value stays
+                // visible so the user can see what their colour was.
+                let _ = write!(out, "# {}  # removed: {why}", line.trim());
             }
         }
-
-        if !handled {
-            out.push_str(line);
-            out.push_str(newline);
-        }
+        out.push_str(newline);
+        changes.push(rule.change());
     }
 
     (out, changes)
+}
+
+/// Why `--migrate-config` writes nothing to a config that does not load.
+#[derive(Debug)]
+pub enum Refusal {
+    /// No line in it is one a rule rewrites.
+    NothingKnown,
+    /// Lines were rewritten and the result still does not load.
+    StillBroken {
+        /// Why, as the parser said it of the rewritten text.
+        error: toml::de::Error,
+        /// The line, counted from 1, that `error` points at. It is the
+        /// reader's line too, because the migration keeps every line where it
+        /// was; the error's own span is not, being a byte in text nobody has
+        /// seen.
+        line: Option<usize>,
+    },
+}
+
+/// What `--migrate-config` makes of a config that does not load: the text it
+/// would write and each change in it, or why it writes nothing.
+///
+/// The one place the migration decides whether it can finish, so the error
+/// that sends a reader to it and the migration itself cannot disagree. A line
+/// a rule rewrites is not enough: a `forecast_hours` already beside the stale
+/// `forecast_days`, or an unknown key two lines down, and what it would write
+/// still does not load, so it writes nothing — and the error must not have
+/// promised otherwise.
+pub fn migrate(contents: &str) -> std::result::Result<(String, Vec<String>), Refusal> {
+    let (migrated, changes) = migrate_text(contents);
+    if changes.is_empty() {
+        return Err(Refusal::NothingKnown);
+    }
+    // Refuse to write something that still will not load. Better to leave the
+    // user's file untouched and say so than to half-fix it.
+    if let Err(error) = toml::from_str::<crate::config::Config>(&migrated) {
+        let line = error.span().and_then(|span| {
+            let before = migrated.get(..span.start)?;
+            Some(before.matches('\n').count() + 1)
+        });
+        return Err(Refusal::StillBroken { error, line });
+    }
+    Ok((migrated, changes))
 }
 
 /// Migrate the config at `path` in place, backing up the original first.
@@ -208,27 +331,23 @@ pub fn migrate_file(path: &Path) -> Result<Report> {
         return Ok(Report::default());
     }
 
-    let (migrated, changes) = migrate_text(&contents);
-    if changes.is_empty() {
-        anyhow::bail!(
+    let (migrated, changes) = migrate(&contents).map_err(|refusal| match refusal {
+        Refusal::NothingKnown => anyhow::anyhow!(
             "the config at {} does not parse, and none of the problems are ones \
              this version knows how to migrate. Run `mirador --print-config` to \
              see the current format.",
             path.display()
-        );
-    }
-
-    // Refuse to write something that still will not load. Better to leave the
-    // user's file untouched and say so than to half-fix it.
-    toml::from_str::<crate::config::Config>(&migrated).map_err(|e| {
-        anyhow::anyhow!(
-            "migrating {} did not produce a usable config: {e}\n\nThe original \
+        ),
+        Refusal::StillBroken { error, .. } => anyhow::anyhow!(
+            "migrating {} did not produce a usable config: {error}\n\nThe original \
              file has been left untouched.",
             path.display()
-        )
+        ),
     })?;
 
-    let backup = path.with_extension("toml.bak");
+    // A free name, not a fixed one: `config.toml.bak` may already hold the
+    // config a reset set aside, and copying over it lost that for good.
+    let backup = crate::store::free_backup_path(path);
     std::fs::copy(path, &backup)
         .with_context(|| format!("backing up {} to {}", path.display(), backup.display()))?;
     // Atomic even though the backup exists: a truncated config with a `.bak`
@@ -249,15 +368,54 @@ mod tests {
 
     /// Same hazard as `layout_edit`: `str::lines()` strips the `\r`, so a
     /// migration of a Windows config rewrote every line in it.
+    ///
+    /// Asserted as the LF migration with its endings swapped, and through the
+    /// check `migrate_file` makes before writing. Counting `\r\n` against `\n`
+    /// could not fail: a line that kept its `\r` would come out ending
+    /// `\r\r\n`, which holds one of each and which TOML refuses, so a change
+    /// that had the migration refuse every Windows config passed it.
     #[test]
     fn a_crlf_config_stays_crlf() {
-        let lf = "[theme]\nrx = \"green\"\n";
-        let (out, changes) = migrate_text(&lf.replace('\n', "\r\n"));
-        assert!(!changes.is_empty(), "something was migrated");
-        assert_eq!(
-            out.matches("\r\n").count(),
-            out.matches('\n').count(),
-            "every newline is still a CRLF: {out:?}"
+        let lf = "[weather]\nlocation = \"Oslo\"\nforecast_days = 4\n\n[theme]\nrx = \"green\"\n";
+        let (lf_out, lf_changes) = migrate(lf).expect("the LF config migrates");
+        let (out, changes) = migrate(&lf.replace('\n', "\r\n"))
+            .unwrap_or_else(|refusal| panic!("the CRLF config was refused: {refusal:?}"));
+        assert_eq!(changes, lf_changes);
+        assert_eq!(changes.len(), 2, "both rules must act: {changes:?}");
+        assert_eq!(out, lf_out.replace('\n', "\r\n"));
+    }
+
+    /// The other half of the CRLF walk: a line's end offset has to count the
+    /// `\r` that the line itself drops, or the hint reads a later line than the
+    /// parser stopped on. A byte per line of drift never leaves a three-line
+    /// file, so this is the shipped config, stale where it sets the forecast,
+    /// with the offset the parser itself reports.
+    #[test]
+    fn a_stale_key_deep_in_a_crlf_config_is_found_on_its_own_line() {
+        let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
+        let lf = shipped.replacen("\nforecast_hours ", "\nforecast_days  ", 1);
+        assert_ne!(
+            lf, shipped,
+            "the shipped config sets no forecast_hours to make stale"
+        );
+        let crlf = lf.replace('\n', "\r\n");
+
+        let error = toml::from_str::<crate::config::Config>(&crlf).expect_err("a stale key");
+        let at = error
+            .span()
+            .expect("the parser says where it stopped")
+            .start;
+        let line = crlf[..at].matches('\n').count() + 1;
+        assert!(
+            line > 100,
+            "line {line} is too shallow for a drift of a byte a line to leave it"
+        );
+        let change = change_at(&crlf, at);
+        assert!(
+            change
+                .as_deref()
+                .is_some_and(|c| c.starts_with("[weather] forecast_days will become")),
+            "line {line} of a CRLF config was read as {change:?}"
         );
     }
 
@@ -451,6 +609,36 @@ refresh_minutes = 30
         toml::from_str::<crate::config::Config>(&now).expect("the result must load");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A backup already beside the config — the one `--reset-config` leaves,
+    /// or an earlier migration's — is somebody's original, and a migration
+    /// copied over it under the same fixed name. Numbered like a reset's now.
+    #[test]
+    fn a_migration_does_not_overwrite_an_earlier_backup() {
+        let dir = std::env::temp_dir().join(format!("mirador-migrate4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let earlier = dir.join("config.toml.bak");
+        std::fs::write(&earlier, "# the config a reset set aside\n").unwrap();
+        std::fs::write(&path, "[weather]\nlocation = \"Oslo\"\nforecast_days = 4\n").unwrap();
+
+        let report = migrate_file(&path).expect("must migrate");
+        let kept = std::fs::read_to_string(&earlier).unwrap();
+        let backup = report.backup.expect("a backup must be written");
+        let original = std::fs::read_to_string(&backup).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            kept, "# the config a reset set aside\n",
+            "the earlier backup was overwritten"
+        );
+        assert_ne!(backup, earlier, "the new backup needed a name of its own");
+        assert!(
+            original.contains("forecast_days"),
+            "the new backup must be the original: {original:?}"
+        );
     }
 
     #[test]
