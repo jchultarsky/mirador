@@ -200,7 +200,8 @@ impl Config {
 
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("reading config {}", path.display()))?;
-        let mut config: Self = toml::from_str(&raw).map_err(|e| stale_config_hint(&e, &path))?;
+        let mut config: Self =
+            toml::from_str(&raw).map_err(|e| stale_config_hint(&e, &raw, &path))?;
         config.resolve_theme(&path)?;
         config.validate()?;
         Ok((config, path))
@@ -245,9 +246,9 @@ impl Config {
     /// is the part people curate by hand, and a config broken by one typo still
     /// holds an evening's arrangement.
     ///
-    /// Backups follow `migrate`'s convention — `config.toml.bak` beside the
-    /// original — with one deliberate difference: an existing backup is never
-    /// clobbered. Resetting twice is exactly what a stuck user does, and with a
+    /// Backups go where `migrate`'s do — `config.toml.bak` beside the original
+    /// — and an existing backup is never clobbered: the name is numbered
+    /// instead. Resetting twice is exactly what a stuck user does, and with a
     /// fixed name the second run would replace their real config with the
     /// defaults written by the first, which is the one outcome this whole
     /// function exists to prevent.
@@ -721,29 +722,47 @@ fn not_one_of(key: &str, value: &str, words: &[&str]) -> anyhow::Error {
 /// renamed sits there looking correct. Silently ignoring such a key is worse
 /// than failing on it — it makes a stale config look like stale code, and
 /// sends people hunting through git for a build that was never the problem.
-fn stale_config_hint(error: &toml::de::Error, path: &Path) -> anyhow::Error {
-    // Keys renamed since 0.1.0, and what replaced them.
-    const RENAMED: &[(&str, &str)] = &[
-        (
-            "forecast_days",
-            "`forecast_hours` — the forecast is hourly now",
-        ),
-        ("rx", "the `[theme.rx_gradient]` table"),
-        ("tx", "the `[theme.tx_gradient]` table"),
-    ];
-
+///
+/// `raw` is the text that failed, because the migration has to be asked about
+/// the line the parser stopped on rather than about a key's name.
+fn stale_config_hint(error: &toml::de::Error, raw: &str, path: &Path) -> anyhow::Error {
     let message = error.to_string();
 
-    for (old, replacement) in RENAMED {
-        if message.contains(&format!("`{old}`")) {
+    // Asked of the migration itself, about the line the error points at: the
+    // migration's rules are scoped to a table, so a key's name alone pointed a
+    // `forecast_days` under `[clocks]` at a migration that then refused it.
+    let change = error
+        .span()
+        .and_then(|span| crate::migrate::change_at(raw, span.start));
+    // And asked whether it would finish, by the check the migration itself
+    // makes: a rewritten line in a file that still does not load is written
+    // nowhere, so it is not a reason to promise an update in place. What the
+    // line becomes is still the one thing the parser cannot say, so the
+    // reader keeps it, with the reason the migration would stop.
+    match change.map(|change| (change, crate::migrate::migrate(raw))) {
+        Some((change, Ok(_))) => {
             return anyhow::anyhow!(
-                "{message}\n\nThe config at {} was written by an older version \
-                 of mirador: `{old}` was replaced by {replacement}.\n\nRun \
-                 `mirador --migrate-config` to update it in place; your original \
-                 is kept as a .bak file.",
+                "{message}\n\nThe config at {} was written by an older version of \
+                 mirador. Run `mirador --migrate-config` to update it in place, \
+                 keeping your original as a .bak file. The line above is one it fixes:\n\n    \
+                 {change}",
                 path.display(),
             );
         }
+        Some((change, Err(crate::migrate::Refusal::StillBroken { error, line }))) => {
+            let at = line.map_or_else(String::new, |line| format!(" at line {line}"));
+            return anyhow::anyhow!(
+                "{message}\n\nThe line above in {} was written by an older version of \
+                 mirador, and `mirador --migrate-config` rewrites it:\n\n    {change}\n\n\
+                 but it cannot finish while the config has other problems, and would \
+                 leave the file untouched. The first is{at}: {}",
+                path.display(),
+                error.message(),
+            );
+        }
+        // A line the migration rewrites always leaves it something to do, so
+        // this is unreachable; the ordinary advice is the safe answer anyway.
+        Some((_, Err(crate::migrate::Refusal::NothingKnown))) | None => {}
     }
 
     anyhow::anyhow!(
@@ -1239,23 +1258,26 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         );
     }
 
+    /// What `Config::load` says about `source`, which has to be refused.
+    fn refusal(source: &str) -> String {
+        let error = toml::from_str::<Config>(source).expect_err("the source must be refused");
+        format!(
+            "{:#}",
+            stale_config_hint(&error, source, Path::new("/tmp/config.toml"))
+        )
+    }
+
     #[test]
     fn a_key_from_an_older_version_is_rejected_with_a_migration_hint() {
         // The exact failure that made a current build look like an old one.
-        let err = toml::from_str::<Config>("[weather]\nforecast_days = 4")
-            .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
-            .expect_err("a removed key must not be silently ignored");
-        let message = format!("{err:#}");
+        let message = refusal("[weather]\nforecast_days = 4");
         assert!(message.contains("forecast_days"), "got: {message}");
         assert!(message.contains("forecast_hours"), "got: {message}");
     }
 
     #[test]
     fn an_unrecognised_key_names_itself_rather_than_being_ignored() {
-        let err = toml::from_str::<Config>("[weather]\nwibble = 4")
-            .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
-            .expect_err("typos must be reported");
-        assert!(format!("{err:#}").contains("wibble"));
+        assert!(refusal("[weather]\nwibble = 4").contains("wibble"));
     }
 
     #[test]
@@ -1268,10 +1290,7 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
             "[theme]\nacent = \"#ff0000\"",
             "[theme.rx_gradient]\nstrat = \"green\"",
         ] {
-            let err = toml::from_str::<Config>(source)
-                .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
-                .unwrap_err();
-            let message = format!("{err:#}");
+            let message = refusal(source);
             assert!(
                 message.contains("acent") || message.contains("strat"),
                 "{source} was accepted, or the error did not name the key: {message}"
@@ -1285,10 +1304,7 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         // parsed clean, so the hint telling the user to run
         // `--migrate-config` could not fire for the very keys it names.
         for key in ["rx", "tx"] {
-            let err = toml::from_str::<Config>(&format!("[theme]\n{key} = \"green\""))
-                .map_err(|e| stale_config_hint(&e, Path::new("/tmp/config.toml")))
-                .expect_err("an old theme key must be rejected");
-            let message = format!("{err:#}");
+            let message = refusal(&format!("[theme]\n{key} = \"green\""));
             assert!(
                 message.contains("--migrate-config"),
                 "`{key}` did not reach the migration hint: {message}"
@@ -1298,6 +1314,176 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
                 "`{key}` did not name its replacement: {message}"
             );
         }
+    }
+
+    /// Every key `--migrate-config` can fix has to be pointed at it. The hint
+    /// kept its own list of those keys through 1.20.0, and the list had three
+    /// of the four: `[notes] side_by_side_min_width` was refused with advice to
+    /// read `--print-config`, by a program that could have fixed it.
+    #[test]
+    fn every_key_the_migration_fixes_reaches_the_migration_hint() {
+        let mut swept = 0;
+        for (section, key) in crate::migrate::stale_keys() {
+            let message = refusal(&format!("[{section}]\n{key} = \"x\""));
+            assert!(
+                message.contains("--migrate-config"),
+                "`[{section}] {key}` did not reach the migration hint: {message}"
+            );
+            swept += 1;
+        }
+        assert_eq!(
+            swept, 4,
+            "the sweep must see every rule, or it checks nothing"
+        );
+    }
+
+    /// What `--migrate-config` really does to a config, found by running it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Migration {
+        /// Rewrites the file, and what it wrote loads.
+        Fixes,
+        /// Rewrites a line, finds the result still refused, and writes nothing.
+        RewritesButRefuses,
+        /// Knows nothing in the file, and writes nothing.
+        LeavesAlone,
+    }
+
+    /// Run `migrate_file` on a copy of `source` and say which of the three it
+    /// did, so a case in a table below is labelled by the outcome and not by
+    /// anybody's reading of the rules.
+    fn migration_of(dir: &Path, n: usize, source: &str) -> Migration {
+        let path = dir.join(format!("config-{n}.toml"));
+        std::fs::write(&path, source).unwrap();
+        match crate::migrate::migrate_file(&path) {
+            Ok(report) if !report.is_empty() => Migration::Fixes,
+            Ok(_) => panic!("{source:?} parses, so it is no case for the hint"),
+            Err(e) if e.to_string().contains("did not produce a usable config") => {
+                Migration::RewritesButRefuses
+            }
+            Err(e) if e.to_string().contains("none of the problems") => Migration::LeavesAlone,
+            Err(e) => panic!("{source:?} failed some other way: {e:#}"),
+        }
+    }
+
+    /// The hint is a promise about what `--migrate-config` will do, so it has
+    /// to be made exactly where the migration keeps it. The rules are scoped to
+    /// a table and the hint once went by the key's name alone: `forecast_days`
+    /// under `[clocks]` was sent to a migration that then refused to touch it,
+    /// with a line about `[weather]` that was nowhere in the reader's file.
+    ///
+    /// And a line the migration rewrites is not a migration that finishes:
+    /// `migrate_file` refuses whenever what it would write still does not
+    /// load. A reader who added `forecast_hours` beside a stale
+    /// `forecast_days`, because the parser's own message lists it, was told to
+    /// "update it in place" by a migration that then refused on the duplicate.
+    #[test]
+    fn the_migration_hint_is_given_exactly_where_the_migration_acts() {
+        use Migration::{Fixes, LeavesAlone, RewritesButRefuses};
+        let cases = [
+            // Where the rules look: the hint, and a change to back it.
+            ("[weather]\nforecast_days = 4", Fixes),
+            ("[notes]\nside_by_side_min_width = 80", Fixes),
+            ("[theme]\nrx = \"green\"", Fixes),
+            (
+                "[weather]\r\nlocation = \"x\"\r\n  forecast_days   = 4\r\n",
+                Fixes,
+            ),
+            (
+                "[clocks]\nzones = []\n\n[weather]\nforecast_days = 4",
+                Fixes,
+            ),
+            // The line is rewritten, and the file still does not load: the
+            // replacement is already there, or something else is wrong too.
+            (
+                "[weather]\nlocation = \"Oslo\"\nforecast_days = 4\nforecast_hours = 6\n",
+                RewritesButRefuses,
+            ),
+            (
+                "[weather]\nforecast_days = 4\nwibble = 1\n",
+                RewritesButRefuses,
+            ),
+            // Somewhere else: neither.
+            ("[clocks]\nforecast_days = 4", LeavesAlone),
+            ("[todo]\nside_by_side_min_width = 80", LeavesAlone),
+            (
+                "[weather]\nlocation = \"x\"\n\n[clocks]\nforecast_days = 4",
+                LeavesAlone,
+            ),
+            ("[theme.rx_gradient]\nrx = \"green\"", LeavesAlone),
+            // A spelling of the right table the line-by-line migration cannot
+            // rewrite, so it must not be promised either.
+            ("weather = { forecast_days = 4 }", LeavesAlone),
+            ("weather.forecast_days = 4", LeavesAlone),
+        ];
+        let dir =
+            std::env::temp_dir().join(format!("mirador-migration-hint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (n, (source, label)) in cases.into_iter().enumerate() {
+            let outcome = migration_of(&dir, n, source);
+            assert_eq!(
+                outcome, label,
+                "the case is mislabelled: {source:?} is one --migrate-config {outcome:?}"
+            );
+            let message = refusal(source);
+            let says = |text: &str| message.contains(text);
+            match label {
+                Fixes => assert!(
+                    says("update it in place") && says(" will "),
+                    "{source:?} was not sent to the migration that fixes it: {message}"
+                ),
+                RewritesButRefuses => assert!(
+                    says(" will ") && says("cannot finish") && !says("update it in place"),
+                    "{source:?} was promised a migration that refuses it: {message}"
+                ),
+                LeavesAlone => assert!(
+                    says("--print-config") && !says("--migrate-config"),
+                    "{source:?} was told the wrong thing: {message}"
+                ),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "Other problems" alone would send the reader hunting, so the hint names
+    /// the first one, by the line in *their* file: the rewritten text the
+    /// parser stopped in is one nobody has seen, and only the migration's
+    /// keeping every line where it was makes its line number theirs.
+    #[test]
+    fn a_migration_that_cannot_finish_says_where_it_would_stop() {
+        for (source, at, reason) in [
+            (
+                "[weather]\nlocation = \"Oslo\"\nforecast_days = 4\nforecast_hours = 6\n",
+                "at line 4: ",
+                "duplicate key",
+            ),
+            (
+                "[weather]\nforecast_days = 4\n\n\nwibble = 1\n",
+                "at line 5: ",
+                "unknown field `wibble`",
+            ),
+        ] {
+            let message = refusal(source);
+            let tail = message
+                .split_once("cannot finish")
+                .map_or("", |(_, tail)| tail);
+            assert!(
+                tail.contains(at) && tail.contains(reason),
+                "{source:?} did not say where the migration stops: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_notes_width_threshold_is_pointed_at_its_replacement() {
+        let message = refusal("[notes]\nside_by_side_min_width = 80");
+        assert!(message.contains("--migrate-config"), "got: {message}");
+        // Not merely `preview`: the parser's own "expected one of" names that
+        // already, so an assertion on the bare word could not fail.
+        assert!(
+            message.contains("side_by_side_min_width will become preview"),
+            "the hint must name the replacement: {message}"
+        );
     }
 
     #[test]

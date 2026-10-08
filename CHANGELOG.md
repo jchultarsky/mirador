@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for that sum crashed a debug build and gave a release build a phase of
   some other length nobody wrote. Like the two refresh settings, each now
   stops at a year, and a config past it is refused with the key named.
+- **`--migrate-config` no longer overwrites an earlier backup.** It copied the
+  original to `config.toml.bak` whether or not that name was taken, so the
+  config a `--reset-config` had set aside there, or an earlier migration's
+  backup, was replaced for good. It now takes the next free number, as the
+  resets do.
+- **The error for a key from an older version points at `--migrate-config`
+  exactly when the migration would fix the file.** The error kept its own list
+  of those keys, and the list had three of the four the migration fixes, so a
+  pre-0.1.0 `[notes] side_by_side_min_width` was told to read `--print-config`
+  instead. It went by the key's name alone, where the migration also needs
+  the right table, so `forecast_days` under `[clocks]` was sent to a migration
+  that then refused it. And it promised an update in place wherever the key
+  matched, though the migration writes nothing when the result would still
+  not load: a `forecast_hours` added beside the stale `forecast_days` was
+  refused as a duplicate. The error now asks the migration about the line the
+  parser stopped on and whether it would finish. When it would, the error says
+  what it will change; when it would not, it says what the line becomes and
+  the first problem that stops the migration, by line.
 
 ## [1.20.0] - 2026-10-07
 

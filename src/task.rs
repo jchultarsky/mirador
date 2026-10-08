@@ -21,7 +21,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
@@ -308,11 +308,23 @@ impl std::str::FromStr for SortMode {
 }
 
 /// Serialisation wrapper so the file reads as a list of `[[task]]` tables.
+///
+/// Owned when it is read and borrowed when it is written, so the one
+/// `rename` serves both directions and a save serialises the list where it
+/// stands rather than a copy of it.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct TaskFile {
+struct TaskFile<L = Vec<Task>> {
     #[serde(default, rename = "task")]
-    tasks: Vec<Task>,
+    tasks: L,
 }
+
+/// The task file's header, and what its errors call it.
+const FILE: crate::store::TomlFile = crate::store::TomlFile {
+    what: "tasks",
+    header: "# mirador tasks. Safe to edit by hand or keep in version control.\n\
+             # Fields: id, title, notes, due (YYYY-MM-DD), priority \
+             (high|medium|low|none), tags, done, completed, created.",
+};
 
 /// An owned, persisted collection of tasks.
 #[derive(Debug)]
@@ -337,15 +349,10 @@ impl TaskStore {
     /// Load from `path`, treating a missing file as an empty list.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let mut tasks = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading tasks from {}", path.display()))?;
-            let parsed: TaskFile = toml::from_str(&raw)
-                .with_context(|| format!("parsing tasks in {}", path.display()))?;
-            parsed.tasks
-        } else {
-            Vec::new()
-        };
+        let mut tasks = FILE
+            .read::<TaskFile>(&path)?
+            .map(|file| file.tasks)
+            .unwrap_or_default();
 
         let mut next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
         let dirty = renumber_repeated_ids(tasks.iter_mut().map(|t| &mut t.id), &mut next_id);
@@ -485,17 +492,12 @@ impl TaskStore {
             return Ok(());
         }
 
-        let file = TaskFile {
-            tasks: self.tasks.clone(),
-        };
-        let body = toml::to_string_pretty(&file).context("serialising tasks")?;
-        let contents = format!(
-            "# mirador tasks. Safe to edit by hand or keep in version control.\n\
-             # Fields: id, title, notes, due (YYYY-MM-DD), priority \
-             (high|medium|low|none), tags, done, completed, created.\n\n{body}"
-        );
-
-        crate::store::write_atomic(&self.path, &contents)?;
+        FILE.write(
+            &self.path,
+            &TaskFile {
+                tasks: self.tasks.as_slice(),
+            },
+        )?;
 
         self.dirty = false;
         Ok(())
@@ -1020,6 +1022,62 @@ energy_level = \"high\"
         assert_eq!(got.priority, Priority::High);
         assert_eq!(got.tags, vec!["mirador".to_string(), "rust".to_string()]);
         assert!(!got.done);
+    }
+
+    /// A task file exactly as 1.20.0 wrote it, captured from that build's
+    /// store: a quote in a title, a note across two lines, a non-ASCII dash,
+    /// tags, both dates and a bare task.
+    const WRITTEN_BY_1_20_0: &str = r#"# mirador tasks. Safe to edit by hand or keep in version control.
+# Fields: id, title, notes, due (YYYY-MM-DD), priority (high|medium|low|none), tags, done, completed, created.
+
+[[task]]
+id = 1
+title = 'Call "the" bank'
+notes = """
+Line one
+Line two — with a dash"""
+due = "2026-10-09"
+priority = "high"
+tags = [
+    "home",
+    "money",
+]
+done = false
+created = "2026-10-01"
+
+[[task]]
+id = 2
+title = "Renew the domain"
+priority = "low"
+done = true
+completed = "2026-10-05"
+created = "2026-09-30"
+
+[[task]]
+id = 3
+title = "Plain"
+priority = "low"
+done = false
+created = "2026-10-07"
+"#;
+
+    /// Reading and writing go through [`crate::store::TomlFile`] now, and a
+    /// file in somebody's version control must not change by so much as a
+    /// blank line because of it. The file is removed between the load and
+    /// the save, so what is compared is what the save wrote.
+    #[test]
+    fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
+        let dir = tempdir();
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
+
+        let mut store = TaskStore::load(&path).unwrap();
+        assert_eq!(store.tasks().len(), 3, "every task was read");
+        std::fs::remove_file(&path).unwrap();
+        store.dirty = true;
+        store.save().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), WRITTEN_BY_1_20_0);
     }
 
     #[test]

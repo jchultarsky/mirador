@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ClockZone;
@@ -620,10 +620,38 @@ pub struct Zones {
     pub last_error: Option<String>,
 }
 
+/// Owned when read and borrowed when written, so a save does not copy the
+/// list to serialise it.
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct ZonesFile {
+struct ZonesFile<L = Vec<ClockZone>> {
     #[serde(default)]
-    zones: Vec<ClockZone>,
+    zones: L,
+}
+
+/// The zones file's header, and what its errors call it.
+const FILE: crate::store::TomlFile = crate::store::TomlFile {
+    what: "the clock zones",
+    header: "# mirador world clocks. Safe to edit by hand.\n\
+             # The first is the one drawn large. `[clocks].zones` in your config\n\
+             # seeds this on a first run and is not read again.",
+};
+
+/// The label a clock is given: the one typed, or, when none was, the city in
+/// the timezone's name — which is what someone typing `Europe/Lisbon` meant.
+///
+/// One rule for [`Zones::add`] and [`Zones::edit`], so that clearing the
+/// label in an edit is a way to get the default back rather than a way to end
+/// up with a nameless clock. It was written out in both, with a comment in the
+/// second saying it had to match the first.
+fn label_or_city(label: &str, timezone: &str) -> String {
+    match label.trim() {
+        "" => timezone
+            .rsplit('/')
+            .next()
+            .unwrap_or(timezone)
+            .replace('_', " "),
+        given => given.to_string(),
+    }
 }
 
 /// Why [`Zones::add`] or [`Zones::edit`] changed nothing.
@@ -656,18 +684,13 @@ impl Zones {
     /// Load from `path`, falling back to `seed` when the file does not exist.
     pub fn load(path: impl Into<PathBuf>, seed: &[ClockZone]) -> Result<Self> {
         let path = path.into();
-        let (zones, dirty) = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading the clock zones from {}", path.display()))?;
-            let parsed: ZonesFile = toml::from_str(&raw)
-                .with_context(|| format!("parsing the clock zones in {}", path.display()))?;
-            (parsed.zones, false)
-        } else {
+        let (zones, dirty) = match FILE.read::<ZonesFile>(&path)? {
+            Some(file) => (file.zones, false),
             // Seeded and marked dirty, so the caller's first save writes the
             // file to be hand-edited after the first run. `ClocksPanel::new`
             // makes that save straight away; until it did, the file appeared
             // only when a clock was first changed from the panel.
-            (seed.to_vec(), !seed.is_empty())
+            None => (seed.to_vec(), !seed.is_empty()),
         };
 
         Ok(Self {
@@ -691,18 +714,8 @@ impl Zones {
         if self.clocks.iter().any(|z| z.timezone == timezone) {
             return Err(Refused::AlreadyShown);
         }
-        // An unlabelled clock takes the city out of the timezone name, which is
-        // what someone typing `Europe/Lisbon` meant by it.
-        let label = match label.trim() {
-            "" => timezone
-                .rsplit('/')
-                .next()
-                .unwrap_or(timezone)
-                .replace('_', " "),
-            given => given.to_string(),
-        };
         self.clocks.push(ClockZone {
-            label,
+            label: label_or_city(label, timezone),
             timezone: timezone.to_string(),
         });
         self.dirty = true;
@@ -772,19 +785,8 @@ impl Zones {
         {
             return Err(Refused::AlreadyShown);
         }
-        // Same rule as `add`: an emptied label falls back to the city in the
-        // timezone, so clearing the field is a way to get the default back
-        // rather than a way to end up with a nameless clock.
-        let label = match label.trim() {
-            "" => timezone
-                .rsplit('/')
-                .next()
-                .unwrap_or(timezone)
-                .replace('_', " "),
-            given => given.to_string(),
-        };
         self.clocks[index] = ClockZone {
-            label,
+            label: label_or_city(label, timezone),
             timezone: timezone.to_string(),
         };
         self.dirty = true;
@@ -801,17 +803,12 @@ impl Zones {
         if !self.dirty {
             return Ok(());
         }
-        let body = toml::to_string_pretty(&ZonesFile {
-            zones: self.clocks.clone(),
-        })
-        .context("serialising the clock zones")?;
-        let contents = format!(
-            "# mirador world clocks. Safe to edit by hand.\n\
-             # The first is the one drawn large. `[clocks].zones` in your config\n\
-             # seeds this on a first run and is not read again.\n\n{body}"
-        );
-
-        crate::store::write_atomic(&self.path, &contents)?;
+        FILE.write(
+            &self.path,
+            &ZonesFile {
+                zones: self.clocks.as_slice(),
+            },
+        )?;
         self.dirty = false;
         Ok(())
     }
@@ -987,6 +984,47 @@ mod tests {
             assert!(mutate(&mut zones), "{name} should have applied");
             assert!(zones.dirty, "{name} left the list unsaved");
         }
+    }
+
+    /// A zones file exactly as 1.20.0 wrote it, captured from that build: the
+    /// local clock, a zone with an underscore, and a label that is not ASCII.
+    const WRITTEN_BY_1_20_0: &str = r#"# mirador world clocks. Safe to edit by hand.
+# The first is the one drawn large. `[clocks].zones` in your config
+# seeds this on a first run and is not read again.
+
+[[zones]]
+label = "Local"
+timezone = "local"
+
+[[zones]]
+label = "New York"
+timezone = "America/New_York"
+
+[[zones]]
+label = "東京"
+timezone = "Asia/Tokyo"
+"#;
+
+    /// Reading and writing go through [`crate::store::TomlFile`] now, and a
+    /// file someone keeps by hand must come back exactly as it was. Removed
+    /// before the save, so the comparison is of what the save wrote.
+    #[test]
+    fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
+        let dir = std::env::temp_dir().join(format!("mirador-zones-bytes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("zones.toml");
+        std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
+
+        let mut zones = Zones::load(&path, &[zone("Seed", "Europe/Paris")]).unwrap();
+        assert_eq!(labels(&zones), ["Local", "New York", "東京"]);
+        std::fs::remove_file(&path).unwrap();
+        zones.dirty = true;
+        zones.save().unwrap();
+
+        let written = std::fs::read_to_string(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(written.unwrap(), WRITTEN_BY_1_20_0);
     }
 
     /// Every zone in the picker has to be one jiff will actually accept.
