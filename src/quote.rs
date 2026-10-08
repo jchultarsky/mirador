@@ -24,7 +24,6 @@
 //! prices are session state, and a stale price read as live is worse than no
 //! price.
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
 use std::time::Duration;
@@ -242,7 +241,7 @@ impl QuoteSource for YahooChart {
         let url = format!(
             "https://query1.finance.yahoo.com/v8/finance/chart/{}\
              ?range=1d&interval=5m",
-            urlencode(symbol)
+            crate::fetch::percent_encode(symbol)
         );
         let body = http_get(&url)?;
         parse_chart(&body)
@@ -251,13 +250,20 @@ impl QuoteSource for YahooChart {
 
 /// A blocking GET with a timeout, presenting a browser user agent.
 ///
-/// **Refuses outright under `cfg(test)`, and that is load-bearing (#147).**
-/// This is the only function in the crate that opens a socket, and the stated
-/// rule is that no test does. The rule was believed to hold because
-/// `parse_chart` is tested against captured JSON — but a panel spawns a fetch
-/// thread when it is *constructed*, and `Layout::default()` places the stocks
-/// panel, so building a dashboard in a test was enough. A Windows runner got a
-/// real HTTP 404 back for a made-up symbol and rendered it.
+/// **Refuses outright under `cfg(test)` (#147).** The rule is that no test
+/// opens a socket, and it was believed to hold because `parse_chart` is tested
+/// against captured JSON — but a panel spawns a fetch thread when it is
+/// *constructed*, and `Layout::default()` places the stocks panel, so building
+/// a dashboard in a test was enough. A Windows runner got a real HTTP 404 back
+/// for a made-up symbol and rendered it.
+///
+/// This used to call itself the only function in the crate that opens a
+/// socket, and it never was: the weather and news panels and the update check
+/// call [`crate::fetch::get`] themselves, and the first two went on reaching
+/// the network from tests long after this guard was written. `fetch::get` now
+/// refuses every request under `cfg(test)`, which is the guard that holds
+/// however a panel is built; this one is older and narrower, and its test
+/// still proves it because the two refusals are worded differently.
 ///
 /// Injecting a `QuoteSource` fixes the tests that build a panel directly, and
 /// is the better design; this covers the ones that reach it through
@@ -297,26 +303,6 @@ fn explain(error: ureq::Error) -> anyhow::Error {
         }
         other => anyhow::anyhow!("network request failed: {other}"),
     }
-}
-
-/// Percent-encode the characters that matter in a path segment.
-///
-/// Symbols carry `^` for indices (`^GSPC`) and `=` for futures and currencies
-/// (`EURUSD=X`), neither of which is safe raw.
-fn urlencode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            other => {
-                // Writing into a String is infallible.
-                let _ = write!(out, "%{other:02X}");
-            }
-        }
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -697,14 +683,6 @@ mod tests {
         let q = parse_chart(body).unwrap();
         assert!(q.series.is_empty(), "{:?}", q.series);
         assert!((q.change() - 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn symbols_are_encoded_so_indices_and_currencies_survive_the_url() {
-        assert_eq!(urlencode("AAPL"), "AAPL");
-        assert_eq!(urlencode("^GSPC"), "%5EGSPC", "an index carries a caret");
-        assert_eq!(urlencode("EURUSD=X"), "EURUSD%3DX", "a pair carries an =");
-        assert_eq!(urlencode("BRK-B"), "BRK-B", "a hyphen is already safe");
     }
 
     #[test]

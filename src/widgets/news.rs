@@ -1039,7 +1039,7 @@ fn take_feed(
         // uppercases this on every frame, so an over-long name — this one
         // comes from the config rather than from the feed, but still — would
         // be re-allocated sixty times a minute.
-        story.source = name.chars().take(crate::feed::MAX_SOURCE).collect();
+        story.source = crate::feed::clip(name, crate::feed::MAX_SOURCE).to_string();
         stories.push(story);
     }
 }
@@ -1981,6 +1981,24 @@ mod tests {
             !screen.contains("Reading"),
             "the pass has finished, so nothing is being read:\n{screen}"
         );
+    }
+
+    /// A feed's name is bounded where the panel takes it, by the same `clip`
+    /// and the same constant the feed's own fields use; `masthead` uppercases
+    /// it on every frame. Cut on a character boundary, at exactly the bound.
+    #[test]
+    fn a_feed_name_is_bounded_where_the_panel_names_it() {
+        let name = "Ω".repeat(crate::feed::MAX_SOURCE + 5);
+        let feed = "<rss><channel><item><title>T</title></item></channel></rss>";
+        let mut stories = Vec::new();
+        take_feed(
+            &name,
+            crate::feed::parse(feed),
+            12,
+            &mut stories,
+            &mut Vec::new(),
+        );
+        assert_eq!(stories[0].source, "Ω".repeat(crate::feed::MAX_SOURCE));
     }
 
     /// A feed broken part-way down gives the panel the stories before the

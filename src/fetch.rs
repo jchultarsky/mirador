@@ -16,31 +16,118 @@
 //! at a time, which keeps the whole mechanism on `ureq`'s stable config
 //! surface rather than reaching into its semver-exempt `unversioned` module.
 
+use std::fmt::Write as _;
 use std::io;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use ureq::config::IpFamily;
 
+/// What [`get`] says under `cfg(test)` instead of making a request.
+///
+/// Worded unlike `quote::http_get`'s own refusal, so that the stocks test
+/// pinning that one still fails if it is removed.
+const REFUSED: &str = "fetch::get makes no requests under cfg(test)";
+
 /// A blocking GET with a timeout, returning the body as a string.
 ///
 /// The body read is bounded by `ureq`'s 10MB cap, which `feed` and `agenda`
-/// both lean on. `user_agent` of `None` sends `ureq`'s own default.
+/// both lean on. `user_agent` of `None` sends `ureq`'s own default; it is
+/// `'static` because it is part of what picks an agent out of [`AGENTS`], and
+/// a string written into the source is what keeps that list from growing.
 ///
 /// Each retry gets the full `timeout` again, and that is not the hazard it
 /// looks like: the fallback only fires on an *unroutable* connect, and the
 /// meaning of unroutable is that the kernel refused at routing level without
 /// waiting for anything.
-pub fn get(url: &str, timeout: Duration, user_agent: Option<&str>) -> Result<String, ureq::Error> {
+///
+/// **Refuses every request under `cfg(test)`**, so "no test touches the
+/// network" holds however a panel was built, rather than resting on each
+/// caller remembering to refuse for itself.
+pub fn get(
+    url: &str,
+    timeout: Duration,
+    user_agent: Option<&'static str>,
+) -> Result<String, ureq::Error> {
+    if cfg!(test) {
+        return Err(ureq::Error::Io(io::Error::other(REFUSED)));
+    }
     with_family_fallback(&mut |family| {
-        let mut config = ureq::Agent::config_builder()
+        agent_for(user_agent, family)
+            .get(url)
+            .config()
             .timeout_global(Some(timeout))
-            .ip_family(family);
-        if let Some(ua) = user_agent {
-            config = config.user_agent(ua);
-        }
-        let agent = config.build().new_agent();
-        agent.get(url).call()?.body_mut().read_to_string()
+            .build()
+            .call()?
+            .body_mut()
+            .read_to_string()
     })
+}
+
+/// The agents [`get`] has built, one for each user agent and address family.
+///
+/// An agent is where `ureq` keeps its connection pool, and its clones share
+/// it. `get` used to build a new one for every request, so nothing was ever
+/// pooled: the stocks panel's symbols, staggered to one host inside a few
+/// seconds, each paid for a fresh connection and TLS handshake.
+///
+/// Why not one agent for everything, with those two set on each request:
+/// `ureq` will not pool a request whose user agent or address family differs
+/// from its agent's (`Config::can_share_pool_with` in 3.4.2), and every caller
+/// but `news` sends its own user agent. The timeout *is* set per request,
+/// because a timeout is one of the things a pooled request may change.
+///
+/// Bounded by the source rather than by anything read: a key is a `'static`
+/// string written into the code and one of three families, so four callers
+/// make at most twelve agents. The cost is sockets held open: an idle
+/// connection stays in its pool until a later request through that agent
+/// finds it past `ureq`'s fifteen-second idle age, and a pool keeps at most
+/// three a host and ten in all.
+static AGENTS: Mutex<Vec<(AgentKey, ureq::Agent)>> = Mutex::new(Vec::new());
+
+/// What picks an agent out of [`AGENTS`]: the user agent and the family.
+type AgentKey = (Option<&'static str>, IpFamily);
+
+/// The agent for these settings, built the first time they are asked for.
+fn agent_for(user_agent: Option<&'static str>, family: IpFamily) -> ureq::Agent {
+    let key = (user_agent, family);
+    // Held for a lookup or a push, never across a request.
+    let mut agents = AGENTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, agent)) = agents.iter().find(|(held, _)| *held == key) {
+        return agent.clone();
+    }
+    let mut config = ureq::Agent::config_builder().ip_family(family);
+    if let Some(ua) = user_agent {
+        config = config.user_agent(ua);
+    }
+    let agent = config.build().new_agent();
+    agents.push((key, agent.clone()));
+    agent
+}
+
+/// Percent-encode everything outside RFC 3986's unreserved set.
+///
+/// The one encoder for a value going into a URL: a stock symbol as a path
+/// segment, where `^GSPC` and `EURUSD=X` carry characters that are not safe
+/// raw, and a place name as a query value, where `New York` carries a space.
+/// Escaping all but the unreserved set is right for both, and it is the
+/// allowlist that keeps anything in a symbol from altering the request while
+/// `.` passes through for `BRK.B`. Each byte of a multi-byte character is
+/// escaped on its own, which is what UTF-8 in a URL means.
+pub fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            other => {
+                // Writing into a String is infallible.
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// Try `IpFamily::Any` first, and on an unroutable connect retry one family
@@ -97,6 +184,101 @@ mod tests {
 
     fn unroutable(kind: io::ErrorKind) -> ureq::Error {
         ureq::Error::Io(io::Error::from(kind))
+    }
+
+    /// Both callers' cases, from the two tests that pinned the two private
+    /// copies this replaced: `quote` encoded symbols into a path, `weather`
+    /// place names into a query. The copies never disagreed — compared on
+    /// every Unicode scalar value before they were merged — but the weather
+    /// one spelt the space out in an arm of its own, so the space is here by
+    /// name; and the sweep holds the whole rule, upper-case hex included, for
+    /// every byte a `&str` can carry.
+    #[test]
+    fn one_encoder_serves_symbols_and_place_names() {
+        let cases = [
+            ("AAPL", "AAPL"),
+            ("^GSPC", "%5EGSPC"),
+            ("EURUSD=X", "EURUSD%3DX"),
+            ("BRK-B", "BRK-B"),
+            ("BRK.B", "BRK.B"),
+            ("Boston", "Boston"),
+            ("New York", "New%20York"),
+            ("a,b", "a%2Cb"),
+            ("Zürich", "Z%C3%BCrich"),
+            ("a-b_c.d~e", "a-b_c.d~e"),
+            ("a/b?c&d#e", "a%2Fb%3Fc%26d%23e"),
+        ];
+        for (raw, encoded) in cases {
+            assert_eq!(percent_encode(raw), encoded, "{raw}");
+        }
+
+        let unreserved = |b: u8| b.is_ascii_alphanumeric() || b"-_.~".contains(&b);
+        // The Basic Multilingual Plane reaches every byte value a `&str` can
+        // hold except the five four-byte leads, `F0` to `F4`, and the last
+        // five supply one each.
+        let chars = (0..=0xFFFF).chain([0x1_F31E, 0x4_0000, 0x8_0000, 0xC_0000, 0x10_FFFF]);
+        for c in chars.filter_map(char::from_u32) {
+            let text = c.to_string();
+            let expected: String = text
+                .bytes()
+                .map(|b| {
+                    if unreserved(b) {
+                        char::from(b).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect();
+            assert_eq!(percent_encode(&text), expected, "U+{:04X}", u32::from(c));
+        }
+    }
+
+    /// One agent for each user agent and family, so a second request with the
+    /// same settings reuses the first one's pool rather than building another.
+    /// Counted for a user agent no caller sends, so other tests cannot move it.
+    #[test]
+    fn requests_with_the_same_settings_share_an_agent() {
+        const UA: Option<&str> = Some("mirador-test/agent-table");
+        let held = || {
+            AGENTS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|((ua, _), _)| *ua == UA)
+                .count()
+        };
+        for _ in 0..3 {
+            agent_for(UA, IpFamily::Any);
+        }
+        assert_eq!(
+            held(),
+            1,
+            "three asks with one setting built more than one agent"
+        );
+        agent_for(UA, IpFamily::Ipv4Only);
+        assert_eq!(
+            held(),
+            2,
+            "a family pinned for the fallback is its own agent"
+        );
+    }
+
+    /// "No test touches the network", held where every request goes through
+    /// rather than by each caller. `quote::http_get` refused for itself since
+    /// #147; weather, news and the update check call `get` directly, and only
+    /// `widgets::build` refusing their panels kept the first two off the wire.
+    /// A panel built any other way — `new` rather than `offline` — would have
+    /// gone out to Open-Meteo. The address is loopback's discard port, so with
+    /// the guard deleted this fails on a refused connect and still sends nothing
+    /// off the machine.
+    #[test]
+    fn every_request_is_refused_while_testing() {
+        let err = get("http://127.0.0.1:9/", Duration::from_secs(1), None)
+            .expect_err("a request must not be possible from a test");
+        assert!(
+            err.to_string().contains(REFUSED),
+            "the refusal must come from the cfg(test) guard, not from a socket: {err}"
+        );
     }
 
     /// #205: DNS answered AAAA-first, the machine had no IPv6 route, and
