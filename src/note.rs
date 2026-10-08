@@ -53,11 +53,11 @@ impl Note {
     /// reason to keep a note is the text inside it, and a title you wrote in a
     /// hurry is often not what you later search for.
     pub fn matches(&self, needle: &str) -> bool {
-        let needle = needle.trim().to_lowercase();
+        let needle = crate::task::Needle::new(needle.trim());
         if needle.is_empty() {
             return true;
         }
-        self.title.to_lowercase().contains(&needle) || self.body.to_lowercase().contains(&needle)
+        needle.is_in(&self.title) || needle.is_in(&self.body)
     }
 }
 
@@ -90,7 +90,7 @@ impl NoteStore {
     /// Load from `path`, treating a missing file as an empty list.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let notes = if path.exists() {
+        let mut notes = if path.exists() {
             let raw = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading notes from {}", path.display()))?;
             let parsed: NoteFile = toml::from_str(&raw)
@@ -100,11 +100,13 @@ impl NoteStore {
             Vec::new()
         };
 
-        let next_id = notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+        let mut next_id = notes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+        let dirty =
+            crate::task::renumber_repeated_ids(notes.iter_mut().map(|n| &mut n.id), &mut next_id);
         Ok(Self {
             path,
             notes,
-            dirty: false,
+            dirty,
             next_id,
             last_error: None,
         })
@@ -364,6 +366,26 @@ mod tests {
         assert_eq!(s.view("   "), vec![id], "a blank filter matches everything");
     }
 
+    /// The task filter shares this search's case folding, and both are held
+    /// to a letter outside ASCII so the two cannot drift apart again: the
+    /// task list folded only `A`–`Z` while this folded everything.
+    #[test]
+    fn the_search_ignores_case_beyond_ascii() {
+        let mut note = Note::new(1, "Übung", today());
+        note.body = "Ärger mit der Bahn".into();
+        for needle in ["übung", "ÜBUNG", "ärger"] {
+            assert!(note.matches(needle), "{needle}");
+        }
+        assert!(!note.matches("übungen"));
+
+        // A capital sigma ending the typed text folds to `ς`, and inside the
+        // title to `σ`, unless the fold goes a letter at a time.
+        let greek = Note::new(2, "ΚΩΣΤΑΣ", today());
+        for needle in ["ΚΩΣ", "κως", "κωστας"] {
+            assert!(greek.matches(needle), "{needle}");
+        }
+    }
+
     #[test]
     fn ids_are_never_reused_after_a_removal() {
         let (mut s, _g) = store("ids");
@@ -373,6 +395,43 @@ mod tests {
         let third = s.add(Note::new(0, "three", today()));
         assert_ne!(third, second, "a reused id would alias the removed note");
         assert_ne!(third, first);
+    }
+
+    /// The notes file has the task list's shape and the same hazard: a
+    /// `[[note]]` block copied by hand keeps its id, and `d` on either note
+    /// deleted both.
+    #[test]
+    fn a_repeated_id_in_the_file_is_renumbered_so_each_key_acts_on_one_note() {
+        let (_, guard) = store("dup");
+        let path = guard.0.join("notes.toml");
+        let block = |title: &str| {
+            format!("[[note]]\nid = 2\ntitle = \"{title}\"\ncreated = \"2026-07-25\"\n\n")
+        };
+        std::fs::write(&path, block("original") + &block("copy")).unwrap();
+
+        let mut s = NoteStore::load(&path).unwrap();
+        let ids: Vec<u64> = s.notes().iter().map(|n| n.id).collect();
+        assert_eq!(ids[0], 2, "the first keeps the id the file gave it");
+        assert_ne!(ids[1], 2, "the copy needs one of its own: {ids:?}");
+
+        assert!(s.with_note(ids[1], today(), |n| n.title = "edited".into()));
+        assert_eq!(s.get(ids[0]).unwrap().title, "original");
+        assert!(s.remove(ids[1]));
+        let titles: Vec<&str> = s.notes().iter().map(|n| n.title.as_str()).collect();
+        assert_eq!(titles, ["original"], "one key, one note");
+        assert!(s.add(Note::new(0, "new", today())) > ids[1]);
+
+        // The file is put right by the next save, even with nothing changed.
+        let mut untouched = NoteStore::load(&path).unwrap();
+        untouched.save().unwrap();
+        // Read the text, not a reload: loading renumbers again in memory,
+        // so a reloaded store looks repaired whether or not the file is.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            written.matches("id = 2\n").count(),
+            1,
+            "the save must write the new id:\n{written}"
+        );
     }
 
     #[test]

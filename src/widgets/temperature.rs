@@ -296,6 +296,7 @@ pub(crate) fn group(
 /// The row name for a platform label, or `None` for a label that is not a
 /// temperature of anything.
 fn display_name(label: &str) -> Option<String> {
+    const SEPARATORS: [char; 3] = [' ', '_', '-'];
     let trimmed = label.trim();
     if trimmed.is_empty() {
         return None;
@@ -304,20 +305,29 @@ fn display_name(label: &str) -> Option<String> {
     if DROPPED.iter().any(|d| lower.starts_with(&d.to_lowercase())) {
         return None;
     }
-    // Peel the label back to the thing it names: trailing digits, the
-    // separators before them, and a trailing `temp`, which says nothing a
-    // temperature panel has not already said — repeated, because
-    // `iwlwifi_1 temp1` has one layer of each.
-    let mut stem = trimmed;
+    // Peel the label back to the thing it names. The sensor layer comes off
+    // once: its number, and a `temp` standing as a word of its own, which says
+    // nothing a temperature panel has not already said. After that a number
+    // comes off only where a separator introduces it — the `_N` the kernel
+    // puts on some hwmon device names, as in `iwlwifi_1 temp1` — because
+    // digits glued to a word are part of its name: repeating the first peel
+    // took `k10temp temp1` down to `k`.
+    let digits = |c: char| c.is_ascii_digit();
+    let mut stem = trimmed
+        .trim_end_matches(digits)
+        .trim_end_matches(SEPARATORS);
+    let before_temp = strip_suffix_ci(stem, "temp");
+    if before_temp.len() < stem.len()
+        && (before_temp.is_empty() || before_temp.ends_with(SEPARATORS))
+    {
+        stem = before_temp.trim_end_matches(SEPARATORS);
+    }
     loop {
-        let peeled = stem
-            .trim_end_matches(|c: char| c.is_ascii_digit())
-            .trim_end_matches([' ', '_', '-']);
-        let peeled = strip_suffix_ci(peeled, "temp").trim_end_matches([' ', '_', '-']);
-        if peeled == stem {
+        let bare = stem.trim_end_matches(digits);
+        if bare.len() == stem.len() || !bare.ends_with(SEPARATORS) {
             break;
         }
-        stem = peeled;
+        stem = bare.trim_end_matches(SEPARATORS);
     }
     if stem.is_empty() {
         return Some(trimmed.to_string());
@@ -643,6 +653,33 @@ mod tests {
             close(rows[3].peak, 41.0),
             "no platform maximum: the peak is the reading"
         );
+    }
+
+    /// A driver whose name ends in digits keeps them. `sysinfo` names an
+    /// unlabelled hwmon sensor `{driver} temp{n}`, and peeling digits until
+    /// nothing changed took `k10temp temp1` down through `k10temp` and `k10`
+    /// to `k` — a row, a readout and an alert naming a chip nobody could
+    /// recognise. A second number comes off only where a separator introduces
+    /// it, as in the `_1` of the kernel's `iwlwifi_1`.
+    #[test]
+    fn a_driver_name_ending_in_digits_keeps_them() {
+        for (label, expected) in [
+            ("k10temp temp1", "k10temp"),
+            ("lm75 temp1", "lm75"),
+            ("jc42 temp2", "jc42"),
+            ("it8728 temp1", "it8728"),
+            ("nct6775 temp3", "nct6775"),
+            ("lm75_1 temp1", "lm75"),
+            ("iwlwifi_1 temp1", "iwlwifi"),
+            ("acpitz temp1", "Motherboard"),
+            ("NAND CH0 temp", "SSD"),
+            ("PMU tdie14", "CPU die"),
+            ("k10temp Tccd1", "CPU die"),
+            ("coretemp Package id 0", "CPU package"),
+            ("temp1", "temp1"),
+        ] {
+            assert_eq!(display_name(label).as_deref(), Some(expected), "{label}");
+        }
     }
 
     /// The peak is the panel's memory, not the platform's: a group that

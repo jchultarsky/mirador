@@ -295,6 +295,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusing a symbol was kept whole and formatted into the markets panel on
   every frame, however long it was. It is now cut at 80 columns with `…`,
   twice anything real.
+- **A temperature sensor whose chip name ends in a number keeps it.** A
+  Linux sensor with no label of its own is named after its driver, and the
+  panel took every digit off the end in turn, so `k10temp` on older AMD
+  processors, `lm75` and `jc42` on many boards, and `it8728` came out as
+  `k`, `lm`, `jc` and `it` in the table, the readout and the status-bar
+  alert. Only the sensor's own number comes off now, and a number a
+  separator introduces, like the `_1` in the kernel's `iwlwifi_1`.
+- **Two tasks or notes sharing an id in a hand-edited file stay two.**
+  Copying a `[[task]]` or `[[note]]` block is the natural way to add one by
+  hand, and the copy kept its `id`. Every key acts by id, so deleting either
+  deleted both, and editing the copy rewrote the original, with nothing said
+  either time. A repeated id is now given a new one when the file is read,
+  and the next save writes it down.
+- **The task filter ignores case beyond `A` to `Z`.** It folded only those,
+  so `übung` did not find a task called `Übung buchen`, though the notes
+  search found the same words in a note. Both fold case the same way now, a
+  letter at a time, which mends the notes search for Greek typed in
+  capitals too: a capital sigma ending what had been typed folded to `ς`,
+  so a note called `ΚΩΣΤΑΣ` dropped out of the search at `ΚΩΣ` and came
+  back at `ΚΩΣΤ`.
+- **The calculator takes `×` and `÷` to the full length of an entry.** The
+  limit was counted in bytes where the panel counts characters, and those
+  two signs are two bytes each, so a long entry using them was accepted as
+  typed and then answered `too long`.
+- **A clock named with no zone is refused for that.** `Tokyo =` in the
+  clocks panel's add or edit dialog, a label with nothing after the `=`,
+  was answered "that clock is already on the panel". It now asks for a zone
+  after the `=`.
+- **Choosing another calendar with `f` no longer fills the watch log.** The
+  new calendar's first read was compared with the old one's events, so
+  every event in it was logged as having "appeared in your calendar". It is
+  now as quiet as the first read at startup, including when a read of the
+  old file was already under way, and an event added to it later is still
+  reported.
 
 ## [1.19.2] - 2026-10-07
 

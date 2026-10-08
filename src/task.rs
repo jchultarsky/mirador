@@ -160,23 +160,55 @@ impl Task {
         self.completed = if self.done { Some(today) } else { None };
     }
 
-    /// True if any tag matches `needle` case-insensitively, or if the title or
-    /// notes contain it. Used by the panel's filter box.
+    /// True if the title, a tag or the notes contain `needle`, ignoring case.
+    /// Used by the panel's filter box.
     pub fn matches(&self, needle: &str) -> bool {
         if needle.is_empty() {
             return true;
         }
-        let needle = needle.to_ascii_lowercase();
-        self.title.to_ascii_lowercase().contains(&needle)
-            || self
-                .tags
-                .iter()
-                .any(|t| t.to_ascii_lowercase().contains(&needle))
-            || self
-                .notes
-                .as_ref()
-                .is_some_and(|n| n.to_ascii_lowercase().contains(&needle))
+        let needle = Needle::new(needle);
+        needle.is_in(&self.title)
+            || self.tags.iter().any(|t| needle.is_in(t))
+            || self.notes.as_deref().is_some_and(|n| needle.is_in(n))
     }
+}
+
+/// Text searched for without regard to case, by the task filter and by the
+/// notes search alike.
+///
+/// One type so the two cannot disagree about what "contains" means. They
+/// did: the filter folded only `A`–`Z` while the notes search folded every
+/// letter, so `übung` found a note called `Übung` and not a task.
+pub(crate) struct Needle(String);
+
+impl Needle {
+    pub(crate) fn new(text: &str) -> Self {
+        Self(fold(text))
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether `haystack` contains this, case folded on both sides the same
+    /// way.
+    pub(crate) fn is_in(&self, haystack: &str) -> bool {
+        fold(haystack).contains(&self.0)
+    }
+}
+
+/// Lower case a letter at a time, with the final sigma `ς` read as `σ`.
+///
+/// Not `str::to_lowercase`, which reads context: a capital sigma ending a word
+/// becomes `ς` and one inside a word `σ`. A needle is a word cut short, so
+/// `ΚΩΣ` typed on the way to `ΚΩΣΤΑΣ` folded to `κως` against `κωστας` and
+/// stopped matching. Each letter on its own folds the same on both sides, and
+/// the two sigmas are one letter for the purpose of finding a word.
+fn fold(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
 }
 
 /// Whole-day difference `to - from`. Positive means `to` is in the future.
@@ -305,7 +337,7 @@ impl TaskStore {
     /// Load from `path`, treating a missing file as an empty list.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let tasks = if path.exists() {
+        let mut tasks = if path.exists() {
             let raw = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading tasks from {}", path.display()))?;
             let parsed: TaskFile = toml::from_str(&raw)
@@ -315,11 +347,12 @@ impl TaskStore {
             Vec::new()
         };
 
-        let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let mut next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let dirty = renumber_repeated_ids(tasks.iter_mut().map(|t| &mut t.id), &mut next_id);
         Ok(Self {
             path,
             tasks,
-            dirty: false,
+            dirty,
             next_id,
             last_error: None,
         })
@@ -474,6 +507,31 @@ impl TaskStore {
     pub fn save_reporting(&mut self) {
         crate::store::report(self.save(), &mut self.last_error);
     }
+}
+
+/// Give each id after its first appearance the next free one, and say whether
+/// any needed it. Shared with [`crate::note::NoteStore`], whose file has the
+/// same shape.
+///
+/// A hand-edited file can repeat an id — copying a block is the natural way to
+/// add an entry — and every key acts by id, so two entries sharing one were
+/// deleted together and edited as each other. The first keeps its id, so a
+/// file that was right loads untouched; a store that renumbered anything is
+/// dirty, so its next save writes the repair down.
+pub(crate) fn renumber_repeated_ids<'a>(
+    ids: impl Iterator<Item = &'a mut u64>,
+    next_id: &mut u64,
+) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut renumbered = false;
+    for id in ids {
+        if !seen.insert(*id) {
+            *id = *next_id;
+            *next_id += 1;
+            renumbered = true;
+        }
+    }
+    renumbered
 }
 
 /// The tasks written on first run. Ids are assigned by the store.
@@ -808,6 +866,75 @@ energy_level = \"high\"
         let mut reloaded = TaskStore::load(&path).unwrap();
         let c = reloaded.add(task(0, "c"));
         assert!(c > a && c > b, "{c} must be above everything in the file");
+    }
+
+    /// The filter folds case the way the notes search does, beyond ASCII.
+    /// It folded only `A`–`Z`, so `übung` did not find a task called
+    /// `Übung buchen` while the same words in a note were found — one program
+    /// giving two answers to "does this contain that".
+    ///
+    /// The Greek cases are the fold's own trap. `str::to_lowercase` reads
+    /// context, and a capital sigma ending a word becomes `ς` where one inside
+    /// a word becomes `σ`, so `ΚΩΣ` typed on the way to `ΚΩΣΤΑΣ` folded to
+    /// `κως`, which `κωστας` does not contain, and the task vanished three
+    /// letters into its own name.
+    #[test]
+    fn the_filter_ignores_case_beyond_ascii() {
+        let mut t = task(1, "Übung buchen");
+        t.tags = vec!["ÉTÉ".into()];
+        t.notes = Some("Ärger mit der Bahn".into());
+        for needle in ["übung", "ÜBUNG", "été", "ärger"] {
+            assert!(t.matches(needle), "{needle}");
+        }
+        assert!(!t.matches("übungen"));
+
+        let greek = task(2, "ΚΩΣΤΑΣ");
+        for needle in ["ΚΩΣ", "κωσ", "κως", "ΚΩΣΤΑΣ", "κωστας"] {
+            assert!(greek.matches(needle), "{needle}");
+        }
+        assert!(!greek.matches("ΚΩΣΤΑΣΗ"));
+    }
+
+    /// Copying a `[[task]]` block is the natural way to add a task to a file
+    /// whose header calls it safe to edit by hand, and it leaves two tasks
+    /// sharing an id. Every key acts by id, so `d` on either deleted both and
+    /// `e` on the copy rewrote the original — in silence, and saved.
+    #[test]
+    fn a_repeated_id_in_the_file_is_renumbered_so_each_key_acts_on_one_task() {
+        let dir = tempdir();
+        let path = dir.join("todos.toml");
+        let block = |title: &str| {
+            format!("[[task]]\nid = 3\ntitle = \"{title}\"\ncreated = \"2026-07-25\"\n\n")
+        };
+        std::fs::write(&path, block("original") + &block("copy")).unwrap();
+
+        let mut store = TaskStore::load(&path).unwrap();
+        let ids: Vec<u64> = store.tasks().iter().map(|t| t.id).collect();
+        assert_eq!(ids[0], 3, "the first keeps the id the file gave it");
+        assert_ne!(ids[1], 3, "the copy needs one of its own: {ids:?}");
+
+        let mut copy = store.get(ids[1]).unwrap().clone();
+        copy.title = "edited".into();
+        assert!(store.update(copy));
+        assert!(store.remove(ids[1]));
+        let titles: Vec<&str> = store.tasks().iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["original"], "one key, one task");
+        assert!(
+            store.add(task(0, "new")) > ids[1],
+            "and new ids climb past it"
+        );
+
+        // The file is put right by the next save, even with nothing changed.
+        let mut untouched = TaskStore::load(&path).unwrap();
+        untouched.save().unwrap();
+        // Read the text, not a reload: loading renumbers again in memory,
+        // so a reloaded store looks repaired whether or not the file is.
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            written.matches("id = 3\n").count(),
+            1,
+            "the save must write the new id:\n{written}"
+        );
     }
 
     #[test]

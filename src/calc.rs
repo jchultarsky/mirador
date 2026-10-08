@@ -28,10 +28,13 @@
 //! key held down, and a stack overflow aborts the process — there is no
 //! catching it and no error to show. A depth limit turns that into a message.
 
-/// Longest expression that can be typed.
+/// Longest expression that can be typed, in characters.
 ///
 /// Far past anything a person writes by hand; it exists so that no later
-/// bound has to reason about unbounded length.
+/// bound has to reason about unbounded length. Characters rather than bytes
+/// because that is what the panel counts as you type, and `×` and `÷` are two
+/// bytes each: measured in bytes here, an entry the panel had taken came back
+/// `too long`.
 pub const MAX_LEN: usize = 256;
 
 /// Deepest nesting of parentheses.
@@ -93,7 +96,7 @@ impl CalcError {
 
 /// Evaluate a typed expression.
 pub fn evaluate(text: &str) -> Result<f64, CalcError> {
-    if text.len() > MAX_LEN {
+    if text.chars().count() > MAX_LEN {
         return Err(CalcError::TooLong);
     }
     if text.trim().is_empty() {
@@ -399,6 +402,21 @@ mod tests {
     fn an_over_long_expression_is_refused_by_length() {
         let long = "1+".repeat(MAX_LEN);
         assert_eq!(evaluate(&long), Err(CalcError::TooLong));
+    }
+
+    /// The limit is in characters, which is how the panel counts what it
+    /// lets you type. Counted in bytes, `×` and `÷` cost two each, so an
+    /// entry the panel had accepted came back `too long` at two-thirds of
+    /// the length the same sum written with `*` was allowed.
+    #[test]
+    fn the_length_limit_counts_characters_not_bytes() {
+        let at_limit = format!("{}9", "9\u{00D7}".repeat((MAX_LEN - 1) / 2));
+        assert!(at_limit.chars().count() <= MAX_LEN);
+        assert!(at_limit.len() > MAX_LEN, "the case needs multi-byte glyphs");
+        assert!(evaluate(&at_limit).is_ok(), "{:?}", evaluate(&at_limit));
+        let over = format!("{at_limit}\u{00F7}9");
+        assert!(over.chars().count() > MAX_LEN);
+        assert_eq!(evaluate(&over), Err(CalcError::TooLong));
     }
 
     /// `OutOfRange` cannot be reached by typing, and the guard stays anyway.

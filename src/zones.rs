@@ -626,6 +626,32 @@ struct ZonesFile {
     zones: Vec<ClockZone>,
 }
 
+/// Why [`Zones::add`] or [`Zones::edit`] changed nothing.
+///
+/// A reason rather than a `false`, because the two a reader can cause want
+/// different answers: one `false` for both told someone who had typed
+/// `Tokyo =` that the clock was already on the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// No timezone was given.
+    NoZone,
+    /// Another clock already shows that timezone.
+    AlreadyShown,
+    /// An edit named an entry the list does not have.
+    NoSuchClock,
+}
+
+impl Refused {
+    /// What the dialog says about it.
+    pub fn why(self) -> &'static str {
+        match self {
+            Self::NoZone => "name a zone after the `=`",
+            Self::AlreadyShown => "that clock is already on the panel",
+            Self::NoSuchClock => "that clock is no longer on the panel",
+        }
+    }
+}
+
 impl Zones {
     /// Load from `path`, falling back to `seed` when the file does not exist.
     pub fn load(path: impl Into<PathBuf>, seed: &[ClockZone]) -> Result<Self> {
@@ -656,11 +682,14 @@ impl Zones {
         &self.clocks
     }
 
-    /// Add a zone. Returns false when the timezone is blank or already shown.
-    pub fn add(&mut self, label: &str, timezone: &str) -> bool {
+    /// Add a zone, or say why not: the timezone is blank or already shown.
+    pub fn add(&mut self, label: &str, timezone: &str) -> Result<(), Refused> {
         let timezone = timezone.trim();
-        if timezone.is_empty() || self.clocks.iter().any(|z| z.timezone == timezone) {
-            return false;
+        if timezone.is_empty() {
+            return Err(Refused::NoZone);
+        }
+        if self.clocks.iter().any(|z| z.timezone == timezone) {
+            return Err(Refused::AlreadyShown);
         }
         // An unlabelled clock takes the city out of the timezone name, which is
         // what someone typing `Europe/Lisbon` meant by it.
@@ -677,7 +706,7 @@ impl Zones {
             timezone: timezone.to_string(),
         });
         self.dirty = true;
-        true
+        Ok(())
     }
 
     /// Remove the zone at `index`.
@@ -722,15 +751,18 @@ impl Zones {
 
     /// Replace the label and timezone of the zone at `index`.
     ///
-    /// Returns false when the timezone is blank, or when it names a zone some
-    /// *other* entry already shows. Comparing against other entries rather than
-    /// all of them is what lets an edit change only the label — the common case,
-    /// and the one the reporter wanted — without the entry colliding with
-    /// itself.
-    pub fn edit(&mut self, index: usize, label: &str, timezone: &str) -> bool {
+    /// Refused when there is no entry at `index`, when the timezone is blank,
+    /// or when it names a zone some *other* entry already shows. Comparing
+    /// against other entries rather than all of them is what lets an edit
+    /// change only the label — the common case, and the one the reporter
+    /// wanted — without the entry colliding with itself.
+    pub fn edit(&mut self, index: usize, label: &str, timezone: &str) -> Result<(), Refused> {
         let timezone = timezone.trim();
-        if timezone.is_empty() || index >= self.clocks.len() {
-            return false;
+        if index >= self.clocks.len() {
+            return Err(Refused::NoSuchClock);
+        }
+        if timezone.is_empty() {
+            return Err(Refused::NoZone);
         }
         if self
             .clocks
@@ -738,7 +770,7 @@ impl Zones {
             .enumerate()
             .any(|(i, z)| i != index && z.timezone == timezone)
         {
-            return false;
+            return Err(Refused::AlreadyShown);
         }
         // Same rule as `add`: an emptied label falls back to the city in the
         // timezone, so clearing the field is a way to get the default back
@@ -756,7 +788,7 @@ impl Zones {
             timezone: timezone.to_string(),
         };
         self.dirty = true;
-        true
+        Ok(())
     }
 
     /// Where the zones are stored, for the panel's `o`.
@@ -812,7 +844,11 @@ mod tests {
     #[test]
     fn a_zone_already_shown_is_not_added_twice() {
         let mut zones = seeded();
-        assert!(!zones.add("Japan", "Asia/Tokyo"), "already there");
+        assert_eq!(
+            zones.add("Japan", "Asia/Tokyo"),
+            Err(Refused::AlreadyShown),
+            "already there"
+        );
         assert_eq!(zones.zones().len(), 2);
         assert!(!zones.dirty, "and nothing needs writing");
     }
@@ -820,7 +856,7 @@ mod tests {
     #[test]
     fn an_unlabelled_zone_is_named_after_its_city() {
         let mut zones = seeded();
-        assert!(zones.add("", "America/New_York"));
+        assert_eq!(zones.add("", "America/New_York"), Ok(()));
         assert_eq!(zones.zones()[2].label, "New York");
     }
 
@@ -838,7 +874,7 @@ mod tests {
     #[test]
     fn a_blank_timezone_is_refused() {
         let mut zones = seeded();
-        assert!(!zones.add("Nowhere", "   "));
+        assert_eq!(zones.add("Nowhere", "   "), Err(Refused::NoZone));
         assert_eq!(zones.zones().len(), 2);
     }
 
@@ -895,7 +931,7 @@ mod tests {
     #[test]
     fn an_entry_can_be_relabelled_without_changing_its_zone() {
         let mut zones = three();
-        assert!(zones.edit(1, "Japan", "Asia/Tokyo"));
+        assert_eq!(zones.edit(1, "Japan", "Asia/Tokyo"), Ok(()));
         assert_eq!(labels(&zones), ["Local", "Japan", "London"]);
         assert_eq!(zones.zones()[1].timezone, "Asia/Tokyo");
     }
@@ -903,8 +939,9 @@ mod tests {
     #[test]
     fn an_edit_onto_a_zone_another_clock_shows_is_refused() {
         let mut zones = three();
-        assert!(
-            !zones.edit(1, "Britain", "Europe/London"),
+        assert_eq!(
+            zones.edit(1, "Britain", "Europe/London"),
+            Err(Refused::AlreadyShown),
             "that zone is already on the panel"
         );
         assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
@@ -916,15 +953,18 @@ mod tests {
     #[test]
     fn clearing_the_label_falls_back_to_the_city_in_the_zone() {
         let mut zones = three();
-        assert!(zones.edit(1, "   ", "America/New_York"));
+        assert_eq!(zones.edit(1, "   ", "America/New_York"), Ok(()));
         assert_eq!(labels(&zones), ["Local", "New York", "London"]);
     }
 
     #[test]
     fn an_edit_out_of_range_or_with_a_blank_zone_changes_nothing() {
         let mut zones = three();
-        assert!(!zones.edit(9, "Nowhere", "Asia/Tokyo"));
-        assert!(!zones.edit(1, "Tokyo", "   "));
+        assert_eq!(
+            zones.edit(9, "Nowhere", "Asia/Tokyo"),
+            Err(Refused::NoSuchClock)
+        );
+        assert_eq!(zones.edit(1, "Tokyo", "   "), Err(Refused::NoZone));
         assert_eq!(labels(&zones), ["Local", "Tokyo", "London"]);
     }
 
@@ -938,7 +978,9 @@ mod tests {
                 &(|z: &mut Zones| z.move_down(1)) as &dyn Fn(&mut Zones) -> bool,
             ),
             ("move_up", &|z: &mut Zones| z.move_up(2)),
-            ("edit", &|z: &mut Zones| z.edit(1, "Japan", "Asia/Tokyo")),
+            ("edit", &|z: &mut Zones| {
+                z.edit(1, "Japan", "Asia/Tokyo").is_ok()
+            }),
         ] {
             let mut zones = three();
             assert!(!zones.dirty, "starts clean");
