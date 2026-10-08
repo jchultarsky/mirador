@@ -2303,9 +2303,35 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.19.1` is released**, as a GitHub release with binaries for macOS
+- **`1.19.2` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a patch release cut on 2026-09-27, and
+  and published on crates.io. It is a patch release cut on 2026-10-07
+  carrying the seven P0 items from the 2026-10-06 code review (#299): a
+  `.ics` time that panicked the agenda thread, monthly and yearly rules
+  drifting off month-end days, rules expanded in the reader's zone rather
+  than their own, agenda scrolling that had never reached the screen, a
+  due-date offset that panicked the task form, the README's Windows
+  `open_command` handing feed links to `cmd`, and a `SECURITY.md` still
+  describing 0.7. It also pins CI's lint and docs jobs to Rust 1.99.
+
+  **The fix needed fixing, twice, and review is what caught it.** The
+  first version of the month-end skip compared days in the reader's zone,
+  so a monthly event on the 1st in UTC would have vanished from New York
+  five months a year — a new failure introduced by the fix, invisible to
+  every test because they all used floating times. The second version of
+  the agenda's sticky day heading could stand over nothing above the next
+  day's. Both were found by adversarial review of the branch before it was
+  pushed, not by the tests the branch added. **The Windows opener in the
+  README, `rundll32 url.dll,FileProtocolHandler`, had not been run on
+  Windows when this shipped**; the README says so.
+
+  Step 0 was the PR head as a release build under tmux at 120x40 with a
+  fresh home: first run drew every panel; Enter on a headline said how to
+  set an opener, refused `cmd` by name, and handed a witness command the
+  plain link; a 20-event agenda scrolled with its day headings and quit on
+  `q`.
+
+- **`1.19.1`** was a patch release cut on 2026-09-27, and
   it is **the one carrying the NetBSD battery fix** (#255) that 1.12.1
   through 1.19.0 all shipped without: `starship-battery` 0.12.0 landed
   that morning, five minutes after
