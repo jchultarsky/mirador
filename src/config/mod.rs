@@ -286,10 +286,67 @@ impl Config {
     }
 
     /// Platform data directory for mirador's own files.
+    #[cfg(not(test))]
     fn default_data_dir() -> Result<PathBuf> {
         let dir =
             dirs::data_dir().context("could not determine a data directory for this platform")?;
         Ok(dir.join("mirador"))
+    }
+
+    /// Under test, a data directory of the test run's own, never the
+    /// reader's.
+    ///
+    /// The zone list and the state file live in the data directory whatever
+    /// the config says, and every data file a config leaves unset falls back
+    /// to it, so a test that built a panel from `Config::default()` read the
+    /// reader's task list and seeded their zones, notes and watchlist when
+    /// those were missing. One directory per test process, emptied as it is
+    /// first resolved in case an earlier process had the same id. Nothing
+    /// runs when a test process exits, so those of earlier runs are swept
+    /// here once they are an hour old — far longer than the suite takes.
+    #[cfg(test)]
+    // It stands in for the platform resolver above, which can fail, so every
+    // caller is written for a `Result` and this has to return one.
+    #[allow(clippy::unnecessary_wraps)]
+    fn default_data_dir() -> Result<PathBuf> {
+        static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        let dir = DIR.get_or_init(|| Self::test_run_dir(&std::env::temp_dir(), std::process::id()));
+        Ok(dir.clone())
+    }
+
+    /// The data directory for test process `pid`, made in `temp`.
+    ///
+    /// Directly in `temp`, named the way the other tests name theirs, and
+    /// not inside a parent shared by every run: on Linux `temp` is usually
+    /// one `/tmp` for every user, and a parent made by whoever ran the suite
+    /// first is one nobody else can write into. The directory is made here
+    /// rather than left to the first save, so a run that cannot have it
+    /// fails saying so, not in whichever test happened to save first.
+    #[cfg(test)]
+    fn test_run_dir(temp: &Path, pid: u32) -> PathBuf {
+        const RUN: &str = "mirador-test-data-";
+        for entry in std::fs::read_dir(temp).into_iter().flatten().flatten() {
+            if !entry.file_name().to_string_lossy().starts_with(RUN) {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_hours(1));
+            if stale {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        let dir = temp.join(format!("{RUN}{pid}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        // `create_dir`, not `create_dir_all`: one left by another user's run
+        // with the same id could not be emptied, and must not be adopted.
+        if let Err(err) = std::fs::create_dir(&dir) {
+            panic!("this test run's data directory {}: {err}", dir.display());
+        }
+        dir
     }
 
     /// Reject configs that would produce an unusable dashboard, with a message
@@ -1299,5 +1356,73 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
             assert_eq!(expand_tilde(Path::new("~/x.toml")), home.join("x.toml"));
         }
         assert_eq!(expand_tilde(Path::new("/abs/x")), PathBuf::from("/abs/x"));
+    }
+
+    /// A fresh directory for one of the tests below to stand in for the
+    /// system's temporary directory.
+    #[cfg(unix)]
+    fn stand_in_temp(name: &str) -> PathBuf {
+        let temp = std::env::temp_dir().join(format!("mirador-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp);
+        std::fs::create_dir_all(&temp).unwrap();
+        temp
+    }
+
+    /// On Linux the temporary directory is usually one `/tmp` for everyone,
+    /// so a test run must not need anything in it that another user's run
+    /// could have made first. A shared parent did: whoever ran the suite
+    /// first owned it with their umask, and a second user's run could not
+    /// make its own directory inside, so nine dashboard tests failed on an
+    /// alert about the world clocks.
+    #[cfg(unix)]
+    #[test]
+    fn a_test_run_needs_nothing_another_users_run_made() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = stand_in_temp("shared-temp");
+        // What a second user finds after the first user's run.
+        let theirs = temp.join("mirador-test-data");
+        std::fs::create_dir(&theirs).unwrap();
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let ours = Config::test_run_dir(&temp, 4242);
+        let made = ours.is_dir() && std::fs::write(ours.join("probe"), "").is_ok();
+
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&temp);
+        assert!(made, "the run directory {} was not made", ours.display());
+        // Root can write into the other user's directory, so on a machine
+        // where the suite runs as root only this catches a shared parent.
+        assert_eq!(ours.parent(), Some(temp.as_path()), "{}", ours.display());
+    }
+
+    /// Runs that are over are swept by name, and the name is what keeps the
+    /// sweep to them: in a temporary directory it shares with every other
+    /// test and program, it takes an hour-old `mirador-test-data-*` and
+    /// leaves a newer one, which may be a run still going, and anything
+    /// else, however old.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_takes_only_test_runs_an_hour_old() {
+        let temp = stand_in_temp("sweep");
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(2);
+        let aged = |name: &str| {
+            let dir = temp.join(name);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(two_hours_ago)
+                .unwrap();
+            dir
+        };
+        let over = aged("mirador-test-data-1");
+        let not_ours = aged("mirador-layout-1");
+        let going = temp.join("mirador-test-data-2");
+        std::fs::create_dir(&going).unwrap();
+
+        Config::test_run_dir(&temp, 3);
+        let left = (over.exists(), not_ours.exists(), going.exists());
+
+        let _ = std::fs::remove_dir_all(&temp);
+        assert_eq!(left, (false, true, true), "(over, not ours, still going)");
     }
 }

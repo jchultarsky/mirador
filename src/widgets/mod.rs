@@ -168,7 +168,11 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.clocks.clone(),
             crate::config::Config::zones_path()?,
         )?),
-        "weather" => Box::new(weather::WeatherPanel::new(config.weather.clone())),
+        "weather" => {
+            #[cfg(test)]
+            refuse_a_fetch_thread(name)?;
+            Box::new(weather::WeatherPanel::new(config.weather.clone()))
+        }
         "todo" => Box::new(todo::TodoPanel::new(
             config.todo.clone(),
             config.todo_path()?,
@@ -177,13 +181,21 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
             config.notes.clone(),
             config.notes_path()?,
         )?),
-        "stocks" => Box::new(stocks::StocksPanel::new(
-            config.stocks.clone(),
-            config.stocks_path()?,
-        )?),
+        "stocks" => {
+            #[cfg(test)]
+            refuse_a_fetch_thread(name)?;
+            Box::new(stocks::StocksPanel::new(
+                config.stocks.clone(),
+                config.stocks_path()?,
+            )?)
+        }
         "calendar" => Box::new(calendar::CalendarPanel::new(config.calendar.clone())),
         "watchlog" => Box::new(watchlog::WatchLogPanel::new()),
-        "news" => Box::new(news::NewsPanel::new(&config.news)),
+        "news" => {
+            #[cfg(test)]
+            refuse_a_fetch_thread(name)?;
+            Box::new(news::NewsPanel::new(&config.news))
+        }
         "agenda" => Box::new(agenda::AgendaPanel::new(
             &config.agenda,
             config.agenda_path()?,
@@ -211,6 +223,23 @@ pub fn build(name: &str, config: &Config) -> Result<Option<Box<dyn Panel>>> {
     Ok(Some(panel))
 }
 
+/// Under test, the panels whose constructor starts a fetch thread are refused
+/// rather than built, because the thread's first act is a request and no test
+/// touches the network.
+///
+/// The refusal sits inside each panel's own arm of `build`, after the name has
+/// matched, so a test that asks for one still proves the arm is there. A test
+/// that wants these panels builds them offline, as the widget tests'
+/// `offline_panels` does, and hands a whole dashboard of them to
+/// `App::with_panels`.
+#[cfg(test)]
+fn refuse_a_fetch_thread(name: &str) -> Result<()> {
+    anyhow::bail!(
+        "`{name}` starts a fetch thread as it is built, and no test may reach the network; \
+         build it offline instead"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,12 +258,59 @@ mod tests {
         assert!(!is_known_widget("CLOCKS"), "matching must be exact");
     }
 
+    /// The widgets whose constructor starts a fetch thread, and that `build`
+    /// therefore refuses under test: the thread's first act is a request.
+    const FETCHING: [&str; 3] = ["weather", "stocks", "news"];
+
+    /// No test reads or writes the reader's own data directory.
+    ///
+    /// Every data file a config leaves unset — the task list, notes,
+    /// watchlist and calendar — falls back to the platform data directory,
+    /// and the zone list and the state file live there whatever the config
+    /// says. The suite built dashboards from `Config::default()`, so it read
+    /// the reader's own task list, and on a machine without the others it
+    /// seeded their notes, watchlist and zones: from the default config
+    /// rather than theirs, and a seed is read only while its file is
+    /// missing, so their own `[clocks].zones` would never have been.
+    #[test]
+    fn no_test_reaches_the_readers_data_directory() {
+        let Some(theirs) = dirs::data_dir() else {
+            // No data directory on this platform, so none to reach.
+            return;
+        };
+        let config = Config::default();
+        let mut paths = vec![
+            config.todo_path().unwrap(),
+            config.notes_path().unwrap(),
+            config.stocks_path().unwrap(),
+            config.agenda_path().unwrap(),
+            Config::zones_path().unwrap(),
+            Config::state_path().unwrap(),
+            Config::update_cache_path().unwrap(),
+        ];
+        paths.extend(Config::owned_data_files().unwrap());
+        for path in &paths {
+            assert!(
+                !path.starts_with(&theirs),
+                "a test would reach {}, in the reader's own data directory",
+                path.display()
+            );
+        }
+    }
+
     /// Render every widget at a range of sizes, including degenerate ones.
     ///
     /// Layout code is the usual source of index-out-of-bounds panics in a TUI,
     /// and those only show up at sizes nobody tries by hand. A terminal one
     /// column wide is not a supported way to use mirador, but it must not
     /// crash: users resize windows, and tiling window managers do it for them.
+    ///
+    /// `build` is still asked for every advertised widget, so a name it has
+    /// no arm for fails here. The three in `FETCHING` must be refused rather
+    /// than built — this test used to build them, and the weather and news
+    /// panels' threads went straight out to Open-Meteo and three RSS feeds on
+    /// every run — so they are swept as `offline_panels` builds them, along
+    /// with every other widget in that form.
     #[test]
     fn every_widget_renders_at_any_size_without_panicking() {
         use ratatui::Terminal;
@@ -246,18 +322,28 @@ mod tests {
 
         let mut config = Config::default();
         config.todo.file = Some(dir.join("todos.toml"));
-        // Skip the network round trip: an explicit coordinate pair means the
-        // weather panel never geocodes, so this test needs no network at all.
-        config.weather.latitude = Some(42.36);
-        config.weather.longitude = Some(-71.06);
 
+        let mut panels = Vec::new();
         for name in WIDGET_NAMES {
-            let mut panel = build(name, &config)
-                .unwrap_or_else(|e| panic!("building `{name}` failed: {e:#}"))
-                .unwrap_or_else(|| panic!("`{name}` is advertised but did not build"));
+            match (FETCHING.contains(name), build(name, &config)) {
+                (_, Ok(None)) => panic!("`{name}` is advertised but did not build"),
+                (true, Ok(Some(_))) => panic!(
+                    "`{name}` was built in a test, and the fetch thread it starts goes \
+                     straight to the network"
+                ),
+                (true, Err(e)) => assert!(
+                    e.to_string().contains("no test may reach the network"),
+                    "building `{name}` failed: {e:#}"
+                ),
+                (false, Ok(Some(panel))) => panels.push((*name, panel)),
+                (false, Err(e)) => panic!("building `{name}` failed: {e:#}"),
+            }
+        }
+        panels.extend(offline_panels(&dir, &config));
 
+        let gradients = config.theme.gradients();
+        for (name, mut panel) in panels {
             panel.tick();
-            let gradients = config.theme.gradients();
 
             for (width, height) in [(1, 1), (2, 3), (10, 4), (40, 12), (200, 60)] {
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -283,6 +369,10 @@ mod tests {
     }
 
     /// The same check for the whole dashboard, so the grid maths is covered too.
+    ///
+    /// The default layout places all three panels `build` refuses under test,
+    /// so the dashboard is handed the offline ones, and fails to build if the
+    /// layout names a widget the list does not supply.
     #[test]
     fn the_full_dashboard_renders_at_any_size_without_panicking() {
         use ratatui::Terminal;
@@ -292,12 +382,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut config = Config::default();
-        config.todo.file = Some(dir.join("todos.toml"));
-        config.weather.latitude = Some(42.36);
-        config.weather.longitude = Some(-71.06);
-
-        let mut app = crate::app::App::new(config).unwrap();
+        let config = Config::default();
+        let panels = offline_panels(&dir, &config);
+        let mut app = crate::app::App::with_panels(config, panels).unwrap();
 
         for (width, height) in [(1, 1), (3, 2), (20, 5), (80, 24), (250, 80)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -451,6 +538,17 @@ mod tests {
         panels
     }
 
+    /// Give the offline panels' threads — the canned quote source and the
+    /// calendar read — a moment to answer, and let `tick` collect it.
+    fn settle(panels: &mut [(&'static str, Box<dyn Panel>)]) {
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            for (_, panel) in panels.iter_mut() {
+                panel.tick();
+            }
+        }
+    }
+
     /// The one rendering fault a single-width render cannot see, found by
     /// rendering two.
     ///
@@ -578,7 +676,8 @@ mod tests {
     }
 
     /// Not a test: renders every panel across a width sweep so clipping can be
-    /// seen rather than reasoned about.
+    /// seen rather than reasoned about, each built offline as the silent-cut
+    /// sweep builds them.
     /// Run with `cargo test dump_width_sweep -- --ignored --nocapture`.
     #[test]
     #[ignore = "renders every panel at many widths for eyeballing, not an assertion"]
@@ -590,18 +689,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut config = Config::default();
-        config.todo.file = Some(dir.join("todos.toml"));
-        config.notes.file = Some(dir.join("notes.toml"));
-        config.stocks.file = Some(dir.join("watchlist.toml"));
-        config.weather.latitude = Some(42.36);
-        config.weather.longitude = Some(-71.06);
+        let config = Config::default();
+        let gradients = config.theme.gradients();
+        let mut panels = offline_panels(&dir, &config);
+        settle(&mut panels);
 
-        for name in WIDGET_NAMES {
-            let mut panel = build(name, &config).unwrap().unwrap();
-            panel.tick();
-            let gradients = config.theme.gradients();
-
+        for (name, mut panel) in panels {
             for width in [12u16, 16, 20, 24, 26, 30, 40] {
                 let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
                 terminal
@@ -654,15 +747,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let mut config = Config::default();
-        config.todo.file = Some(dir.join("todos.toml"));
-        config.notes.file = Some(dir.join("notes.toml"));
-        config.stocks.file = Some(dir.join("watchlist.toml"));
-        config.weather.latitude = Some(42.36);
-        config.weather.longitude = Some(-71.06);
-
-        let mut app = crate::app::App::new(config).unwrap();
+        let config = Config::default();
+        let mut panels = offline_panels(&dir, &config);
+        // A first run has no calendar, where the offline list has a sample.
+        for (name, panel) in &mut panels {
+            if *name == "agenda" {
+                *panel = Box::new(agenda::AgendaPanel::new(
+                    &config.agenda,
+                    dir.join("calendar.ics"),
+                ));
+            }
+        }
+        // The canned watchlist is staggered like a live one; let it fill.
         std::thread::sleep(std::time::Duration::from_secs(3));
+        settle(&mut panels);
+        let mut app = crate::app::App::with_panels(config, panels).unwrap();
 
         let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
         terminal.draw(|f| app.render_for_test(f)).unwrap();
@@ -727,13 +826,13 @@ created = "2026-07-25"
         )
         .unwrap();
 
-        let mut config = Config::default();
-        config.todo.file = Some(todo_path);
-        config.weather.latitude = Some(42.36);
-        config.weather.longitude = Some(-71.06);
-
-        let mut app = crate::app::App::new(config).unwrap();
+        // `offline_panels` builds the task list from the file just written.
+        let config = Config::default();
+        let mut panels = offline_panels(&dir, &config);
+        // The canned watchlist is staggered like a live one; let it fill.
         std::thread::sleep(std::time::Duration::from_secs(3));
+        settle(&mut panels);
+        let mut app = crate::app::App::with_panels(config, panels).unwrap();
 
         let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
         terminal.draw(|f| app.render_for_test(f)).unwrap();

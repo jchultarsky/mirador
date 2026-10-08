@@ -427,7 +427,9 @@ map, that one is the procedure.
     that found the date had looked straight past. The sweep runs in under a
     second, and every panel it builds is offline — `WeatherPanel::offline`,
     `StocksPanel::offline` and `NewsPanel::offline` exist for it, because
-    `build()` reaches the network and reads the user's own zone file, and
+    those three fetch over the network, which is why `build()` refuses them
+    under `cfg(test)` (and a test's data directory is its own temporary one,
+    never the reader's), and
     `BatteryPanel::canned` and `TemperaturePanel::canned` exist for it because
     a desktop or a CI runner has no battery and reports no sensors, and a
     sweep over an empty panel checks nothing.
@@ -694,6 +696,12 @@ costs exactly one request. **Requires a browser `User-Agent`** or you get HTTP
   same trick for any other user-editable list.
 - `parse_chart` is split from the HTTP call so it is tested against captured
   JSON. **No test in this repo touches the network** — keep it that way.
+  `widgets::build` refuses the three fetching panels under `cfg(test)`, and a
+  dashboard test lays out `offline_panels` through `App::with_panels`. That
+  was verified once, on 2026-10-07, by running the suite with `HOME` empty
+  and `ALL_PROXY` pointed at a local listener that logs each request and
+  forwards none: six requests before the fix, none after. Nothing repeats
+  it, so repeat it by hand after touching any panel that fetches.
 - **A row's colour is the size of the day's move, not just its sign.** The
   change, percentage and sparkline draw from `gain_gradient`/`loss_gradient`,
   saturating at 2% (`FULL_RAMP_BP`) — the ramp starts dark and desaturated,
