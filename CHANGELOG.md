@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Windows build carries the default config with the same line endings
+  as every other build.** It used to embed the file as the build machine's
+  checkout wrote it, which on Windows is CRLF, so `--print-config` and the
+  first-run config differed from macOS and Linux for no reason in the code.
+  The repository now asks for LF everywhere. A config already on disk is
+  untouched, and edits keep whatever endings it has.
+
+### Fixed
+
+- **An absurd pomodoro length is refused instead of overflowing.** The three
+  `[pomodoro]` lengths were checked only for being above zero, and the panel
+  turns minutes into seconds unchecked, so a hand-edited length too large
+  for that sum crashed a debug build and gave a release build a phase of
+  some other length nobody wrote. Like the two refresh settings, each now
+  stops at a year, and a config past it is refused with the key named.
+
 ## [1.20.0] - 2026-10-07
 
 ### Changed

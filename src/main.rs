@@ -669,21 +669,39 @@ mod tests {
         assert!(!parsed.layout.rows.is_empty());
     }
 
+    /// Every flag `parse_args` matches is in `HELP`, as itself rather than
+    /// inside a longer flag, and parses — with a path where it takes one. The
+    /// flags are read out of the parser's own source: a hand-kept list here
+    /// missed the one flag added after it was written, `--reset-keys`, so its
+    /// lines could have left `HELP` without this going red.
     #[test]
     fn help_text_documents_every_flag_the_parser_accepts() {
-        for flag in [
-            "--config",
-            "--print-config",
-            "--config-path",
-            "--migrate-config",
-            "--reset-config",
-            "--factory-reset",
-            "--update",
-            "--yes",
-            "--help",
-            "--version",
-        ] {
-            assert!(HELP.contains(flag), "{flag} is undocumented");
+        let source = include_str!("main.rs");
+        let start = source.find("fn parse_args(").expect("the parser is here");
+        let end = start + source[start..].find("\n}").expect("and ends");
+        let flags: Vec<&str> = source[start..end]
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|literal| literal.starts_with('-'))
+            .map(|literal| literal.trim_end_matches('='))
+            .collect();
+        // Read, rather than vacuously empty: the flag the old list lacked.
+        assert!(flags.contains(&"--reset-keys"), "{flags:?}");
+
+        for flag in flags {
+            assert!(
+                [' ', ',']
+                    .iter()
+                    .any(|after| HELP.contains(&format!(" {flag}{after}"))),
+                "{flag} is undocumented"
+            );
+            assert!(
+                parse(&[flag])
+                    .or_else(|_| parse(&[flag, "/tmp/m.toml"]))
+                    .is_ok(),
+                "{flag} is in the parser's source but does not parse"
+            );
         }
     }
 }

@@ -37,21 +37,22 @@ mod widgets;
 // One flat namespace: the split into files is for readability, not a claim
 // that `[layout]` and `[weather]` are different concepts. Everything a reader
 // or a widget names lives at `crate::config::`.
-//
-// `ClockZone` and `NewsFeed` are named only by tests today — production code
-// builds them through serde and reaches them through their parents — so the
-// non-test build sees the re-export as unused. That is a fact about who
-// *names* the type, not about whether it is part of the surface. The layout
-// types used to be in the same position and no longer are, so their re-export
-// carries no allow.
 pub use layout::{Layout, LayoutPanel, LayoutRow};
 pub use plugins::PluginConfig;
-#[allow(unused_imports)]
 pub use widgets::{
     AgendaConfig, BatteryConfig, CalculatorConfig, CalendarConfig, ClockZone, ClocksConfig,
-    CpuConfig, DiskConfig, MemoryConfig, NetworkConfig, NewsConfig, NewsFeed, NotesConfig,
-    PomodoroConfig, StocksConfig, TemperatureConfig, TodoConfig, WatchlogConfig, WeatherConfig,
+    CpuConfig, DiskConfig, MemoryConfig, NetworkConfig, NewsConfig, NotesConfig, PomodoroConfig,
+    StocksConfig, TemperatureConfig, TodoConfig, WatchlogConfig, WeatherConfig,
 };
+// `NewsFeed` is named by nothing outside this module, in either build: serde
+// builds it and the news panel reaches it through `NewsConfig::feeds`. That is
+// a fact about who *names* the type, not about whether it is part of the
+// surface, so it is re-exported anyway — alone, so the allow covers it and
+// nothing else. The allow used to sit over the whole list, excusing
+// `ClockZone` too, which `zones.rs` names; spread that wide it would have hidden
+// any of the others going dead.
+#[allow(unused_imports)]
+pub use widgets::NewsFeed;
 
 /// Top-level configuration.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -403,13 +404,38 @@ impl Config {
         // deciding when the long break falls. Both are caught here rather than
         // clamped silently, because a `0` in a config is someone's intent, not
         // a typo to guess at.
-        for (key, minutes) in [
-            ("focus_minutes", self.pomodoro.focus_minutes),
-            ("short_break_minutes", self.pomodoro.short_break_minutes),
-            ("long_break_minutes", self.pomodoro.long_break_minutes),
+        //
+        // The top end is bounded for the poll intervals' reason below: the
+        // panel multiplies a length out to seconds unchecked, so an absurd one
+        // panics in a debug build and wraps in release to a phase nobody
+        // chose. A remembered length cannot get past this, because
+        // `apply_state` clamps it to the config's own.
+        let defaults = PomodoroConfig::default();
+        for (key, minutes, default) in [
+            (
+                "focus_minutes",
+                self.pomodoro.focus_minutes,
+                defaults.focus_minutes,
+            ),
+            (
+                "short_break_minutes",
+                self.pomodoro.short_break_minutes,
+                defaults.short_break_minutes,
+            ),
+            (
+                "long_break_minutes",
+                self.pomodoro.long_break_minutes,
+                defaults.long_break_minutes,
+            ),
         ] {
             if minutes == 0 {
                 anyhow::bail!("`[pomodoro].{key}` is 0; a phase needs at least one minute.");
+            }
+            if minutes > A_YEAR_IN_MINUTES {
+                anyhow::bail!(
+                    "`[pomodoro].{key}` is {minutes}; the maximum is {A_YEAR_IN_MINUTES} \
+                     (one year). Leave it out to use the default of {default}."
+                );
             }
         }
         if self.pomodoro.rounds_before_long_break == 0 {
@@ -1295,6 +1321,36 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         assert!(Config::default().validate().is_ok());
         let config: Config = toml::from_str("[weather]\nrefresh_minutes = 1440").expect("parses");
         assert!(config.validate().is_ok(), "a day is a legitimate setting");
+    }
+
+    /// The three `[pomodoro]` lengths were bounded only from below, and the
+    /// panel multiplies each out to seconds unchecked: a hand-edited
+    /// `u64::MAX` panicked in a debug build and wrapped in release to a phase
+    /// of a length nobody wrote. Bounded where the poll intervals are, at a
+    /// year, and refused by name.
+    #[test]
+    fn an_absurd_pomodoro_length_is_rejected_rather_than_wrapping() {
+        let parse = |key: &str, minutes: u64| -> Config {
+            toml::from_str(&format!("[pomodoro]\n{key} = {minutes}")).expect("parses")
+        };
+        for key in ["focus_minutes", "short_break_minutes", "long_break_minutes"] {
+            let err = parse(key, u64::MAX)
+                .validate()
+                .expect_err("must be rejected");
+            assert!(
+                format!("{err:#}").contains(&format!("`[pomodoro].{key}`")),
+                "the error must name the key: {err:#}"
+            );
+            assert!(
+                parse(key, A_YEAR_IN_MINUTES + 1).validate().is_err(),
+                "{key} one minute past a year"
+            );
+            // The edge itself is legal, and well inside the arithmetic.
+            assert!(
+                parse(key, A_YEAR_IN_MINUTES).validate().is_ok(),
+                "{key} at a year"
+            );
+        }
     }
 
     #[test]

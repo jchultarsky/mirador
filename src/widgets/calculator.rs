@@ -68,7 +68,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::calc::{self, CalcError};
 use crate::config::CalculatorConfig;
-use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
+use crate::frame::{Binding, FRAME_WIDTH};
 use crate::grid::{Column, Grid, display_width};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
@@ -727,9 +727,6 @@ fn entry_tail(typing: &str, grid: &Grid) -> String {
         .map_or(0, |(at, c)| at + c.len_utf8());
     format!("…{}{CURSOR}", &typing[start..])
 }
-
-/// Rows the frame costs, named so `max_height`'s reasoning is checkable.
-const _: u16 = FRAME_HEIGHT;
 
 #[cfg(test)]
 mod tests {

@@ -962,26 +962,42 @@ fn hints<A: 'static>(entries: &[(&Meta<A>, &[Key])]) -> (Vec<Binding>, Vec<Bindi
 /// resize hint takes, and six cells a border cannot spare. Bare arrows keep
 /// their `↑ / ↓`, which is how every list in mirador has always drawn them.
 fn joined_keys(key: Key, other: Key) -> String {
-    let arrow = |code| {
-        matches!(
-            code,
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
-        )
-    };
-    if key.modifiers == other.modifiers
-        && !key.modifiers.is_empty()
-        && arrow(key.code)
-        && arrow(other.code)
-    {
+    arrow_pair(key, other, BareArrows::Apart).unwrap_or_else(|| format!("{key} / {other}"))
+}
+
+/// The four arrows, in the order a hint draws all four: `←→↑↓`.
+const ARROWS: [KeyCode; 4] = [KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down];
+
+/// Whether two arrows with no modifiers are compacted like held ones. The two
+/// surfaces that pair arrows have always drawn them differently, and both are
+/// right for where they are: a list's border says `↑ / ↓`, and the arrange
+/// legend says `↑↓` beside its `Shift+↑↓`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BareArrows {
+    /// `↑ / ↓`, as every list's border hint draws them.
+    Apart,
+    /// `↑↓`, as the arrange legend draws them.
+    Joined,
+}
+
+/// Two arrows under the same modifiers as one hint — `Shift+↑↓` — or `None`
+/// for anything else, and for two bare arrows that `bare` keeps apart.
+///
+/// The one place that decides what an arrow is and how a pair of them is
+/// written. [`joined_keys`] and [`pair`] each carried a copy, and the one
+/// thing they disagree on — bare arrows — was a clause missing from one of
+/// them, which read as an oversight rather than as the rule it is.
+fn arrow_pair(a: Key, b: Key, bare: BareArrows) -> Option<String> {
+    let arrows = ARROWS.contains(&a.code) && ARROWS.contains(&b.code);
+    let held = !a.modifiers.is_empty() || bare == BareArrows::Joined;
+    (arrows && held && a.modifiers == b.modifiers).then(|| {
         format!(
             "{}{}{}",
-            Key::modifier_prefix(key.modifiers),
-            Key::code_name(key.code),
-            Key::code_name(other.code)
+            Key::modifier_prefix(a.modifiers),
+            Key::code_name(a.code),
+            Key::code_name(b.code)
         )
-    } else {
-        format!("{key} / {other}")
-    }
+    })
 }
 
 /// One action as the key map dialog lists it, whatever scope it is in.
@@ -1265,36 +1281,26 @@ pub fn arrange_keymap(keys: &KeysConfig) -> Result<PanelKeymap<ArrangeAction>, S
 /// collapsed form of keys that are not those four would be a guess at what
 /// the reader meant.
 fn arrows_as_one(keys: [Option<Key>; 4]) -> Option<String> {
-    let arrows = [KeyCode::Left, KeyCode::Right, KeyCode::Up, KeyCode::Down];
     let lead = keys[0]?;
     keys.iter()
-        .zip(arrows)
+        .zip(ARROWS)
         .all(|(key, arrow)| {
             key.is_some_and(|key| key.modifiers == lead.modifiers && key.code == arrow)
         })
-        .then(|| format!("{}←→↑↓", Key::modifier_prefix(lead.modifiers)))
+        .then(|| {
+            let glyphs: String = ARROWS.into_iter().map(Key::code_name).collect();
+            format!("{}{glyphs}", Key::modifier_prefix(lead.modifiers))
+        })
 }
 
 /// Two keys as one hint for the legend: `↑↓` and `Shift+↑↓` for two arrows
 /// under the same modifiers, bare ones included — the legend has always drawn
 /// them that way — and `k / j` for anything else.
 fn pair(first: Option<Key>, second: Option<Key>) -> Option<String> {
-    let arrow = |code| {
-        matches!(
-            code,
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right
-        )
-    };
     match (first, second) {
-        (Some(a), Some(b)) if a.modifiers == b.modifiers && arrow(a.code) && arrow(b.code) => {
-            Some(format!(
-                "{}{}{}",
-                Key::modifier_prefix(a.modifiers),
-                Key::code_name(a.code),
-                Key::code_name(b.code)
-            ))
+        (Some(a), Some(b)) => {
+            Some(arrow_pair(a, b, BareArrows::Joined).unwrap_or_else(|| format!("{a} / {b}")))
         }
-        (Some(a), Some(b)) => Some(format!("{a} / {b}")),
         (Some(one), None) | (None, Some(one)) => Some(one.to_string()),
         (None, None) => None,
     }
