@@ -998,7 +998,7 @@ impl Panel for WeatherPanel {
             Some(WeatherAction::Location) => {
                 let mut prompt = crate::prompt::Prompt::new(
                     "WEATHER LOCATION",
-                    "A place name, e.g. Lisbon, Portugal · Enter saves · Esc cancels",
+                    "e.g. Lisbon, Portugal · Enter saves · Esc cancels",
                     &settings(&self.config).location,
                     crate::prompt::Completion::None,
                 );

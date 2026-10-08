@@ -373,8 +373,10 @@ impl EditForm {
 enum Mode {
     /// Browsing the list.
     List,
-    /// Typing into the filter box.
-    Filter(TextField),
+    /// Typing into the filter box, with the tags it offers while the box is
+    /// blank — gathered once on the way in, since nothing can add a tag while
+    /// a filter is being typed, rather than from every task on every frame.
+    Filter(TextField, Vec<String>),
     /// Adding or editing a task.
     Edit(Box<EditForm>),
     /// Confirming a deletion.
@@ -691,7 +693,9 @@ impl TodoPanel {
             }
 
             TodoAction::Filter => {
-                self.mode = Mode::Filter(TextField::with_value(self.filter.clone()));
+                let mut tags = self.store.all_tags();
+                tags.truncate(6);
+                self.mode = Mode::Filter(TextField::with_value(self.filter.clone()), tags);
             }
 
             TodoAction::ShowPath => {
@@ -756,7 +760,7 @@ impl TodoPanel {
 
     /// Keys handled while typing a filter.
     fn handle_filter_key(&mut self, key: KeyEvent) -> KeyOutcome {
-        let Mode::Filter(field) = &mut self.mode else {
+        let Mode::Filter(field, _) = &mut self.mode else {
             return KeyOutcome::Ignored;
         };
         match key.code {
@@ -999,8 +1003,7 @@ impl TodoPanel {
             Constraint::Length(1), // priority
             Constraint::Length(1), // tags
             Constraint::Length(1), // spacer
-            Constraint::Length(1), // hint / error
-            Constraint::Min(0),
+            Constraint::Min(1),    // hint / error, and the rows to wrap it
             Constraint::Length(1), // key help
         ])
         .split(inner);
@@ -1067,25 +1070,40 @@ impl TodoPanel {
             }
         }
 
-        // Hint or validation error.
+        // Hint or validation error, in the rows left over above the key help.
         // Wrapped by `grid` rather than by ratatui — a save error carries text
         // from the operating system, and ratatui's wrapper panics on text
-        // mirador did not write. See `grid::wrapped`.
+        // mirador did not write. See `grid::wrapped`. It used to have one row
+        // and be handed every wrapped row anyway, so the Due hint and a bad
+        // date's error both lost their second half in silence; where the form
+        // is too short for the whole message, the last row says it was cut.
         let (message, style) = match &form.error {
             Some(err) => (err.as_str(), Style::default().fg(theme.error)),
             None => (hint_for(form.field), Style::default().fg(theme.muted)),
         };
         frame.render_widget(
-            Paragraph::new(crate::grid::wrapped(message, rows[6].width)).style(style),
+            Paragraph::new(fitted_rows(message, rows[6], false)).style(style),
             rows[6],
         );
 
+        // The key help is the form's only word on how to leave it, and at the
+        // shipped 120x40 dashboard it had 36 cells for 38: the terminal cut
+        // it to `Esc can`. Its parts drop whole, `Esc cancel` last, as a
+        // prompt's help does.
+        let keys = ["Tab/↑↓ field", "Enter save", "Esc cancel"]
+            .map(str::to_string)
+            .to_vec();
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Tab/↑↓ field · Enter save · Esc cancel",
-                Style::default().fg(theme.muted),
+            Paragraph::new(crate::grid::assemble(
+                crate::prompt::way_out_last(
+                    keys,
+                    " · ",
+                    usize::from(rows[7].width),
+                    Style::default().fg(theme.muted),
+                ),
+                rows[7].width,
             )),
-            rows[8],
+            rows[7],
         );
     }
 
@@ -1211,7 +1229,7 @@ impl Panel for TodoPanel {
         match &self.mode {
             Mode::List => self.handle_list_key(key),
             Mode::Edit(_) => self.handle_edit_key(key),
-            Mode::Filter(_) => self.handle_filter_key(key),
+            Mode::Filter(..) => self.handle_filter_key(key),
             Mode::ConfirmDelete { .. } => self.handle_confirm_key(key),
         }
     }
@@ -1379,13 +1397,15 @@ impl Panel for TodoPanel {
             && let Some(notes) = self
                 .selected_id()
                 .and_then(|id| self.store.get(id))
-                .and_then(|t| t.notes.clone())
+                .and_then(|t| t.notes.as_deref())
         {
             // Only as much text as the preview can possibly show is wrapped.
             // Wrapping the whole field cost 62ms a frame for a 2MB note — the
             // same defect the reader in `notes` had (#178), and the same rule
             // broken: a panel may allocate in proportion to what is on screen,
-            // never to how much it holds.
+            // never to how much it holds. For the same reason the field is
+            // borrowed: it was cloned whole every frame before the few rows
+            // the preview shows were taken from the copy.
             //
             // No cache is needed here because this preview does not scroll, so
             // the first few rows are the only rows. A wrapped row holds at most
@@ -1395,54 +1415,46 @@ impl Panel for TodoPanel {
             let enough = notes
                 .char_indices()
                 .nth(budget)
-                .map_or(notes.as_str(), |(at, _)| &notes[..at]);
+                .map_or(notes, |(at, _)| &notes[..at]);
             // A note longer than the pane keeps the rows that fit and says it
             // was cut on the last of them (invariant 19). Handing every row to
             // the `Paragraph` let it drop the rest in silence, so the seeded
             // overdue task's preview ended a sentence early and looked whole.
             // A note cut by the budget above is abridged too, even when its
             // rows happen to fill the pane exactly.
-            let width = usize::from(rows[3].width);
-            let height = usize::from(rows[3].height);
-            let mut lines = crate::grid::wrap(enough, width);
-            if lines.len() > height || enough.len() < notes.len() {
-                lines.truncate(height);
-                if let Some(last) = lines.last_mut() {
-                    *last = truncate(&format!("{}…", last.trim_end()), width);
-                }
-            }
             frame.render_widget(
-                Paragraph::new(lines.join("\n")).style(Style::default().fg(theme.muted)),
+                Paragraph::new(fitted_rows(enough, rows[3], enough.len() < notes.len()))
+                    .style(Style::default().fg(theme.muted)),
                 rows[3],
             );
         }
 
         // Bottom line: filter input takes priority, then status, then hints.
         let bottom = rows[4];
-        if let Mode::Filter(field) = &self.mode {
+        if let Mode::Filter(field, tags) = &self.mode {
             let (visible, cursor) = field.visible(bottom.width.saturating_sub(2) as usize);
-            let mut spans = vec![
+            let mut parts = vec![vec![
                 Span::styled("/", Style::default().fg(theme.accent)),
                 Span::styled(visible, Style::default().fg(theme.text)),
-            ];
+            ]];
             // With nothing typed yet, offer the tags actually in use rather
-            // than leaving the user to guess what will match.
+            // than leaving the user to guess what will match. Each is a part
+            // of its own, so a narrow bar drops whole tags: it used to append
+            // them at their natural width and end in `#mira`, a tag that
+            // does not exist.
             if field.is_blank() {
-                let tags = self.store.all_tags();
-                if !tags.is_empty() {
-                    let hint = tags
-                        .iter()
-                        .take(6)
-                        .map(|t| format!("#{t}"))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    spans.push(Span::styled(
-                        format!("   {hint}"),
+                parts.extend(tags.iter().enumerate().map(|(index, tag)| {
+                    let gap = if index == 0 { "   " } else { " " };
+                    vec![Span::styled(
+                        format!("{gap}#{tag}"),
                         Style::default().fg(theme.muted),
-                    ));
-                }
+                    )]
+                }));
             }
-            frame.render_widget(Paragraph::new(Line::from(spans)), bottom);
+            frame.render_widget(
+                Paragraph::new(crate::grid::assemble(parts, bottom.width)),
+                bottom,
+            );
             frame.set_cursor_position((bottom.x + 1 + cursor as u16, bottom.y));
         } else {
             let line = match &self.status {
@@ -1468,6 +1480,24 @@ impl Panel for TodoPanel {
     fn shutdown(&mut self) {
         self.store.save_reporting();
     }
+}
+
+/// `text` wrapped into `area`, keeping the rows that fit and ending the last
+/// of them in `…` when anything did not — or when the caller already cut the
+/// text short (`abridged`), since rows that fill the pane look finished
+/// either way (invariant 19). Wrapped by `grid`, never by ratatui; see
+/// `grid::wrapped`.
+fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
+    let width = usize::from(area.width);
+    let height = usize::from(area.height);
+    let mut lines = crate::grid::wrap(text, width);
+    if lines.len() > height || abridged {
+        lines.truncate(height);
+        if let Some(last) = lines.last_mut() {
+            *last = truncate(&format!("{}…", last.trim_end()), width);
+        }
+    }
+    lines.join("\n")
 }
 
 /// Placeholder text for an empty, unfocused field.
@@ -1885,6 +1915,100 @@ mod tests {
             !confirm.contains(&long),
             "the whole title cannot fit and does not:\n{confirm}"
         );
+    }
+
+    /// The form's message row was one row high and handed the message
+    /// *wrapped*, so it drew the first line and dropped the rest in silence:
+    /// at the shipped width the Due hint lost `or empty.` and a bad date lost
+    /// the forms it would take. A full-height form has the rows to draw both
+    /// whole; a short one draws what fits and ends it in `…`.
+    #[test]
+    fn the_forms_hint_and_error_are_whole_or_say_they_were_cut() {
+        let (mut panel, _guard) = panel("form-message");
+        press(&mut panel, KeyCode::Char('a'));
+        type_str(&mut panel, "Renew the domain");
+        press(&mut panel, KeyCode::Tab);
+        press(&mut panel, KeyCode::Tab);
+        let hint = screen_of(&mut panel, 41, 32);
+        assert!(hint.contains("or empty."), "the whole Due hint:\n{hint}");
+
+        type_str(&mut panel, "someday");
+        press(&mut panel, KeyCode::Enter);
+        let error = screen_of(&mut panel, 41, 32);
+        assert!(error.contains("or 2w."), "the whole error:\n{error}");
+
+        // Ten rows leave the message one row: what fits, marked as cut.
+        let short = screen_of(&mut panel, 41, 10);
+        let row = short
+            .lines()
+            .find(|row| row.contains("is not a date") || row.contains("`someday`"))
+            .unwrap_or_else(|| panic!("the error is drawn:\n{short}"));
+        let inside = row.trim_end().trim_end_matches('│').trim_end();
+        assert!(inside.ends_with('…'), "cut, and says so: {row:?}\n{short}");
+    }
+
+    /// The form's key help is the one place it says how to leave, and at the
+    /// shipped 120x40 dashboard the panel is 38 wide, so the row has 36 cells
+    /// for 38: the terminal cut it to `Esc can`. Its parts drop whole, as a
+    /// prompt's do, and `Esc cancel` is the last to go.
+    #[test]
+    fn the_forms_key_help_keeps_the_way_out_at_every_width() {
+        let (mut panel, _guard) = panel("form-keys");
+        press(&mut panel, KeyCode::Char('a'));
+        let whole = [
+            "Tab/↑↓ field · Enter save · Esc cancel",
+            "Tab/↑↓ field · Esc cancel",
+            "Esc cancel",
+        ];
+        let mut dropped = 0;
+        for width in 24..=80u16 {
+            let screen = screen_of(&mut panel, width, 20);
+            let rows: Vec<&str> = screen.lines().collect();
+            let bottom = rows
+                .iter()
+                .position(|row| row.contains('╰'))
+                .unwrap_or_else(|| panic!("{width}: the form is drawn:\n{screen}"));
+            let keys = rows[bottom - 1]
+                .trim()
+                .trim_start_matches('│')
+                .trim_end_matches('│')
+                .trim();
+            assert!(whole.contains(&keys), "{width}: {keys:?}\n{screen}");
+            if keys != whole[0] {
+                dropped += 1;
+            }
+        }
+        assert!(dropped > 0, "the sweep reached a width that drops a part");
+    }
+
+    /// With nothing typed, the filter bar offers the tags in use. They were
+    /// appended at their natural width, so a narrow bar ended in `#mira`.
+    /// Each tag is now a part that drops whole.
+    #[test]
+    fn the_filter_bars_tags_are_whole_or_absent() {
+        let (mut panel, _guard) = panel("filter-tags");
+        press(&mut panel, KeyCode::Char('a'));
+        type_str(&mut panel, "Renew the domain");
+        for _ in 0..4 {
+            press(&mut panel, KeyCode::Tab);
+        }
+        type_str(&mut panel, "errands garden home mirador rust");
+        press(&mut panel, KeyCode::Enter);
+        let tags = ["#errands", "#garden", "#home", "#mirador", "#rust"];
+
+        press(&mut panel, KeyCode::Char('/'));
+        let mut offered = 0;
+        for width in 2..=60u16 {
+            let screen = screen_of(&mut panel, width, 12);
+            let bar = screen.lines().last().expect("a bottom row");
+            let mut words = bar.split_whitespace();
+            assert_eq!(words.next(), Some("/"), "{width}: {bar:?}");
+            for word in words {
+                assert!(tags.contains(&word), "{width}: {word:?} in {bar:?}");
+                offered += 1;
+            }
+        }
+        assert!(offered > 0, "the sweep saw the tags offered at all");
     }
 
     fn press(panel: &mut TodoPanel, code: KeyCode) {

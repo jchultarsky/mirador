@@ -398,7 +398,7 @@ Free-form notes in a master-detail layout, the shape a mail client uses.
 ```
 ╭┤6 Notes├───────────────────────────────┤1├╮
 │   TITLE                              DATE │
-│   Release checklist                ·25 J… │
+│   Release checklist               ·25 Jul │
 │                                           │
 │ ───────────────────────────────────────── │
 │ Release checklist                         │

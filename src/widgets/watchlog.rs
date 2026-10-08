@@ -349,7 +349,16 @@ fn started(since: &Zoned) -> String {
 fn rule_line(width: u16, label: &str, theme: &crate::theme::Theme) -> Line<'static> {
     let style = Style::default().fg(theme.rule);
     let label_width = crate::grid::display_width(label) + 2;
-    let dashes = usize::from(width).saturating_sub(label_width);
+    if label_width > usize::from(width) {
+        // No room for a dash or the label's padding: the label alone, cut
+        // with an ellipsis where it has to be. It used to be emitted whole
+        // with no dashes, wider than the panel, and the terminal cut it.
+        return Line::from(Span::styled(
+            crate::grid::truncate(label, usize::from(width)),
+            Style::default().fg(theme.muted),
+        ));
+    }
+    let dashes = usize::from(width) - label_width;
     // Weighted towards the right so the label sits near the entries it
     // separates rather than floating in the middle of the panel.
     let left = dashes.saturating_sub(dashes / 3);
@@ -376,14 +385,23 @@ mod tests {
     #[test]
     fn a_rule_line_fills_its_width_exactly() {
         let theme = crate::theme::Theme::default();
-        for width in 24..90u16 {
-            let line = rule_line(width, "since you were here", &theme);
+        let label = "since you were here";
+        // From one cell: the sweep used to start at 24, above the 21 cells the
+        // padded label needs, so it never saw the label emitted whole into a
+        // narrower panel and cut by the terminal (invariant 19).
+        for width in 1..90u16 {
+            let line = rule_line(width, label, &theme);
             let drawn: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            assert_eq!(
-                crate::grid::display_width(&drawn),
-                usize::from(width),
-                "at {width}"
-            );
+            let cells = crate::grid::display_width(&drawn);
+            assert!(cells <= usize::from(width), "at {width}: {drawn:?}");
+            if usize::from(width) >= crate::grid::display_width(label) + 2 {
+                assert_eq!(cells, usize::from(width), "at {width}");
+            } else {
+                assert!(
+                    drawn == label || drawn.ends_with('…'),
+                    "at {width}: {drawn:?} is whole or says it was cut"
+                );
+            }
         }
     }
 

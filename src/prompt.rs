@@ -94,6 +94,11 @@ pub struct Prompt {
 
 impl Prompt {
     /// Ask `label`, starting from `value`.
+    ///
+    /// `help` is ` · `-separated parts ending in the way out, and has a
+    /// budget: the dialog is at most 64 wide, so 60 cells of text — less the
+    /// `10 of 143 · ` count in front of it when a list scrolls. Over budget,
+    /// parts drop whole and the last part goes last; see `help_line`.
     pub fn new(
         label: &'static str,
         help: &'static str,
@@ -303,6 +308,25 @@ impl Prompt {
         }
     }
 
+    /// The help row: the list's count when it scrolls, then the help's
+    /// ` · `-separated parts, fitted to `width` by dropping whole parts.
+    ///
+    /// The help was ellipsised as prose, and the part that fell off was the
+    /// last — `Esc cancels`, the way out, cut to `Esc can…`. Parts are keys
+    /// and values, not prose (invariant 19), so they drop whole; and the last
+    /// part is the way out, so it is the last to go: the parts before it drop
+    /// first, from the right. Alone and still too wide, it is ellipsised.
+    fn help_line(&self, count: Option<String>, width: usize, style: Style) -> Line<'static> {
+        let parts = count
+            .into_iter()
+            .chain(self.help.split(" · ").map(str::to_string))
+            .collect();
+        crate::grid::assemble(
+            way_out_last(parts, " · ", width, style),
+            u16::try_from(width).unwrap_or(u16::MAX),
+        )
+    }
+
     /// Draw the prompt over the middle of `screen`.
     ///
     /// `screen` is the whole terminal rather than the calling panel's slice of
@@ -370,17 +394,11 @@ impl Prompt {
                 crate::grid::truncate(error, inner),
                 Style::default().fg(theme.error),
             )),
-            None if listed.len() > LIST_ROWS => Line::from(Span::styled(
-                crate::grid::truncate(
-                    &format!("{} of {} · {}", rows, listed.len(), self.help),
-                    inner,
-                ),
+            None => self.help_line(
+                (listed.len() > LIST_ROWS).then(|| format!("{rows} of {}", listed.len())),
+                inner,
                 Style::default().fg(theme.muted),
-            )),
-            None => Line::from(Span::styled(
-                crate::grid::truncate(self.help, inner),
-                Style::default().fg(theme.muted),
-            )),
+            ),
         });
 
         frame.render_widget(Clear, popup);
@@ -418,6 +436,38 @@ impl Prompt {
             .saturating_add(u16::try_from(cursor).unwrap_or(u16::MAX));
         frame.set_cursor_position((x.min(right), popup.y.saturating_add(1)));
     }
+}
+
+/// Key hints ending in the way out, as `grid::assemble` parts that fit
+/// `width`: whole parts drop, and the last part is the last to go.
+///
+/// The parts before the way out drop first, from the right, so a narrow
+/// dialog still says how to leave it. Each part after the first carries
+/// `separator` at its front, so a dropped part takes its separator with it.
+/// The way out alone and still too wide is left to `assemble`, which
+/// ellipsises it. A prompt's help, the task form's key row and the note
+/// form's footer all fit this way.
+pub(crate) fn way_out_last(
+    mut parts: Vec<String>,
+    separator: &str,
+    width: usize,
+    style: Style,
+) -> Vec<Vec<Span<'static>>> {
+    while parts.len() > 1 && crate::grid::display_width(&parts.join(separator)) > width {
+        parts.remove(parts.len() - 2);
+    }
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| {
+            let text = if index == 0 {
+                part
+            } else {
+                format!("{separator}{part}")
+            };
+            vec![Span::styled(text, style)]
+        })
+        .collect()
 }
 
 /// Replace a leading `~` with the user's home directory.
@@ -723,6 +773,113 @@ mod tests {
                 terminal
                     .draw(|f| p.render(f, f.area(), &Theme::default()))
                     .unwrap_or_else(|e| panic!("{width}x{height} failed to draw: {e}"));
+            }
+        }
+    }
+
+    /// The prompt's last row as drawn, between the border and its padding.
+    fn help_row(p: &Prompt, width: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let height = 24;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|f| p.render(f, f.area(), &Theme::default()))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        let bottom = rows
+            .iter()
+            .rposition(|row| row.contains('╰'))
+            .expect("a bottom border");
+        rows[bottom - 1].trim().trim_matches('│').trim().to_string()
+    }
+
+    /// Every prompt the program opens, read from the source the way `docs.rs`
+    /// reads the README: the label, the help, and whether a list is drawn —
+    /// which puts a `10 of 143 · ` count in front of the help.
+    fn shipped_prompts() -> Vec<(&'static str, &'static str, bool)> {
+        let mut found = Vec::new();
+        for source in [
+            include_str!("widgets/weather.rs"),
+            include_str!("widgets/clocks.rs"),
+            include_str!("widgets/agenda.rs"),
+        ] {
+            for (at, _) in source.match_indices("prompt::Prompt::new(") {
+                let call = &source[at..];
+                let mut literals = call.split('"').skip(1).step_by(2);
+                let label = literals.next().expect("a label");
+                let help = literals.next().expect("a help line");
+                // Every call names its completion after the value, so the
+                // first one after the call's start is its own.
+                let completion = call.find("Completion::").expect("a completion");
+                let listed = call[completion..].starts_with("Completion::Places");
+                found.push((label, help, listed));
+            }
+        }
+        found
+    }
+
+    /// The help line had a budget nobody wrote down — the dialog is at most
+    /// 64 wide, so 60 cells of text — and two prompts overran it at every
+    /// terminal size: the weather prompt's help by three cells and the
+    /// add-clock prompt's, behind its count, by eight. What fell off the end
+    /// was `Esc cancels`, cut mid-word. Each shipped help now fits whole.
+    #[test]
+    fn every_shipped_prompts_help_is_drawn_whole() {
+        let prompts = shipped_prompts();
+        assert_eq!(prompts.len(), 4, "the scan found every prompt: {prompts:?}");
+        for (label, help, listed) in prompts {
+            let completion = if listed {
+                Completion::Places(crate::zones::PLACES)
+            } else {
+                Completion::None
+            };
+            let p = Prompt::new("X", help, "", completion);
+            let whole = if listed {
+                format!("{LIST_ROWS} of {} · {help}", crate::zones::PLACES.len())
+            } else {
+                help.to_string()
+            };
+            // Exactly, not merely "has Esc and no `…`": with parts dropping
+            // whole, an over-budget help loses `Enter saves` and still passes
+            // that.
+            assert_eq!(help_row(&p, 80), whole, "{label}");
+        }
+    }
+
+    /// A help line too long for the dialog loses whole parts rather than
+    /// being cut wherever the edge falls, and the way out is the last part
+    /// to go: the parts before it drop first, from the right.
+    #[test]
+    fn a_long_help_drops_whole_parts_and_keeps_esc_longest() {
+        let help = "Type to narrow · ↑↓ to choose · Enter adds · Esc cancels";
+        let parts = [
+            "Type to narrow",
+            "↑↓ to choose",
+            "Enter adds",
+            "Esc cancels",
+        ];
+        let p = Prompt::new("ZONE", help, "", Completion::Places(crate::zones::PLACES));
+        for width in 20..=80u16 {
+            let row = help_row(&p, width);
+            let pieces: Vec<&str> = row.split(" · ").collect();
+            if pieces.len() == 1 {
+                assert!(
+                    row == "Esc cancels" || row.ends_with('…'),
+                    "{width}: alone, the way out, or marked: {row:?}"
+                );
+                continue;
+            }
+            assert!(
+                pieces[0].ends_with(" of 143") || parts.contains(&pieces[0]),
+                "{width}: {row:?}"
+            );
+            assert_eq!(pieces.last(), Some(&"Esc cancels"), "{width}: {row:?}");
+            for piece in &pieces[1..] {
+                assert!(parts.contains(piece), "{width}: {piece:?} in {row:?}");
             }
         }
     }

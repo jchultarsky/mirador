@@ -671,7 +671,7 @@ impl CalculatorPanel {
             )
         } else if let Some(message) = complaint {
             (
-                format!("{}\u{258f}", self.typing),
+                entry_tail(&self.typing, grid),
                 crate::grid::truncate(&message, column),
                 Style::default().fg(theme.error),
             )
@@ -679,7 +679,7 @@ impl CalculatorPanel {
             // Already fitted and aligned with the tape by the caller.
             let answer = live.unwrap_or_default().to_string();
             (
-                format!("{}\u{258f}", self.typing),
+                entry_tail(&self.typing, grid),
                 answer,
                 Style::default()
                     .fg(theme.accent)
@@ -700,6 +700,32 @@ impl CalculatorPanel {
             Rect::new(area.x, row, area.width, 1),
         );
     }
+}
+
+/// The entry being typed and its cursor, fitted to the working column from
+/// the *end*: when it is too long, `…` and then the last cells of it and the
+/// cursor. The cursor is always at the end of the entry, so that is where the
+/// reader is looking; cut from the right like the tape's finished sums, it
+/// went off the edge with everything typed after it, and an entry may be
+/// several times the column's width. Measured in cells (invariant 9).
+fn entry_tail(typing: &str, grid: &Grid) -> String {
+    const CURSOR: char = '\u{258f}';
+    let width = usize::from(grid.column_width("working"));
+    if crate::grid::display_width(typing) < width {
+        return format!("{typing}{CURSOR}");
+    }
+    // One cell for the ellipsis and one for the cursor.
+    let budget = width.saturating_sub(2);
+    let mut used = 0;
+    let start = typing
+        .char_indices()
+        .rev()
+        .find(|(_, c)| {
+            used += crate::grid::char_width(*c);
+            used > budget
+        })
+        .map_or(0, |(at, c)| at + c.len_utf8());
+    format!("…{}{CURSOR}", &typing[start..])
 }
 
 /// Rows the frame costs, named so `max_height`'s reasoning is checkable.
@@ -760,6 +786,46 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The entry being typed keeps its tail in view. It was ellipsised from
+    /// the right like any other cell, so past the working column's width the
+    /// cursor and everything typed after that point were cut off and the
+    /// rest of the sum was edited blind. A short entry is drawn as it was.
+    #[test]
+    fn a_long_entry_keeps_its_tail_and_the_cursor_in_view() {
+        let sum = (1..=16)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("+");
+        let mut long = new_panel();
+        for c in sum.chars() {
+            press(&mut long, c);
+        }
+        let mut short = new_panel();
+        for c in "12+3".chars() {
+            press(&mut short, c);
+        }
+        for width in 30..=70u16 {
+            let screen = draw(&mut long, width, 10);
+            let live = screen
+                .lines()
+                .find(|row| row.contains('\u{258f}'))
+                .unwrap_or_else(|| panic!("{width}: the cursor is on screen:\n{screen}"));
+            let working = live
+                .trim_start_matches(MARKER)
+                .split('\u{258f}')
+                .next()
+                .unwrap_or_default();
+            assert!(working.ends_with("15+16"), "{width}: {live:?}");
+            assert!(
+                working == sum || working.starts_with('…'),
+                "{width}: the head is cut and says so: {live:?}"
+            );
+
+            let screen = draw(&mut short, width, 10);
+            assert!(screen.contains("12+3\u{258f}"), "{width}:\n{screen}");
+        }
     }
 
     /// The whole input design in one test.
