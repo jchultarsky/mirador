@@ -291,31 +291,38 @@ impl KeymapDialog {
     /// to when it does not fit, Esc the last of them to go. It dropped from
     /// the end, so a narrow key map said how to reload and how to scroll and
     /// not how to leave.
+    ///
+    /// While the reset question is open, the keys it takes instead. Every key
+    /// answers it, so the dialog's own keys and the arrows are all a no, and
+    /// offering them said each did what it does the rest of the time.
     fn footer(&self, theme: &Theme, width: u16) -> Line<'static> {
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
-        let mut parts = Vec::new();
-        if self.overflow > 0 {
-            let arrows = match (self.scroll > 0, self.scroll < self.overflow) {
-                (true, true) => "↑↓",
-                (true, false) => "↑",
-                _ => "↓",
-            };
-            parts.push(vec![
-                Span::styled(arrows, key_style),
-                Span::styled(" more", muted),
-            ]);
-        }
-        for (key, action) in [
-            ("r", "reload"),
-            ("d", "defaults"),
-            (crate::frame::ESC, "close"),
-        ] {
-            parts.push(vec![
+        let hint = |key: &'static str, action: &str| {
+            vec![
                 Span::styled(key, key_style),
                 Span::styled(format!(" {action}"), muted),
+            ]
+        };
+        let parts = if self.confirming {
+            vec![hint("y", "reset"), hint(crate::frame::ESC, "keep")]
+        } else {
+            let mut parts = Vec::new();
+            if self.overflow > 0 {
+                let arrows = match (self.scroll > 0, self.scroll < self.overflow) {
+                    (true, true) => "↑↓",
+                    (true, false) => "↑",
+                    _ => "↓",
+                };
+                parts.push(hint(arrows, "more"));
+            }
+            parts.extend([
+                hint("r", "reload"),
+                hint("d", "defaults"),
+                hint(crate::frame::ESC, "close"),
             ]);
-        }
+            parts
+        };
         crate::grid::assemble(
             crate::grid::way_out_last(parts, &Span::styled("  ", muted), width.into()),
             width,
@@ -612,6 +619,47 @@ mod tests {
                 .join("\n")
                 .contains("Loaded your keys.")
         );
+    }
+
+    /// While the reset question is open every key answers it: `y` resets and
+    /// anything else keeps the keys, Esc included. The footer went on
+    /// offering `r reload  d defaults  Esc close` through the question —
+    /// three keys that each did something else — and the arrows, which
+    /// answer it too.
+    #[test]
+    fn the_footer_offers_the_keys_the_reset_question_takes() {
+        let map = Keymap::default();
+        let mut dialog = KeymapDialog::new();
+        let footer = |dialog: &mut KeymapDialog| {
+            let rows = drawn(dialog, &map, 100, 24);
+            let bottom = rows
+                .iter()
+                .rposition(|row| row.contains('╰'))
+                .expect("a bottom border");
+            rows[bottom - 1].clone()
+        };
+        let calm = footer(&mut dialog);
+        assert!(
+            calm.contains("more") && calm.contains("Esc close"),
+            "short enough to scroll, so the arrows are offered: {calm}"
+        );
+
+        dialog.handle_key(key(KeyCode::Char('d')));
+        let asking = footer(&mut dialog);
+        assert!(
+            asking.contains("y reset") && asking.contains("Esc keep"),
+            "{asking}"
+        );
+        for gone in ["reload", "defaults", "close", "more"] {
+            assert!(
+                !asking.contains(gone),
+                "{gone} offered mid-question: {asking}"
+            );
+        }
+
+        // And Esc does what the footer said: keeps the keys, and the dialog.
+        assert_eq!(dialog.handle_key(key(KeyCode::Esc)), Request::None);
+        assert!(footer(&mut dialog).contains("Esc close"));
     }
 
     #[test]

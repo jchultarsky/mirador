@@ -431,9 +431,13 @@ impl Prompt {
         // underflowed — a panic in a debug build and a wrap to 65535 in a
         // release one. Reachable by resizing the terminal while a prompt is
         // open, which is exactly when somebody would.
-        let right = popup
-            .x
-            .saturating_add(popup.width.saturating_sub(crate::frame::FRAME_WIDTH));
+        //
+        // The furthest the caret goes is the last cell inside the padding,
+        // three from the popup's right edge: past the border and the padding
+        // there. That is the cell `visible` keeps free for it once the text
+        // fills the field. Clamped one further in, at the inner width
+        // measured from the border, it sat on the last character typed.
+        let right = popup.x.saturating_add(popup.width.saturating_sub(3));
         let x = popup
             .x
             .saturating_add(2)
@@ -864,6 +868,41 @@ mod tests {
                     .draw(|f| p.render(f, f.area(), &Theme::default()))
                     .unwrap_or_else(|e| panic!("{width}x{height} failed to draw: {e}"));
             }
+        }
+    }
+
+    /// The caret sits in the cell after the text, and stays there once the
+    /// text is longer than the field. The field keeps a cell free for it, and
+    /// the clamp that kept it inside the dialog stopped one cell short of
+    /// that one, measuring the field from the border rather than from the
+    /// text — so a full field drew the caret over its own last character,
+    /// and the reader could not see what they had just typed.
+    #[test]
+    fn the_caret_follows_the_text_past_the_width_of_the_field() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (width, height) = (64u16, 10u16);
+        // Either side of the field's sixty cells, and well past them.
+        for typed in 50..=75 {
+            let mut p = Prompt::new("FILE", "Enter keeps · Esc cancels", "", Completion::None);
+            for _ in 0..typed {
+                press(&mut p, KeyCode::Char('x'));
+            }
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+            terminal
+                .draw(|f| p.render(f, f.area(), &Theme::default()))
+                .expect("draw");
+            let caret = terminal.get_cursor_position().expect("a caret");
+            let buffer = terminal.backend().buffer();
+            let last = (0..width)
+                .rev()
+                .find(|&x| buffer[(x, caret.y)].symbol() == "x")
+                .unwrap_or_else(|| panic!("nothing typed on the caret's row at {typed}"));
+            assert_eq!(
+                caret.x,
+                last + 1,
+                "with {typed} typed the caret is not in the cell after the last one drawn"
+            );
         }
     }
 
