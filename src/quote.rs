@@ -63,12 +63,26 @@ impl Quote {
     ///
     /// Returns zero rather than infinity when the previous close is zero, which
     /// happens for a symbol that has never traded. A row reading `inf%` looks
-    /// like a broken panel; `0.00%` reads as "nothing has happened".
+    /// like a broken panel; `0.00%` reads as "nothing has happened". That is
+    /// true only while the price has not moved either, so [`parse_chart`]
+    /// refuses a quote with a change beside such a close; the guard stays for
+    /// a quote built any other way.
+    ///
+    /// Measured against the close's size, not its sign, so the percentage
+    /// always runs the way the change does. A close can be negative — oil
+    /// futures settled at −37.63 in April 2020 — and dividing by it signed
+    /// put `-50.00%` beside a rise from −10 to −5, painted on the gain ramp.
     pub fn change_pct(&self) -> f64 {
-        if self.previous_close.abs() < f64::EPSILON {
+        if self.close_is_zero() {
             return 0.0;
         }
-        (self.change() / self.previous_close) * 100.0
+        (self.change() / self.previous_close.abs()) * 100.0
+    }
+
+    /// Whether the previous close is too near zero to divide by, which is
+    /// when [`Quote::change_pct`] answers zero instead.
+    fn close_is_zero(&self) -> bool {
+        self.previous_close.abs() < f64::EPSILON
     }
 }
 
@@ -215,14 +229,31 @@ pub fn parse_chart(body: &str) -> Result<Quote> {
         .map(|q| bounded(q.close.into_iter().flatten().collect()))
         .unwrap_or_default();
 
-    Ok(Quote {
+    let quote = Quote {
         symbol: result.meta.symbol,
         price,
         previous_close,
         currency: result.meta.currency,
         series,
         delayed: false,
-    })
+    };
+
+    // The parser refuses a number too large for an `f64`, but two it accepts
+    // can still make one: `1e308` less `-1e308` is infinite, and so is `1e308`
+    // over a close of `1e-10`. Clamping either to zero would put `+0.00%`
+    // beside a figure three hundred digits long, and that is what
+    // `change_pct` already does for a close too near zero to divide by — so a
+    // moved price beside such a close is refused with the overflows. A close
+    // of zero with no change is left to the clamp, because there "nothing has
+    // happened" is true. A refused row falls back the way any failed fetch
+    // does — to the last good price with its age, or to `–` — with the reason
+    // front-loaded for a status row that is cut to the panel.
+    let unmeasurable = quote.close_is_zero() && quote.change().abs() >= f64::EPSILON;
+    anyhow::ensure!(
+        quote.change().is_finite() && quote.change_pct().is_finite() && !unmeasurable,
+        "numbers out of range in the response"
+    );
+    Ok(quote)
 }
 
 /// The most intraday samples a quote keeps.
@@ -523,14 +554,117 @@ mod tests {
       }
     }"#;
 
+    /// Shown, or refused with the front of the reason the status row gives.
+    const SHOWN: Option<&str> = None;
+    const UNPARSED: Option<&str> = Some("parsing the chart response");
+    const OUT_OF_RANGE: Option<&str> = Some("numbers out of range");
+
+    /// The bodies `hostile_numbers_never_reach_the_screen_as_inf_or_nan` feeds
+    /// the parser: a name, the price, the previous close, the series, and what
+    /// must become of it.
+    const HOSTILE: &[(&str, &str, &str, &str, Option<&str>)] = &[
+        // Out-of-range literals are refused outright by the JSON parser,
+        // which is a stronger defence than any guard downstream.
+        (
+            "a price too large for an f64",
+            "1e400",
+            "211.0",
+            "[211.0, 212.5]",
+            UNPARSED,
+        ),
+        (
+            "a previous close too large",
+            "213.5",
+            "1e400",
+            "[211.0, 212.5]",
+            UNPARSED,
+        ),
+        (
+            "a value in the series too large",
+            "1.0",
+            "1.0",
+            "[1e400, 1.0]",
+            UNPARSED,
+        ),
+        // Finite on the wire, and not once divided or subtracted.
+        (
+            "a tiny previous close",
+            "1e308",
+            "1e-10",
+            "[1.0]",
+            OUT_OF_RANGE,
+        ),
+        (
+            "a change too large for an f64",
+            "1e308",
+            "-1e308",
+            "[1.0]",
+            OUT_OF_RANGE,
+        ),
+        // Too near zero to divide by, so `change_pct` answers zero, and
+        // that is true only while nothing has moved.
+        (
+            "a previous close of zero",
+            "213.5",
+            "0.0",
+            "[211.0, 212.5]",
+            OUT_OF_RANGE,
+        ),
+        (
+            "a close below the divisor guard",
+            "1e308",
+            "1e-300",
+            "[1.0]",
+            OUT_OF_RANGE,
+        ),
+        ("nothing traded at all", "0.0", "0.0", "[]", SHOWN),
+        // Absurd, but finite and measurable: how large a price may be is
+        // a different question from whether it can be shown.
+        (
+            "a price beyond any market",
+            "1e308",
+            "211.0",
+            "[1.0]",
+            SHOWN,
+        ),
+        (
+            "negative prices",
+            "-5.0",
+            "-10.0",
+            "[-1.0, -2.0, -3.0]",
+            SHOWN,
+        ),
+        ("an empty series", "1.0", "1.0", "[]", SHOWN),
+        ("a flat series", "1.0", "1.0", "[7.0, 7.0, 7.0]", SHOWN),
+    ];
+
     /// A quote response is untrusted network input carrying numbers straight
     /// into arithmetic and onto a screen. These are the shapes that break float
-    /// code: a value too large for an `f64`, a divisor of zero, a series with
-    /// no span, nothing at all.
+    /// code: a value too large for an `f64`, a sum or quotient of two finite
+    /// values that is not, a divisor of zero, a series with no span, nothing
+    /// at all.
     ///
-    /// The outcome to insist on is that a row never reads `inf%` or `NaN`. A
-    /// wrong-looking number in a money column is worse than a missing one,
-    /// which is the same reasoning that keeps stale prices off this panel.
+    /// The outcome to insist on is that a row never reads `inf%` or `NaN`, nor
+    /// a percentage that contradicts the change beside it. A wrong-looking
+    /// number in a money column is worse than a missing one, which is why a
+    /// refused quote leaves the row its last good price, muted and labelled
+    /// with its age, or `–` when there never was one.
+    ///
+    /// Each row says whether the quote must be shown or refused, and a refusal
+    /// names the front of its reason: the reason is what the status row says
+    /// about the symbol, cut to the panel's width, so it has to lead with what
+    /// was wrong. This test used to skip any body that failed to parse, on the
+    /// reasoning that the JSON parser refuses `1e400` outright — which is true,
+    /// and was pinned by nothing, and the skip would as happily have passed a
+    /// body refused for any other reason. Two bodies the parser *accepts*
+    /// overflowed all the same: `1e308` over a close of `1e-10` read `+inf%`,
+    /// and `1e308` over `-1e308` read `+inf` in the change column itself. And
+    /// a price beside a close of zero read `+0.00%` beside a change of the
+    /// whole price — `change_pct`'s guard saying "nothing has happened" about
+    /// a quote where something had. The contradiction was asserted by nothing
+    /// until the `negative prices` row was checked for it, and failed: a rise
+    /// from −10 to −5 read `+5.00` beside `-50.00%`, the percentage divided by
+    /// a close whose sign it took.
     #[test]
     fn hostile_numbers_never_reach_the_screen_as_inf_or_nan() {
         let swap = |price: &str, prev: &str, series: &str| {
@@ -543,42 +677,35 @@ mod tests {
                 .replace("[211.0, null, 212.5, 213.5]", series)
         };
 
-        for (name, price, prev, series) in [
-            (
-                "a price too large for an f64",
-                "1e400",
-                "211.0",
-                "[211.0, 212.5]",
-            ),
-            (
-                "a previous close too large",
-                "213.5",
-                "1e400",
-                "[211.0, 212.5]",
-            ),
-            (
-                "a value in the series too large",
-                "1.0",
-                "1.0",
-                "[1e400, 1.0]",
-            ),
-            ("a previous close of zero", "213.5", "0.0", "[211.0, 212.5]"),
-            ("negative prices", "-5.0", "-10.0", "[-1.0, -2.0, -3.0]"),
-            ("an empty series", "1.0", "1.0", "[]"),
-            ("a flat series", "1.0", "1.0", "[7.0, 7.0, 7.0]"),
-        ] {
-            // Out-of-range literals are refused outright by the JSON parser,
-            // which is a stronger defence than any guard downstream — and one
-            // worth pinning, since it is the reason no guard is needed for them.
-            let Ok(quote) = parse_chart(&swap(price, prev, series)) else {
+        for &(name, price, prev, series, refusal) in HOSTILE {
+            let parsed = parse_chart(&swap(price, prev, series));
+            if let Some(reason) = refusal {
+                let err = parsed.map_or_else(
+                    |e| format!("{e:#}"),
+                    |q| panic!("{name}: must be refused, got {q:?}"),
+                );
+                assert!(err.starts_with(reason), "{name}: `{reason}…`, got `{err}`");
                 continue;
-            };
+            }
+            let quote = parsed.unwrap_or_else(|e| panic!("{name}: must be shown, got {e:#}"));
 
             assert!(quote.price.is_finite(), "{name}: price is {}", quote.price);
+            assert!(
+                quote.change().is_finite(),
+                "{name}: `{:+.2}` would read as a broken panel",
+                quote.change()
+            );
             assert!(
                 quote.change_pct().is_finite(),
                 "{name}: `{}%` would read as a broken panel",
                 quote.change_pct()
+            );
+            // The percentage runs the way the change does, or one is zero:
+            // their product is negative only when the two signs disagree.
+            let (change, pct) = (quote.change(), quote.change_pct());
+            assert!(
+                change * pct >= 0.0,
+                "{name}: `{change:+.2}` beside `{pct:+.2}%` contradicts itself"
             );
             // And the sparkline neither panics nor overruns its width.
             for width in [0, 1, 8, 40] {

@@ -221,7 +221,7 @@ struct Shown {
 struct Shared {
     config: Arc<Mutex<WeatherConfig>>,
     state: Arc<Mutex<State>>,
-    refresh: Arc<Mutex<bool>>,
+    refresh: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
 }
@@ -233,7 +233,7 @@ pub struct WeatherPanel {
     keys: PanelKeymap<WeatherAction>,
     state: Arc<Mutex<State>>,
     /// Set to true to ask the fetch thread for an immediate refresh.
-    refresh: Arc<Mutex<bool>>,
+    refresh: Arc<AtomicBool>,
     /// Shared with the fetch thread so `L` can change the location without
     /// stopping it. The thread re-reads this each cycle and re-geocodes when
     /// the name changes.
@@ -302,7 +302,7 @@ impl WeatherPanel {
         let imperial = config.units != "metric";
         let stale_after = Duration::from_secs(config.refresh_minutes.max(1) * 60 * 2);
         let state = Arc::new(Mutex::new(State::default()));
-        let refresh = Arc::new(Mutex::new(false));
+        let refresh = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
         // Shared with the fetch thread, which re-reads it each cycle, so
@@ -354,7 +354,7 @@ impl WeatherPanel {
         Self {
             keys: default_keys(),
             state: Arc::new(Mutex::new(state)),
-            refresh: Arc::new(Mutex::new(false)),
+            refresh: Arc::new(AtomicBool::new(false)),
             forecast_hours: config.forecast_hours,
             stale_after: Duration::from_hours(1),
             config: Arc::new(Mutex::new(config)),
@@ -407,9 +407,10 @@ impl WeatherPanel {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .location = to;
-        if let Ok(mut flag) = self.refresh.lock() {
-            *flag = true;
-        }
+        // `Release`, after the write above, so the thread that takes the
+        // flag is certain to read the new place rather than fetch the old one
+        // a second time.
+        self.refresh.store(true, Ordering::Release);
     }
 
     /// Restate `data` in the display units, if it was not fetched in them.
@@ -608,9 +609,7 @@ fn poll(
             }
         }
 
-        let woke = crate::poll::wait(interval, stop, || {
-            std::mem::take(&mut *refresh.lock().unwrap_or_else(PoisonError::into_inner))
-        });
+        let woke = crate::poll::wait(interval, stop, || refresh.swap(false, Ordering::AcqRel));
         if woke == crate::poll::Wake::Stop {
             return;
         }
@@ -844,13 +843,23 @@ fn fetch_weather(config: &WeatherConfig, located: &Located) -> Result<WeatherDat
 /// server's own idea of "now" in the same local zone, which makes it the right
 /// thing to compare against — using the machine's clock would break for anyone
 /// forecasting a location in another timezone.
+///
+/// Compared to the hour, not the minute. `current` is fifteen-minutely data,
+/// so "now" is as often `14:45` as `14:00`, and the hourly entry it falls in
+/// is `14:00` — which a comparison of whole timestamps puts in the past.
 fn upcoming_hours(parsed: &ForecastResponse, wanted: usize) -> Vec<Slot> {
-    let now = parsed.current.time.as_str();
+    // `YYYY-MM-DDTHH` is thirteen ASCII bytes. `get` rather than slicing, so
+    // a timestamp that is shorter, or not ASCII, compares whole instead of
+    // panicking on a character boundary.
+    fn to_the_hour(t: &str) -> &str {
+        t.get(..13).unwrap_or(t)
+    }
+    let now = to_the_hour(&parsed.current.time);
     let start = parsed
         .hourly
         .time
         .iter()
-        .position(|t| t.as_str() >= now)
+        .position(|t| to_the_hour(t) >= now)
         .unwrap_or(0);
 
     parsed
@@ -993,9 +1002,7 @@ impl Panel for WeatherPanel {
 
         match self.keys.action(key) {
             Some(WeatherAction::Refresh) => {
-                if let Ok(mut flag) = self.refresh.lock() {
-                    *flag = true;
-                }
+                self.refresh.store(true, Ordering::Release);
                 crate::panel::KeyOutcome::Consumed
             }
             // Converted at render rather than re-requested, so the switch is
@@ -1316,7 +1323,7 @@ mod tests {
         WeatherPanel {
             keys: default_keys(),
             state: Arc::new(Mutex::new(State::default())),
-            refresh: Arc::new(Mutex::new(false)),
+            refresh: Arc::new(AtomicBool::new(false)),
             config: Arc::new(Mutex::new(WeatherConfig::default())),
             asking: None,
             forecast_hours: 8,
@@ -1357,7 +1364,7 @@ mod tests {
         assert!(panel.asking.is_none(), "a place is taken");
         assert_eq!(settings(&panel.config).location, "Lisbon");
         assert!(
-            *panel.refresh.lock().unwrap(),
+            panel.refresh.load(Ordering::Acquire),
             "and the thread is asked to fetch it now"
         );
     }
@@ -1665,6 +1672,27 @@ mod tests {
         assert_eq!(hours.len(), 3);
     }
 
+    /// Open-Meteo's `current` block is fifteen-minutely, so `current.time` is
+    /// as often `14:15` as `14:00`, and the fixture above only ever said the
+    /// latter. Compared as whole timestamps, `14:00 >= 14:15` is false, so
+    /// for three quarters of every hour the table opened on the next hour —
+    /// beside an observation stamped `at 14:15` — and the hour in progress
+    /// was nowhere on the panel.
+    #[test]
+    fn the_in_progress_hour_is_kept_when_now_is_past_the_hour() {
+        for now in ["2026-07-25T14:15", "2026-07-25T14:45"] {
+            let mut parsed = sample();
+            parsed.current.time = now.into();
+            let hours = upcoming_hours(&parsed, 10);
+            assert_eq!(
+                hours.first().map(|slot| slot.hour),
+                Some(14),
+                "at {now} the table opens on the hour in progress"
+            );
+            assert_eq!(hours.len(), 3, "at {now}: 14:00, 15:00 and 16:00");
+        }
+    }
+
     #[test]
     fn the_forecast_respects_the_requested_length() {
         let hours = upcoming_hours(&sample(), 2);
@@ -1808,7 +1836,7 @@ mod tests {
         let fetch = |_: &WeatherConfig, _: &Located| Ok(sample_data(true));
 
         let state = Arc::new(Mutex::new(State::default()));
-        let refresh = Arc::new(Mutex::new(false));
+        let refresh = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
 
         // A zero interval turns the wait into a no-op, so the passes happen as
@@ -1837,6 +1865,44 @@ mod tests {
         assert!(guard.error.is_none(), "a recovered fetch clears the error");
     }
 
+    /// `r` and `L` set a flag the fetch thread's wait reads once a slice, and
+    /// the read has to *take* it: a wait that never looks makes the key do
+    /// nothing until the interval is up, and one that looks without clearing
+    /// fetches every quarter of a second from then on. The tests above run
+    /// with a zero interval, which never consults the flag at all.
+    #[test]
+    fn a_refresh_asked_for_ends_the_wait_and_is_taken() {
+        let resolve = |_: &WeatherConfig| -> Result<Located> { anyhow::bail!("offline") };
+        let fetch = |_: &WeatherConfig, _: &Located| -> Result<WeatherData> {
+            unreachable!("nothing to fetch without coordinates")
+        };
+        let state = Arc::new(Mutex::new(State::default()));
+        let refresh = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let interval = Duration::from_secs(3);
+
+        let started = Instant::now();
+        poll_until(
+            &WeatherConfig::default(),
+            &state,
+            &refresh,
+            &stop,
+            interval,
+            &resolve,
+            &fetch,
+            2,
+        );
+        assert!(
+            started.elapsed() < interval,
+            "the second pass waited out the interval: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            !refresh.load(Ordering::Acquire),
+            "and the request was taken"
+        );
+    }
+
     #[test]
     fn a_geocode_failure_is_reported_without_losing_the_panel() {
         let resolve = |_: &WeatherConfig| -> Result<Located> { anyhow::bail!("no such place") };
@@ -1845,7 +1911,7 @@ mod tests {
         };
 
         let state = Arc::new(Mutex::new(State::default()));
-        let refresh = Arc::new(Mutex::new(false));
+        let refresh = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         poll_until(
             &WeatherConfig::default(),
@@ -1878,13 +1944,13 @@ mod tests {
     // Eight: the four parts of `Shared` a test chooses (this wraps the config
     // in its mutex and makes the generation), `poll`'s interval and its two
     // injected calls, and the bound. Taking a `Shared` instead would put a
-    // config mutex and a generation none of them reads into each of the three
-    // tests that call this.
+    // config mutex and a generation none of them reads into every test that
+    // calls this.
     #[allow(clippy::too_many_arguments)]
     fn poll_until(
         config: &WeatherConfig,
         state: &Arc<Mutex<State>>,
-        refresh: &Arc<Mutex<bool>>,
+        refresh: &Arc<AtomicBool>,
         stop: &Arc<AtomicBool>,
         interval: Duration,
         resolve: Resolver<'_>,
@@ -1957,7 +2023,10 @@ mod tests {
         panel.handle_key(key(KeyCode::Enter));
         assert!(panel.asking.is_some(), "the answer is refused in place");
         assert_eq!(settings(&panel.config).location, "Boston");
-        assert!(!*panel.refresh.lock().unwrap(), "and nothing is fetched");
+        assert!(
+            !panel.refresh.load(Ordering::Acquire),
+            "and nothing is fetched"
+        );
 
         // Drawn whole: the dialog gives its line 60 cells at most.
         let screen = |panel: &WeatherPanel| -> String {
@@ -2164,7 +2233,7 @@ mod tests {
         poll_until(
             &WeatherConfig::default(),
             &state,
-            &Arc::new(Mutex::new(false)),
+            &Arc::new(AtomicBool::new(false)),
             &Arc::new(AtomicBool::new(false)),
             Duration::ZERO,
             &resolve,

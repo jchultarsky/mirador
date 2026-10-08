@@ -1,19 +1,22 @@
 //! The sleep between two rounds of a background fetch.
 //!
-//! Only the wait is shared. The weather and stocks loops look alike from a
-//! distance — a thread, an `Arc<Mutex<_>>` of results, an `Arc<AtomicBool>` to
-//! stop it — but past the skeleton they agree on very little: stocks reads its
-//! *work list* from the shared request while weather's flag is write-only from
-//! the panel, stocks iterates symbols with a configurable stagger, and weather
-//! carries a resolved location across iterations. A shared loop would take all
-//! of that as parameters, at which point the parameter list is the abstraction.
+//! Only the wait is shared. Five panels run a loop on a thread of their own —
+//! weather, stocks and news fetch over the network, the agenda re-reads a
+//! file, and disk re-reads its volumes — and from a distance the loops look
+//! alike: a thread, an `Arc<Mutex<_>>` of results, an `AtomicBool` to stop it.
+//! Past the skeleton they agree on very little. Stocks reads its *work list*
+//! from the shared request and staggers its symbols; weather carries a
+//! resolved location across rounds; news interleaves its feeds; the agenda
+//! rebuilds its window from today on every pass; and disk keeps one `sysinfo`
+//! handle alive because its counters are deltas since that handle's last
+//! refresh. A shared loop would take all of that as parameters, at which point
+//! the parameter list is the abstraction.
 //!
-//! The wait is different. It is the same twelve lines in both, and the mistake
-//! it is easy to make — checking the stop flag after the sleep instead of
-//! before, or not at all — costs the user a hang on quit rather than a wrong
-//! number on screen.
+//! The wait is different. It is the same few lines in all five, and the
+//! mistake it is easy to make — checking the stop flag after the sleep instead
+//! of before, or not at all — costs the user a hang on quit rather than a
+//! wrong number on screen.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -36,17 +39,27 @@ pub enum Wake {
 /// Sleep for `interval`, waking early if `stop` is set or `wake` returns true.
 ///
 /// Sliced rather than a single `sleep`, so a manual refresh does not wait out
-/// the full interval and quitting does not wait out anything — and without the
-/// channel or condvar that a `recv_timeout` would need, which for two callers
-/// would be more machinery than it saves.
+/// the full interval and quitting does not wait out anything.
+///
+/// A condvar would wake on the instant instead of within a slice, and with six
+/// waits in five loops it is still not worth having. Every flag would need a
+/// mutex and a condvar beside it and a `notify` at each of its setters, the
+/// stop flag included, which is set from `Drop` — and a setter that forgot the
+/// `notify` would fail as the slices never can, by sleeping out the interval.
+/// What the slices cost is up to a quarter of a second on a key whose answer
+/// comes off a network or a disk anyway, and four wakeups a second for each
+/// idle thread.
 ///
 /// `wake` is polled once per slice and is expected to *consume* the request: it
-/// returns whether a refresh was asked for, and leaves the flag clear.
+/// returns whether a refresh was asked for, and leaves the flag clear. A flag
+/// of its own is `|| flag.swap(false, Ordering::AcqRel)`, set by the panel
+/// with `Release` after whatever it wants the next round to read; a loop that
+/// is never asked passes `|| false`.
 ///
 /// The stop flag is checked before the first sleep as well as after each one,
 /// so a stop set while the previous round was still fetching is seen
 /// immediately rather than one slice later.
-pub fn wait(interval: Duration, stop: &Arc<AtomicBool>, mut wake: impl FnMut() -> bool) -> Wake {
+pub fn wait(interval: Duration, stop: &AtomicBool, mut wake: impl FnMut() -> bool) -> Wake {
     let mut waited = Duration::ZERO;
     while waited < interval {
         if stop.load(Ordering::Relaxed) {
@@ -72,7 +85,7 @@ mod tests {
 
     #[test]
     fn a_stop_set_before_the_wait_returns_without_sleeping() {
-        let stop = Arc::new(AtomicBool::new(true));
+        let stop = AtomicBool::new(true);
         let started = std::time::Instant::now();
         // An hour: if this returns at all, it did not sleep.
         let outcome = wait(Duration::from_hours(1), &stop, || false);
@@ -85,7 +98,7 @@ mod tests {
 
     #[test]
     fn a_wake_request_ends_the_wait_early_and_asks_for_a_poll() {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = AtomicBool::new(false);
         let started = std::time::Instant::now();
         let outcome = wait(Duration::from_hours(1), &stop, || true);
         assert_eq!(outcome, Wake::Poll);
@@ -94,7 +107,7 @@ mod tests {
 
     #[test]
     fn a_zero_interval_polls_immediately_without_consulting_the_wake_flag() {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = AtomicBool::new(false);
         let asked = AtomicUsize::new(0);
         let outcome = wait(Duration::ZERO, &stop, || {
             asked.fetch_add(1, Ordering::Relaxed);
@@ -106,7 +119,7 @@ mod tests {
 
     #[test]
     fn the_interval_is_honoured_when_nothing_interrupts_it() {
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = AtomicBool::new(false);
         let started = std::time::Instant::now();
         let outcome = wait(SLICE * 2, &stop, || false);
         assert_eq!(outcome, Wake::Poll);

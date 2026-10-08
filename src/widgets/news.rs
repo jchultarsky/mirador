@@ -171,7 +171,7 @@ pub struct NewsPanel {
     /// `[news.keys]` over the defaults.
     keys: PanelKeymap<NewsAction>,
     state: Arc<Mutex<State>>,
-    refresh: Arc<Mutex<bool>>,
+    refresh: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     seen: u64,
@@ -219,7 +219,7 @@ impl NewsPanel {
                 fetched: Some(Instant::now()),
                 error: None,
             })),
-            refresh: Arc::new(Mutex::new(false)),
+            refresh: Arc::new(AtomicBool::new(false)),
             stop: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(1)),
             seen: 1,
@@ -236,7 +236,7 @@ impl NewsPanel {
 
     pub fn new(config: &NewsConfig) -> Self {
         let state = Arc::new(Mutex::new(State::default()));
-        let refresh = Arc::new(Mutex::new(false));
+        let refresh = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
 
@@ -494,11 +494,7 @@ impl Panel for NewsPanel {
             return KeyOutcome::Ignored;
         };
         match action {
-            NewsAction::Refresh => {
-                if let Ok(mut flag) = self.refresh.lock() {
-                    *flag = true;
-                }
-            }
+            NewsAction::Refresh => self.refresh.store(true, Ordering::Release),
             NewsAction::ShowLink => {
                 // The top story when the cursor has not been placed. The
                 // selection starts empty, so `o` used to do nothing at all on a
@@ -955,8 +951,8 @@ fn fetch_loop(
     per_feed: usize,
     interval: Duration,
     state: &Arc<Mutex<State>>,
-    refresh: &Arc<Mutex<bool>>,
-    stop: &Arc<AtomicBool>,
+    refresh: &AtomicBool,
+    stop: &AtomicBool,
     generation: &Arc<AtomicU64>,
 ) {
     while !stop.load(Ordering::Relaxed) {
@@ -991,9 +987,7 @@ fn fetch_loop(
         drop(guard);
         generation.fetch_add(1, Ordering::Release);
 
-        let woke = crate::poll::wait(interval, stop, || {
-            std::mem::take(&mut *refresh.lock().unwrap_or_else(PoisonError::into_inner))
-        });
+        let woke = crate::poll::wait(interval, stop, || refresh.swap(false, Ordering::AcqRel));
         if woke == crate::poll::Wake::Stop {
             return;
         }
@@ -1096,6 +1090,47 @@ mod tests {
         crate::keymap::assert_every_key_works(&default_keys(), |event| {
             NewsPanel::offline(&NewsConfig::default(), Vec::new()).handle_key(event)
         });
+    }
+
+    /// `r` sets a flag the fetch thread's hour-long wait reads once a slice,
+    /// and the read has to *take* it: a wait that never looks leaves the key
+    /// dead for an hour, and one that looks without clearing re-reads every
+    /// feed four times a second from then on. With no feeds the pass reads
+    /// nothing, so this runs the real loop without leaving the process.
+    #[test]
+    fn a_refresh_asked_for_ends_the_wait_and_is_taken() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let refresh = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(0));
+        let thread = {
+            let (state, refresh, stop, generation) = (
+                Arc::clone(&state),
+                Arc::clone(&refresh),
+                Arc::clone(&stop),
+                Arc::clone(&generation),
+            );
+            std::thread::spawn(move || {
+                let hour = Duration::from_hours(1);
+                fetch_loop(&[], 1, hour, &state, &refresh, &stop, &generation);
+            })
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while generation.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        thread.join().expect("the fetch thread");
+
+        assert!(
+            generation.load(Ordering::Acquire) >= 2,
+            "the refresh did not end the wait"
+        );
+        assert!(
+            !refresh.load(Ordering::Acquire),
+            "and the request was taken"
+        );
     }
 
     /// #114: the panel kept a cursor that `j`/`k` moved and `o` acted on, and

@@ -866,7 +866,7 @@ fn fetch_loop(
     source: &dyn QuoteSource,
     board: &Arc<Mutex<Board>>,
     request: &Arc<Mutex<Request>>,
-    stop: &Arc<AtomicBool>,
+    stop: &AtomicBool,
     generation: &Arc<AtomicU64>,
     interval: Duration,
     stagger: Duration,
@@ -886,7 +886,7 @@ fn poll_rounds(
     source: &dyn QuoteSource,
     board: &Arc<Mutex<Board>>,
     request: &Arc<Mutex<Request>>,
-    stop: &Arc<AtomicBool>,
+    stop: &AtomicBool,
     generation: &Arc<AtomicU64>,
     pace: Pace,
 ) {

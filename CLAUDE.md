@@ -198,7 +198,8 @@ task.rs      task model + TOML store
 note.rs      note model + TOML store
 quote.rs     Quote + the pluggable QuoteSource trait + the watchlist store
 poll.rs      the sliced sleep the background threads share — weather,
-             stocks and news fetch; agenda reloads a file
+             stocks and news fetch; agenda reloads a file; disk re-reads
+             its volumes
 fetch.rs     the blocking GET those fetches share, and its address-family
              fallback for a v6-first resolver with no v6 route (#205)
 samples.rs   the bounded history behind the cpu and network graphs
@@ -306,11 +307,23 @@ map, that one is the procedure.
     runs for days: a `today` captured at construction silently rots, and
     overdue tasks stop being red. `todo`, `notes` and `calendar` all re-read the
     date in `tick()` and rebuild when it rolls over.
-14. **A fetch failure must not discard good data — except for prices.** Weather
-    keeps its last reading and shows its age, because old weather is useful and
-    a blank panel is not. Quotes do the opposite and fall back to `–`: a stale
-    price read as live is worse than no price, which is the same reasoning that
-    keeps quotes out of any file on disk.
+14. **A fetch failure must not discard good data, and old data must never pass
+    for current.** Weather keeps its last reading and shows its age, because
+    old weather is useful and a blank panel is not. Quotes keep the last good
+    price too, with a harder edge: a failed or refused fetch mutes the whole
+    row and the status row says how old the price is, and a price older than
+    twice the refresh interval is muted with no error at all. A stale price
+    read as live is worse than no price, which is the same reasoning that keeps
+    quotes out of any file on disk. Only a symbol that has never had a good
+    quote shows `–`.
+
+    This read "— except for prices", with quotes falling back to `–`, for more
+    than two months after the markets panel stopped doing that the day after
+    it was written (#33). The dash had a cost the sentence did not count: one
+    timed-out request blanked the price, the change and the sparkline
+    together, and with no timestamp anywhere a thread that had quietly stopped
+    went on showing confident numbers. What the rule protects was never the
+    dash. It is the reader's belief that a number on screen is current.
 15. **A panel that cannot use more space must say so**, via `Panel::max_width`
     / `max_height`. Otherwise proportional layout hands it space it cannot use
     while a list next door runs out. Return `None` for anything that scrolls or
@@ -1408,16 +1421,27 @@ thousand nested inline tables are refused before they ever become a `Table`.
 Pinned by a test, because the bound lives in a dependency and would leave with
 it.
 
-**`quote`: done, and clean.** No defects. Worth recording *why*, because the
-reasons are load-bearing and easy to remove by accident:
+**`quote`: done.** It found no defects at the time. The 2026-10-06 code review
+found two overflows it had missed, and review of their fix found a percentage
+that took a negative close's sign; each is recorded below with what now meets
+it. What held is worth recording *why*, because the reasons are load-bearing
+and easy to remove by accident:
 
 - Numbers too large for an `f64` are refused by the JSON parser before any
-  guard sees them. That is stronger than a downstream check and it is why no
-  downstream check exists — so a future move away from `serde_json`'s strictness
-  would need one.
+  guard sees them. That is stronger than a downstream check and it is why none
+  was written for them — so a future move away from `serde_json`'s strictness
+  would need one. **Two numbers it accepts can still make one**, which this
+  pass missed: `1e308` less `-1e308` is infinite, and so is `1e308` over a
+  close of `1e-10`. `parse_chart` now refuses a quote whose change or
+  percentage is not finite.
 - `change_pct` returns zero rather than infinity for a previous close of zero,
   and the sparkline returns its middle glyph for a series with no span. Both
-  divisors are guarded at the point of division.
+  divisors are guarded at the point of division. The zero is honest only while
+  the price has not moved either, so `parse_chart` refuses a moved price beside
+  such a close rather than let `+0.00%` stand beside the whole price as change.
+  And `change_pct` divides by the close's size, not the close: a close can be
+  negative — oil futures settled at −37.63 in April 2020 — and dividing by it
+  signed put `-50.00%` beside a rise of `+5.00`, which this pass missed too.
 - Symbols reach the URL through a strict RFC 3986 unreserved allowlist, so
   nothing in a symbol can alter the request — while `.` passes through, which is
   what keeps `BRK.B` working.
