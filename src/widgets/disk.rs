@@ -53,6 +53,11 @@ use crate::panel::{Panel, RenderContext};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Volume {
     pub mount: String,
+    /// What the platform calls it: the volume name on macOS, which both
+    /// halves of an APFS container share, what it is mounted from on Linux and the
+    /// BSDs — a device or a ZFS dataset — and the label on Windows, which may
+    /// be empty.
+    pub name: String,
     pub file_system: String,
     pub total: u64,
     pub available: u64,
@@ -145,28 +150,89 @@ const NOT_A_DISK: &[&str] = &[
     "squashfs", "iso9660", "udf", "tmpfs", "devtmpfs", "ramfs", "autofs", "overlay",
 ];
 
+/// The least the tight line allows, whatever the capacity. It is there for
+/// a container whose two halves do not share a name, which nothing here has
+/// met and nothing promises against: they drift apart by what was written
+/// between the two reads — 1.8 MB idle on the owner's Mac, 48 MB under a
+/// `dd` from `/dev/urandom` — and that does not shrink with the disk, so a
+/// ten-thousandth alone, 25 MB on a 256 GB Mac, would split such a
+/// container under an ordinary write. It does not hold one through a write
+/// at the SSD's own speed, which carried the drift to 641 MB; a shared name
+/// is what does that.
+const DRIFT_FLOOR: u64 = 128 * 1024 * 1024;
+
+/// The tight line: how far apart two volumes' free space may be and still
+/// be one device whatever their names — a ten-thousandth of the capacity,
+/// 200 MB on 2 TB, and never less than [`DRIFT_FLOOR`], except that the
+/// floor itself stops at a percent, so a disk under about thirteen
+/// gigabytes is held exactly as tightly as it always was rather than more
+/// loosely.
+fn fold_tolerance(total: u64) -> u64 {
+    (total / 10_000).max(DRIFT_FLOOR.min(total / 100))
+}
+
+/// Whether a volume is the device already seen with this capacity, free
+/// space and name. See [`group`] for the rule and its edges.
+fn same_device(total: u64, available: u64, name: &str, v: &Volume) -> bool {
+    if total != v.total {
+        return false;
+    }
+    let drift = available.abs_diff(v.available);
+    drift <= fold_tolerance(total) || (!name.is_empty() && name == v.name && drift <= total / 100)
+}
+
 /// Fold the platform's volumes into the devices a person would list.
 ///
-/// Two volumes are one device when they report the same capacity and the
-/// same free space to within a percent — an APFS container's volumes share
-/// one pool and drift by megabytes between two reads. The device takes the
-/// shortest mount point as its name, the smallest free figure as its free
-/// space, and counts as writable if any of its volumes is. Read-only devices
-/// are dropped while there is a writable one to show, because a volume
-/// nothing can write to is a volume that never fills. Root first, then by
-/// mount point, so the list holds still between reads.
+/// Two volumes are one device when they report the same capacity, and
+/// either of two things holds:
+///
+/// - **The same name, and free space within a percent of the capacity.**
+///   This is what holds an APFS container whole, and it was the whole rule
+///   until two backup disks of one size fifteen gigabytes apart came out as
+///   one row; the name is what tells those apart now. The container's two
+///   halves share one pool and drift apart only by what was written between
+///   the two reads, but a write at the SSD's own speed carries that a long
+///   way — to 641 MB on the owner's 2 TB Mac, three times the tight line
+///   below — and `sysinfo` names both halves `Macintosh HD`, so they are
+///   held to the percent, twenty gigabytes there.
+/// - **Free space within [`fold_tolerance`], whatever the names** — 200 MB
+///   on 2 TB, 128 MiB on 256 GB. The hedge for a macOS that names the
+///   halves apart, as `diskutil` does when it calls the second `Data`: such
+///   a container is still one row idle and under an ordinary write, though
+///   not under the fastest.
+///
+/// An empty name is no name, and a Windows volume with no label reports
+/// one: two volumes that both lack a name have not been shown to share one,
+/// so they are held to the tight line.
+///
+/// Two edges remain, one on each side, and no free-space rule can see past
+/// either. Two disks of one size *and one name* — a pair bought together
+/// and both left `Untitled` — whose free space is within a percent are one
+/// row, until enough is written to one of them to carry it past: twenty
+/// gigabytes on 2 TB. Nothing a volume reports tells them from the halves
+/// of a container. And two disks of one size whatever their names are one
+/// row while their free space is within the tight line, as a pair
+/// formatted the same day is, until 200 MB is written to one on 2 TB.
+///
+/// The device takes the shortest mount point as its name, the smallest free
+/// figure as its free space, and counts as writable if any of its volumes
+/// is. Read-only devices are dropped while there is a writable one to show,
+/// because a volume nothing can write to is a volume that never fills. Root
+/// first, then by mount point, so the list holds still between reads.
 pub(crate) fn group(volumes: Vec<Volume>) -> Vec<Device> {
-    let mut devices: Vec<(Device, bool)> = Vec::new();
+    // Each device with the name of the first volume folded into it, which
+    // is the one the rule compares; a second can only differ from it by
+    // having come within the tight line.
+    let mut devices: Vec<(Device, String, bool)> = Vec::new();
     for v in volumes {
         if v.total == 0 || NOT_A_DISK.contains(&v.file_system.to_ascii_lowercase().as_str()) {
             continue;
         }
-        let tolerance = v.total / 100;
         match devices
             .iter_mut()
-            .find(|(d, _)| d.total == v.total && d.available.abs_diff(v.available) <= tolerance)
+            .find(|(d, name, _)| same_device(d.total, d.available, name, &v))
         {
-            Some((d, writable)) => {
+            Some((d, _, writable)) => {
                 if shorter(&v.mount, &d.mount) {
                     d.mount = v.mount;
                 }
@@ -185,14 +251,15 @@ pub(crate) fn group(volumes: Vec<Volume>) -> Vec<Device> {
                     read_rate: v.read_rate,
                     write_rate: v.write_rate,
                 },
+                v.name,
                 !v.read_only,
             )),
         }
     }
-    if devices.iter().any(|(_, writable)| *writable) {
-        devices.retain(|(_, writable)| *writable);
+    if devices.iter().any(|(_, _, writable)| *writable) {
+        devices.retain(|(_, _, writable)| *writable);
     }
-    let mut out: Vec<Device> = devices.into_iter().map(|(d, _)| d).collect();
+    let mut out: Vec<Device> = devices.into_iter().map(|(d, _, _)| d).collect();
     out.sort_by(|a, b| shorter_order(&a.mount, &b.mount));
     out
 }
@@ -255,6 +322,7 @@ impl Reader {
             .iter()
             .map(|d| Volume {
                 mount: d.mount_point().to_string_lossy().into_owned(),
+                name: d.name().to_string_lossy().into_owned(),
                 file_system: d.file_system().to_string_lossy().into_owned(),
                 total: d.total_space(),
                 available: d.available_space(),
@@ -767,12 +835,22 @@ mod tests {
     fn volume(mount: &str, fs: &str, total: u64, available: u64, read_only: bool) -> Volume {
         Volume {
             mount: mount.into(),
+            name: String::new(),
             file_system: fs.into(),
             total,
             available,
             read_only,
             read_rate: 0,
             write_rate: 0,
+        }
+    }
+
+    /// A volume carrying the name the platform gives it; [`volume`] gives
+    /// none, as an unlabelled Windows volume reports.
+    fn named(name: &str, volume: Volume) -> Volume {
+        Volume {
+            name: name.into(),
+            ..volume
         }
     }
 
@@ -868,13 +946,19 @@ mod tests {
     #[test]
     fn the_volumes_of_one_container_are_one_device_named_by_its_root() {
         let devices = group(vec![
-            volume("/", "apfs", 1_995_165_736_960, 1_637_885_797_874, true),
-            volume(
-                "/System/Volumes/Data",
-                "apfs",
-                1_995_165_736_960,
-                1_637_809_513_970,
-                false,
+            named(
+                "Macintosh HD",
+                volume("/", "apfs", 1_995_165_736_960, 1_637_885_797_874, true),
+            ),
+            named(
+                "Macintosh HD",
+                volume(
+                    "/System/Volumes/Data",
+                    "apfs",
+                    1_995_165_736_960,
+                    1_637_809_513_970,
+                    false,
+                ),
             ),
         ]);
         assert_eq!(
@@ -894,6 +978,175 @@ mod tests {
         assert_eq!(devices.len(), 2, "{devices:?}");
         assert_eq!(devices[0].mount, "/", "root first");
         assert_eq!(devices[1].mount, "/home");
+    }
+
+    /// And they stay two when their fill is close, not only when it is half
+    /// a disk apart. Two 2 TB backup disks fifteen gigabytes apart — three
+    /// quarters of a percent — were one row under the old one-percent rule,
+    /// named after the first and carrying the second's free space, so a disk
+    /// vanished from the panel that exists to say when one is full. Two
+    /// names say two disks; so does no name at all, which is what an
+    /// unlabelled Windows volume reports, because two volumes that both lack
+    /// a name have not been shown to share one.
+    #[test]
+    fn two_disks_of_one_size_and_nearly_one_fill_stay_separate() {
+        for (a, b) in [("Backup A", "Backup B"), ("", "")] {
+            let devices = group(vec![
+                named(
+                    a,
+                    volume(
+                        "/Volumes/Backup A",
+                        "apfs",
+                        2_000_000_000_000,
+                        1_990_000_000_000,
+                        false,
+                    ),
+                ),
+                named(
+                    b,
+                    volume(
+                        "/Volumes/Backup B",
+                        "apfs",
+                        2_000_000_000_000,
+                        1_975_000_000_000,
+                        false,
+                    ),
+                ),
+            ]);
+            assert_eq!(devices.len(), 2, "named {a:?} and {b:?}: {devices:?}");
+        }
+    }
+
+    /// The tight line must not become looser than the old rule on a disk too
+    /// small for its floor. A fixed 128 MiB is more than a percent of
+    /// anything under about thirteen gigabytes, so on its own it would fold
+    /// two 8 GB sticks 100 MB apart, and any two same-size volumes under
+    /// 128 MiB whatever their fill — an empty one and a full one, one row,
+    /// named after the empty one and showing the full one's free space. The
+    /// floor stops at a percent, and so does a shared name: two FAT sticks
+    /// both called `NO NAME`, the label a fresh one carries, are held no
+    /// looser than two with nothing in common.
+    #[test]
+    fn small_disks_of_one_size_are_held_no_looser_than_a_percent() {
+        for name in ["", "NO NAME"] {
+            for (total, a, b) in [
+                (8_000_000_000, 4_000_000_000, 3_900_000_000),
+                (100_000_000, 99_000_000, 1_000_000),
+            ] {
+                let devices = group(vec![
+                    named(name, volume("/media/stick-a", "vfat", total, a, false)),
+                    named(name, volume("/media/stick-b", "vfat", total, b, false)),
+                ]);
+                assert_eq!(
+                    devices.len(),
+                    2,
+                    "{total}-byte pair named {name:?}: {devices:?}"
+                );
+            }
+        }
+    }
+
+    /// What separating two disks must not do is split the container the
+    /// fold exists for. The two volumes of one APFS container drift apart
+    /// between readings by what was written between the two reads, not by a
+    /// share of the disk, and a fast write moves a lot of it: on the owner's
+    /// 2 TB Mac, 1.8 MB idle, 48 MB under a `dd` from `/dev/urandom` (which
+    /// is that source's speed, not the disk's), and 260 MB and then 641 MB
+    /// under a 30 GB write from a cached file at the SSD's own speed. Both
+    /// halves are named `Macintosh HD`, so they are held to the old percent:
+    /// twenty gigabytes there, thirty times the largest reading, and 2.5 GB
+    /// on a 256 GB Mac. Split, the read-only `/`
+    /// drops and the row renames itself `/System/Volumes/Data` for a
+    /// reading, taking the I/O history with it — during the very write the
+    /// graph is there to show.
+    #[test]
+    fn a_container_read_during_a_write_is_still_one_device() {
+        for total in [245_107_195_904, 494_384_795_648, 1_995_165_736_960] {
+            for drift in [1_793_984, 47_857_664, 260_132_864, 641_363_968] {
+                let free = total / 2;
+                let devices = group(vec![
+                    named("Macintosh HD", volume("/", "apfs", total, free, true)),
+                    named(
+                        "Macintosh HD",
+                        volume("/System/Volumes/Data", "apfs", total, free - drift, false),
+                    ),
+                ]);
+                assert_eq!(
+                    devices,
+                    vec![device("/", total, free - drift)],
+                    "a {total}-byte container {drift} bytes apart"
+                );
+            }
+        }
+    }
+
+    /// The edge the shared name leaves, pinned so that moving it is a
+    /// decision: two disks of one size and one name — a pair of drives
+    /// bought together and both left `Untitled` — whose free space is within
+    /// a percent are one row, exactly as every disk was before the tight
+    /// line, until enough is written to one of them to carry it past.
+    /// Nothing a volume reports tells them from the two halves of a
+    /// container.
+    #[test]
+    fn two_disks_of_one_size_and_one_name_within_a_percent_are_one_row() {
+        let devices = group(vec![
+            named(
+                "Untitled",
+                volume(
+                    "/Volumes/Untitled",
+                    "apfs",
+                    2_000_000_000_000,
+                    1_990_000_000_000,
+                    false,
+                ),
+            ),
+            named(
+                "Untitled",
+                volume(
+                    "/Volumes/Untitled 1",
+                    "apfs",
+                    2_000_000_000_000,
+                    1_975_000_000_000,
+                    false,
+                ),
+            ),
+        ]);
+        assert_eq!(
+            devices,
+            vec![device(
+                "/Volumes/Untitled",
+                2_000_000_000_000,
+                1_975_000_000_000
+            )]
+        );
+    }
+
+    /// The hedge for a macOS that names its halves apart — `diskutil` calls
+    /// the data volume `Data` where `sysinfo` reads `Macintosh HD` — is the
+    /// tight line, which folds any two volumes of one size whatever their
+    /// names: idle and under an ordinary write the container is still one
+    /// row there. A write fast enough to carry the halves past the line
+    /// would split it for a reading, which is the price of the name not
+    /// being the only test.
+    #[test]
+    fn a_container_whose_halves_are_named_apart_still_folds_within_the_tight_line() {
+        for total in [245_107_195_904, 494_384_795_648, 1_995_165_736_960] {
+            for drift in [1_793_984, 47_857_664] {
+                let free = total / 2;
+                let devices = group(vec![
+                    named("Macintosh HD", volume("/", "apfs", total, free, true)),
+                    named(
+                        "Data",
+                        volume("/System/Volumes/Data", "apfs", total, free - drift, false),
+                    ),
+                ]);
+                assert_eq!(
+                    devices,
+                    vec![device("/", total, free - drift)],
+                    "a {total}-byte container named apart, {drift} bytes apart"
+                );
+            }
+        }
     }
 
     /// A snap's squashfs, a DVD and the memory-backed pseudo file systems

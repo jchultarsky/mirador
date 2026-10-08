@@ -106,6 +106,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--print-config` rather than at the migration. Comments are now read past
   the same way the layout editor reads past them, while a `#` inside a quoted
   name, as in `[plugins.config.'chan#1']`, is still not taken for one.
+- **Two disks of one size are two rows unless their name says they are one,
+  or their free space all but matches.** The disk panel folded volumes of
+  one capacity whose free space was within a percent, which is twenty
+  gigabytes on a 2 TB disk, so two backup disks of one model fifteen
+  gigabytes apart were one row, named after the first and showing the
+  second's free space. The percent now holds only for volumes the platform
+  gives one name, as it does the two halves of a Mac's disk, which drift
+  apart by hundreds of megabytes while it is written to at full speed.
+  Volumes named apart, or not named at all, are one row only when their free
+  space is within a ten-thousandth of the size, never under 128 MiB and never
+  over a percent. Two disks of one size and one name — both left `Untitled`
+  — whose free space is within a percent are still one row, and so are two
+  of any names within that tighter line, until enough is written to one of
+  them to carry it past; nothing a free-space reading reports can tell them
+  apart.
+- **Hiding the seconds with `s` hides them from a `time_format` that spells
+  them with a flag.** The zone table found the seconds by searching for
+  `%S`, so `%H:%M:%-S` kept them, under a big clock that had dropped its
+  own, and `%H:%M %%S`, which draws `16:47 %S`, lost its `S` and drew
+  `16:47 %`. The format is read the way `strftime` reads it now, flags,
+  widths and `%%` included, and `%X` and `%r` lose their seconds as `%T`
+  always did. A fraction of a second goes with them — `%f`, `%N`, `%.3f` —
+  where it used to stay and draw `09:05.123`, a minute with a decimal
+  fraction of one; and a `%r` table keeps the wider time column its `PM`
+  needs with the seconds on as well as off.
+- **The zone list draws an identifier whole or not at all.** Beside each
+  city the list drew the zone it writes to `zones.toml`, at full width, and
+  on a terminal narrower than about fifty columns the dialog's edge cut it:
+  `Australia/Melbou`, which is no zone. The identifiers are now shown on
+  every row when the longest in the list fits beside the cities, and on
+  none when it does not — typing narrows the list and can bring them back —
+  and a city with no room ends in `…`.
+- **A plugin is told to stop even when it has fallen behind.** `shutdown`
+  went into the same 256-message queue as everything else and was dropped
+  when that was full, so a plugin that had stopped reading was killed at the
+  end of its grace without the message the protocol promises. It now goes
+  ahead of everything still in that queue, which is discarded rather than
+  sent first. A `hello` not yet written still goes before it, and what the
+  pipe already holds still arrives ahead of it.
 
 ## [1.21.0] - 2026-10-08
 

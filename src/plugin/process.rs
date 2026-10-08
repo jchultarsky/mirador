@@ -3,6 +3,7 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -103,6 +104,10 @@ enum SupervisorCommand {
 
 pub(super) struct Runtime {
     events: Option<SyncSender<HostMessage>>,
+    /// Set once the host has asked the child to stop. The writer reads it
+    /// rather than the queue, so `shutdown` does not wait for room behind
+    /// input the child has not read yet — see [`writer_loop`].
+    stopping: Arc<AtomicBool>,
     supervisor: mpsc::Sender<SupervisorCommand>,
     supervisor_thread: Option<JoinHandle<()>>,
 }
@@ -124,7 +129,12 @@ impl Runtime {
     /// a broken OS process primitive cannot trap Mirador on exit.
     pub(super) fn shutdown(&mut self) -> bool {
         if let Some(events) = self.events.take() {
-            let _ = events.try_send(HostMessage::Shutdown);
+            // Not a message in the queue: a full queue refused it, and the
+            // child that had fallen 256 messages behind — the one most in
+            // need of the word — was killed without it. The flag
+            // reaches the writer however full the queue is, and dropping
+            // the only sender wakes a writer waiting on an empty one.
+            self.stopping.store(true, Ordering::Release);
             drop(events);
             let _ = self.supervisor.send(SupervisorCommand::Shutdown);
         }
@@ -163,6 +173,7 @@ impl Runtime {
         (
             Self {
                 events: Some(events),
+                stopping: Arc::new(AtomicBool::new(false)),
                 supervisor,
                 supervisor_thread: Some(supervisor_thread),
             },
@@ -213,10 +224,20 @@ pub(super) fn spawn_process(
 
     let (event_tx, event_rx) = mpsc::sync_channel(EVENT_QUEUE);
     let (supervisor_tx, supervisor_rx) = mpsc::channel();
+    let stopping = Arc::new(AtomicBool::new(false));
 
     let writer_shared = Arc::clone(shared);
     let writer_supervisor = supervisor_tx.clone();
-    thread::spawn(move || writer_loop(stdin, event_rx, &writer_shared, &writer_supervisor));
+    let writer_stopping = Arc::clone(&stopping);
+    thread::spawn(move || {
+        writer_loop(
+            stdin,
+            &event_rx,
+            &writer_stopping,
+            &writer_shared,
+            &writer_supervisor,
+        );
+    });
 
     let reader_shared = Arc::clone(shared);
     let reader_supervisor = supervisor_tx.clone();
@@ -249,6 +270,7 @@ pub(super) fn spawn_process(
     };
     let runtime = Runtime {
         events: Some(event_tx),
+        stopping,
         supervisor: supervisor_tx,
         supervisor_thread: Some(supervisor_thread),
     };
@@ -258,25 +280,50 @@ pub(super) fn spawn_process(
     Ok(runtime)
 }
 
+/// Write the queued messages to the child, in order, until the host stops.
+///
+/// Once `stopping` is set the next thing this thread writes is `shutdown`,
+/// and whatever is still in the queue is skipped. What it has already
+/// written is beyond reach: a child that has stopped reading holds this
+/// thread in a write only once the pipe's own buffer is full, so if it reads
+/// again inside its grace it reads that buffer first and then `shutdown`,
+/// not the queue's backlog of ticks as well, which it would be killed
+/// halfway through. The one exception is `hello`, which is never
+/// skipped: the protocol says `shutdown` may *follow* it during startup,
+/// and a plugin should not be told to stop by a host that never said hello.
 fn writer_loop(
     mut stdin: impl Write,
-    events: Receiver<HostMessage>,
+    events: &Receiver<HostMessage>,
+    stopping: &AtomicBool,
     shared: &Arc<Mutex<Shared>>,
     supervisor: &mpsc::Sender<SupervisorCommand>,
 ) {
-    for event in events {
-        let result = write_host_message(&mut stdin, &event);
-        if let Err(error) = result {
+    let mut write = |event: &HostMessage| match write_host_message(&mut stdin, event) {
+        Ok(()) => true,
+        Err(error) => {
             shared
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .fail(format!("writing to plugin: {error}"));
             let _ = supervisor.send(SupervisorCommand::Abort);
-            break;
+            false
         }
-        if matches!(event, HostMessage::Shutdown) {
-            break;
+    };
+    for event in events {
+        let event =
+            if stopping.load(Ordering::Acquire) && !matches!(event, HostMessage::Hello { .. }) {
+                HostMessage::Shutdown
+            } else {
+                event
+            };
+        if !write(&event) || matches!(event, HostMessage::Shutdown) {
+            return;
         }
+    }
+    // The queue is empty and its sender gone. If it went because the host
+    // is stopping, the child is still owed its `shutdown`.
+    if stopping.load(Ordering::Acquire) {
+        write(&HostMessage::Shutdown);
     }
 }
 
@@ -982,7 +1029,6 @@ fn expire_startup(shared: &Arc<Mutex<Shared>>, now: Instant, deadline: Instant) 
 #[cfg(test)]
 mod tests {
     use std::process::Stdio;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
     use crate::panel::Panel;
@@ -1023,6 +1069,7 @@ mod tests {
         (
             Runtime {
                 events: Some(events),
+                stopping: Arc::new(AtomicBool::new(false)),
                 supervisor,
                 supervisor_thread: Some(supervisor_thread),
             },
@@ -1320,6 +1367,167 @@ mod tests {
 
         let mut incomplete = StderrDecoder::default();
         assert_eq!(incomplete.decode(&encoded[..1], true), "\u{fffd}");
+    }
+
+    /// A child's stdin that takes the first write and then holds it, the way
+    /// a plugin that has stopped reading holds the host's writer, until the
+    /// test lets go — which is the plugin reading again inside its grace.
+    struct HeldPipe {
+        entered: Option<mpsc::Sender<()>>,
+        release: Option<Receiver<()>>,
+        written: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for HeldPipe {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(entered) = self.entered.take() {
+                let _ = entered.send(());
+            }
+            if let Some(release) = self.release.take() {
+                let _ = release.recv();
+            }
+            self.written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn hello() -> HostMessage {
+        HostMessage::Hello {
+            protocol: PROTOCOL_VERSION,
+            host_version: "test",
+            plugin: "held".into(),
+            config: serde_json::Value::Null,
+            cwd: String::new(),
+        }
+    }
+
+    fn lines_of(written: &Arc<Mutex<Vec<u8>>>) -> Vec<String> {
+        let bytes = written
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        String::from_utf8(bytes)
+            .expect("the host writes UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// `shutdown` went into the same bounded queue as everything else, by
+    /// `try_send`, so a plugin that had fallen 256 messages behind was never
+    /// told — the queue was full, the message was dropped, and the child was
+    /// killed at the end of its grace without the one word the protocol
+    /// promises it. Here the child stops reading mid-`hello`, ticks fill the
+    /// queue behind it, the host shuts down, and then the child reads again:
+    /// what follows the `hello` is `shutdown`, not the queue's ticks.
+    /// `HeldPipe` has no buffer, so this is the host's queue alone; a real
+    /// pipe hands over what it already holds first, as the protocol
+    /// document says.
+    #[test]
+    fn shutdown_reaches_the_plugin_past_a_full_queue() {
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let pipe = HeldPipe {
+            entered: Some(entered_tx),
+            release: Some(release_rx),
+            written: Arc::clone(&written),
+        };
+        let (supervisor, commands) = mpsc::channel();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let shared = Arc::clone(&shared);
+            let supervisor = supervisor.clone();
+            let stopping = Arc::clone(&stopping);
+            thread::spawn(move || writer_loop(pipe, &received, &stopping, &shared, &supervisor))
+        };
+        let supervisor_thread = thread::spawn(move || {
+            while let Ok(command) = commands.recv() {
+                if matches!(
+                    command,
+                    SupervisorCommand::Shutdown | SupervisorCommand::Abort
+                ) {
+                    return;
+                }
+            }
+        });
+        let mut runtime = Runtime {
+            events: Some(events),
+            stopping,
+            supervisor,
+            supervisor_thread: Some(supervisor_thread),
+        };
+
+        runtime.send(hello()).expect("the hello is queued");
+        entered.recv().expect("the writer takes the hello");
+        let mut queued = 0;
+        while runtime.send(HostMessage::Tick).is_ok() {
+            queued += 1;
+        }
+        assert_eq!(queued, EVENT_QUEUE, "the queue fills behind the held write");
+
+        assert!(runtime.shutdown(), "the stub supervisor stops");
+        drop(release);
+        writer.join().expect("the writer finishes");
+
+        let lines = lines_of(&written);
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(r#"{"type":"shutdown"}"#),
+            "the plugin was never told to stop; it read {} lines, the last {:?}",
+            lines.len(),
+            lines.last()
+        );
+        assert!(lines[0].contains(r#""type":"hello""#), "{lines:?}");
+        assert_eq!(
+            lines.len(),
+            2,
+            "what was still queued is skipped, so the shutdown is not stuck behind it"
+        );
+    }
+
+    /// The two ends of the same rule. A `hello` still queued when the host
+    /// stops is written before the `shutdown`, never replaced by it — the
+    /// protocol lets `shutdown` follow `hello` during startup, not stand in
+    /// for it — and the ticks behind it are skipped. And a writer waiting on
+    /// an empty queue when the host stops still says `shutdown` on its way
+    /// out, since nothing is left in the queue to carry it.
+    #[test]
+    fn shutdown_follows_a_queued_hello_and_ends_an_empty_queue() {
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        let (supervisor, _commands) = mpsc::channel();
+        let stopping = AtomicBool::new(true);
+
+        let (events, received) = mpsc::sync_channel(EVENT_QUEUE);
+        events.try_send(hello()).expect("room");
+        events.try_send(HostMessage::Tick).expect("room");
+        events.try_send(HostMessage::Tick).expect("room");
+        drop(events);
+        let mut written = Vec::new();
+        writer_loop(&mut written, &received, &stopping, &shared, &supervisor);
+        let lines: Vec<_> = String::from_utf8(written)
+            .expect("UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].contains(r#""type":"hello""#), "{lines:?}");
+        assert_eq!(lines[1], r#"{"type":"shutdown"}"#);
+
+        let (events, received) = mpsc::sync_channel::<HostMessage>(EVENT_QUEUE);
+        drop(events);
+        let mut written = Vec::new();
+        writer_loop(&mut written, &received, &stopping, &shared, &supervisor);
+        assert_eq!(written, b"{\"type\":\"shutdown\"}\n");
     }
 
     #[test]
