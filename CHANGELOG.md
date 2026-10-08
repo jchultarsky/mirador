@@ -140,6 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `d` asked whether to put every key back, the footer still offered
   `r reload`, `d defaults` and `Esc close`, and each of them answered no
   instead. It reads `y reset  Esc keep` until the question is answered.
+- **A paste takes the update notice down at once.** A paste retires the
+  notice and marks the watch log read, as a key does, but the screen is
+  redrawn after a paste only when something asks, and a paste the focused
+  panel did not take asked for nothing. The notice, and a watch log rule
+  line the paste had just made untrue, stayed up until something else
+  redrew. Both now go with the paste, as they do with a click.
 
 ## [1.20.0] - 2026-10-07
 

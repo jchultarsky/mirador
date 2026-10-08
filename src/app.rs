@@ -987,8 +987,15 @@ impl App {
     /// it from a form, so the panels that ask one claim a paste themselves
     /// and drop it: typed in, a paste beginning with `y` was the answer.
     fn handle_paste(&mut self, text: &str) -> bool {
-        self.show_update_hint = false;
+        // A paste is the reader acting, as a key is: it retires the update
+        // notice and marks the watch log seen. Both change what is on screen,
+        // and `run` redraws after a paste only when asked — so every way out
+        // of here asks when either did, as `handle_mouse` does with the
+        // notice. Without it a paste no panel took left both standing.
+        let had_hint = std::mem::take(&mut self.show_update_hint);
+        let line_before = self.watch.unseen();
         self.watch.mark_seen();
+        let retired = had_hint || self.watch.unseen() != line_before;
 
         if self.show_help {
             self.show_help = false;
@@ -999,11 +1006,11 @@ impl App {
             || self.arranging.is_some()
             || self.keymap_dialog.is_some()
         {
-            return false;
+            return retired;
         }
 
         let Some(slot) = self.slots.get_mut(self.focus) else {
-            return false;
+            return retired;
         };
         if slot.panel.handle_paste(text) == crate::panel::KeyOutcome::Consumed {
             return true;
@@ -1026,7 +1033,7 @@ impl App {
                 == crate::panel::KeyOutcome::Consumed
                 || used;
         }
-        used
+        used || retired
     }
 
     /// Read every key table from the config again, for the key map's `r`.
@@ -3373,6 +3380,52 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert!(dirty, "the hint was cleared, so the screen is out of date");
+    }
+
+    /// The paste half of the test above. A paste retires the notice and marks
+    /// the watch log seen, as a key does — but where `run` redraws after every
+    /// key, it redraws after a paste only when `handle_paste` asks, and a
+    /// paste the focused panel does not take asked for nothing. The notice
+    /// then stayed on screen until something else happened to redraw, and so
+    /// did a rule line the paste had just made untrue.
+    #[test]
+    fn retiring_the_hint_by_paste_forces_a_redraw_too() {
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
+            "9.9.9".to_string(),
+        ))));
+        assert!(app.update_hint().is_some());
+        let dirty = app.handle_paste("hello");
+        assert!(app.update_hint().is_none(), "a paste retires the notice");
+        assert!(
+            dirty,
+            "the notice was retired, so the screen is out of date"
+        );
+
+        // The rule line alone, with the notice already gone: one entry from
+        // before the reader was last here and one from after, which is the one
+        // state that draws a line. Spinning until the clock moves keeps the
+        // second strictly after that moment and before the paste's own.
+        let mut app = App::new(config_with(&["clocks"])).unwrap();
+        app.show_update_hint = false;
+        let an_hour_ago = jiff::Zoned::now()
+            .checked_sub(jiff::Span::new().hours(1))
+            .unwrap();
+        app.watch.push(crate::watch::Event {
+            at: an_hour_ago,
+            source: "test".into(),
+            text: "before".into(),
+        });
+        app.watch.mark_seen();
+        let seen = jiff::Zoned::now();
+        while jiff::Zoned::now() <= seen {
+            std::hint::spin_loop();
+        }
+        app.watch.push(crate::watch::Event::new("test", "after"));
+        assert_eq!(app.watch.unseen(), Some(1), "the line is on screen");
+        let dirty = app.handle_paste("hello");
+        assert_eq!(app.watch.unseen(), None, "the paste marked it seen");
+        assert!(dirty, "the line moved, so the screen is out of date");
     }
 
     #[test]
