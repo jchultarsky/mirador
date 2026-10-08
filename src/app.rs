@@ -2211,7 +2211,7 @@ impl App {
         // path in the host renderer.
         let lines: Vec<Line<'static>> = lines
             .iter()
-            .flat_map(|line| crate::grid::wrap_line(line, usize::from(text_width)))
+            .flat_map(|line| crate::grid::wrap_line(line, text_width))
             .collect();
         let text_height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
         let body = Paragraph::new(lines);

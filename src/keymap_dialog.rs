@@ -487,7 +487,7 @@ impl KeymapDialog {
             parts
         };
         crate::grid::assemble(
-            crate::grid::way_out_last(parts, &Span::styled("  ", muted), width.into()),
+            crate::grid::way_out_last(parts, &Span::styled("  ", muted), width),
             width,
         )
     }

@@ -32,6 +32,20 @@ pub fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
+/// [`display_width`] as a `u16`, for arithmetic on `Rect` fields, saturating
+/// at `u16::MAX` rather than wrapping or failing.
+///
+/// The one place the conversion is written. A width that does not fit in a
+/// `u16` is wider than any terminal, so the largest one that does is the
+/// honest answer: it still loses every comparison against the room on screen.
+/// It is not an answer to place text by, and the clock's date line, which
+/// centres by its width, writes its own conversion to draw such a date
+/// nowhere rather than flush left. [`display_width`] stays a `usize` because
+/// it also measures data against budgets that are not terminal widths.
+pub fn cell_width(text: &str) -> u16 {
+    u16::try_from(display_width(text)).unwrap_or(u16::MAX)
+}
+
 /// Cut `text` down to `width` terminal cells, ending in `…` if anything was
 /// dropped.
 ///
@@ -352,10 +366,11 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 /// become a slice panic.
 ///
 /// The line's own style goes on every row, the collapsed one included.
-pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+pub fn wrap_line(line: &Line<'_>, width: u16) -> Vec<Line<'static>> {
     if width == 0 {
         return Vec::new();
     }
+    let width = usize::from(width);
     let text: String = line
         .spans
         .iter()
@@ -830,8 +845,9 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
 pub fn way_out_last(
     mut parts: Vec<Vec<Span<'static>>>,
     separator: &Span<'static>,
-    width: usize,
+    width: u16,
 ) -> Vec<Vec<Span<'static>>> {
+    let width = usize::from(width);
     let gap = display_width(&separator.content);
     let row = |parts: &[Vec<Span<'static>>]| {
         parts
@@ -857,7 +873,7 @@ pub fn way_out_last(
 /// ellipsis, so a long value degrades visibly instead of silently pushing its
 /// neighbours sideways.
 fn fit(text: &str, width: u16, align: Align) -> String {
-    let width = width as usize;
+    let width = usize::from(width);
     if width == 0 {
         return String::new();
     }
@@ -1976,6 +1992,15 @@ mod tests {
             width_of(&wide),
             "a wide glyph must not change the row width"
         );
+    }
+
+    /// A width too large for a `u16` saturates rather than wrapping to a
+    /// small number that would fit anywhere, or falling back to zero.
+    #[test]
+    fn a_cell_width_too_wide_for_a_u16_saturates() {
+        assert_eq!(cell_width(&"x".repeat(70_000)), u16::MAX);
+        assert_eq!(cell_width("a🌞b"), 4, "measured in cells, not chars");
+        assert_eq!(cell_width(""), 0);
     }
 
     #[test]

@@ -33,7 +33,6 @@
 use std::num::NonZeroU16;
 
 use ratatui::buffer::{Buffer, CellDiffOption};
-use unicode_width::UnicodeWidthStr;
 
 /// Whether a URL is safe to embed in an OSC 8 sequence.
 ///
@@ -148,7 +147,7 @@ pub fn linkify(buf: &mut Buffer, y: u16, x0: u16, x1: u16, url: &str, id: &str) 
         let glyph = cell.symbol().to_string();
         // A symbol measuring 0 would stall the walk; treating it as 1 keeps
         // the loop moving, the same guard `samples::push_bounded` carries.
-        let width = glyph.width().max(1) as u16;
+        let width = crate::grid::cell_width(&glyph).max(1);
         cell.set_symbol(&format!("{open}{glyph}\x1b]8;;\x1b\\"));
         cell.set_diff_option(CellDiffOption::ForcedWidth(
             NonZeroU16::new(width).expect("width floored at 1"),

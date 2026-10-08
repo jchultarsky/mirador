@@ -841,7 +841,7 @@ fn wrapped_wire_lines(
             break;
         }
         let prefix = visible_wire_line(line, usize::from(width), remaining, theme);
-        for row in crate::grid::wrap_line(&prefix, usize::from(width))
+        for row in crate::grid::wrap_line(&prefix, width)
             .into_iter()
             .take(remaining)
         {

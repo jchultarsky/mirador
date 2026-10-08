@@ -408,7 +408,7 @@ fn draw_cell(
     if top >= bottom || area.width == 0 {
         return 0;
     }
-    let figure_w = u16::try_from(crate::grid::display_width(figure)).unwrap_or(u16::MAX);
+    let figure_w = crate::grid::cell_width(figure);
     let chrome = chrome_width(figure);
     let outline = Style::default().fg(theme.muted);
     let fill = Style::default().fg(colour);
@@ -493,7 +493,7 @@ fn draw_cell(
 /// What sits beside the cell's interior on its widest row: the outline
 /// either side, the terminal, a space, and the figure.
 fn chrome_width(figure: &str) -> u16 {
-    4 + u16::try_from(crate::grid::display_width(figure)).unwrap_or(u16::MAX)
+    4 + crate::grid::cell_width(figure)
 }
 
 /// How many of `body` cells the charge fills. Whole cells, rounded down, so
