@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thread are refused rather than built, the tests build them offline, and the
   data directory is one of the test run's own. No effect on the shipped
   binary.
+- **A charging or full battery stays brass.** The battery panel painted its
+  label, its cell and its figure green whenever the laptop was charging or
+  full, where the README and the panel's own notes said brass while there is
+  plenty, the signal colours only for a charge that is low while the machine
+  runs on it, and charging told by the label. The face now does what they
+  say: `CHARGING` and `FULL` name the state, in brass, so plugging in no
+  longer turns the panel green. Amber and red are unchanged.
 
 ### Fixed
 
@@ -354,6 +361,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashed showed the startup, never the line saying what went wrong. It now
   shows the last three, giving up the earliest first when the panel is short,
   and a line the panel's height cuts ends in `…` rather than looking whole.
+- **A pomodoro phase counts through sleep.** The timer kept its deadline on a
+  clock that stops while the machine sleeps on macOS and Linux, so a focus
+  interval with ten minutes left when the lid closed still had ten minutes
+  left an hour later, and no chime had sounded. It now
+  reads the wall clock as well and ends by whichever says less is left: the
+  phase that ran out ends on waking, once, and the next waits at its full
+  length for a key — or with `auto_start` begins from the moment you come
+  back — rather than the timer racing through the phases you were away for. A
+  wall clock set back can neither end a phase nor lengthen it, and a paused
+  timer is untouched.
+- **A pomodoro phase set longer than 180 minutes keeps its length.** `+` and
+  `-` stop at 180 minutes, and the first press of either cut a longer phase
+  from `[pomodoro]` down to it, took the difference off the time left —
+  ending a phase with less than that to go — and remembered the 180 over the
+  config. A longer phase now keeps its length: `-` takes a minute off, `+`
+  puts it back as far as the config's length and no further, and a shortened
+  length survives a restart.
+- **The pomodoro's phase label says when it has been cut.** In a panel
+  narrower than the label, `SHORT BREAK` was cut by the terminal to a
+  whole-looking `SHORT BRE`. It now ends in `…`, and so does the time where
+  it falls back to plain text.
 
 ## [1.19.2] - 2026-10-07
 

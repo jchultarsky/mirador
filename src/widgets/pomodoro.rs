@@ -10,7 +10,7 @@
 //! never reserialises the config. Only a phase you actually adjusted is
 //! remembered — see [`Panel::remember`].
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -38,6 +38,10 @@ const MAX_SCALE: u16 = 1;
 /// Longest interval the panel will let you dial in, in minutes. Well past any
 /// real pomodoro, but a bound stops `+` held down from producing a timer that
 /// no longer fits its own display.
+///
+/// A bound on the dial, not on the config: `[pomodoro]` may ask for longer,
+/// and then `+` stops at the config's own length instead, so a phase set past
+/// this can be shortened from the panel and put back, but not lengthened.
 pub const MAX_MINUTES: u64 = 180;
 
 /// Rows the panel needs besides the numerals: the phase label above, and the
@@ -101,6 +105,66 @@ impl Phase {
     }
 }
 
+/// How far off a deadline goes when the length asked for is further than a
+/// clock can count: a century, which for a timer is never, and well inside
+/// what every platform's clocks can hold. The tightest is `SystemTime` on
+/// Windows, which runs out in the year 30828 — far sooner than `Instant`
+/// there, so reading the wall clock brought the limit within reach.
+const HORIZON: Duration = Duration::from_hours(100 * 365 * 24);
+
+/// When a running phase ends, by two clocks, because neither is right alone.
+///
+/// `Instant` is monotonic, which is why a timer reaches for it — and on macOS
+/// (`CLOCK_UPTIME_RAW`) and Linux (`CLOCK_MONOTONIC`) it is also uptime: it
+/// stops while the machine sleeps. Timed by it alone, a phase with ten minutes
+/// left when the lid closed still had ten minutes left an hour later.
+/// `SystemTime` counts the sleep, and can be stepped by hand or by NTP. The
+/// phase ends by whichever says less is left; see [`Deadline::remaining_at`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Deadline {
+    monotonic: Instant,
+    wall: SystemTime,
+}
+
+impl Deadline {
+    /// `left` from now, by both clocks, or [`HORIZON`] from now by a clock
+    /// that cannot count that far. `+` would panic there, and `[pomodoro]`
+    /// bounds a length only from below.
+    fn after(left: Duration) -> Self {
+        let monotonic = Instant::now();
+        let wall = SystemTime::now();
+        Self {
+            monotonic: monotonic
+                .checked_add(left)
+                .or_else(|| monotonic.checked_add(HORIZON))
+                .unwrap_or(monotonic),
+            wall: wall
+                .checked_add(left)
+                .or_else(|| wall.checked_add(HORIZON))
+                .unwrap_or(wall),
+        }
+    }
+
+    /// What is left now.
+    fn remaining(self) -> Duration {
+        self.remaining_at(Instant::now(), SystemTime::now())
+    }
+
+    /// What is left when the clocks read `monotonic` and `wall`: the smaller
+    /// of the two remainders.
+    ///
+    /// After a sleep the wall remainder is the smaller, so the phase has
+    /// elapsed through it. A wall clock set back gives the larger, which is
+    /// ignored, so it can neither end a phase early nor lengthen it. One set
+    /// forward reads as time gone by: from here it cannot be told from a
+    /// sleep, and that is the price of counting sleep at all.
+    fn remaining_at(self, monotonic: Instant, wall: SystemTime) -> Duration {
+        let by_monotonic = self.monotonic.saturating_duration_since(monotonic);
+        let by_wall = self.wall.duration_since(wall).unwrap_or(Duration::ZERO);
+        by_monotonic.min(by_wall)
+    }
+}
+
 /// A pomodoro timer panel.
 pub struct PomodoroPanel {
     /// `[pomodoro.keys]` over the defaults.
@@ -108,11 +172,18 @@ pub struct PomodoroPanel {
     config: PomodoroConfig,
     phase: Phase,
     /// When the current phase ends. `None` whenever the timer is not running.
-    ends_at: Option<Instant>,
+    ends_at: Option<Deadline>,
     /// What is left of the phase while stopped. Meaningless while running —
-    /// [`PomodoroPanel::remaining`] reads the deadline instead, so a laptop
-    /// that slept through a phase wakes up knowing the time has gone.
+    /// [`PomodoroPanel::remaining`] reads the deadline instead, by the wall
+    /// clock as well as the monotonic one, so a laptop that slept through a
+    /// phase wakes up knowing the time has gone. A stopped phase is frozen
+    /// here and sleep does not touch it, which is what pausing means.
     paused_remaining: Duration,
+    /// How far `+` may take each phase — focus, short break, long break:
+    /// [`MAX_MINUTES`], or the config's own length where that is longer. The
+    /// config's, not the length this panel was built with, which may be a
+    /// remembered shortening; see [`PomodoroConfig::as_configured`].
+    ceiling: [u64; 3],
     /// Focus intervals finished since the last long break, which is what the
     /// pips count and what decides when the long break falls due.
     completed: u32,
@@ -128,12 +199,18 @@ pub struct PomodoroPanel {
 impl PomodoroPanel {
     pub fn new(config: PomodoroConfig) -> Self {
         let first = Duration::from_secs(config.focus_minutes * 60);
+        let configured = config.as_configured.unwrap_or([
+            config.focus_minutes,
+            config.short_break_minutes,
+            config.long_break_minutes,
+        ]);
         Self {
             keys: default_keys(),
             config,
             phase: Phase::Focus,
             ends_at: None,
             paused_remaining: first,
+            ceiling: configured.map(|minutes| MAX_MINUTES.max(minutes)),
             completed: 0,
             total_completed: 0,
             chime_error: None,
@@ -200,7 +277,7 @@ impl PomodoroPanel {
     /// Time left in the current phase.
     fn remaining(&self) -> Duration {
         match self.ends_at {
-            Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+            Some(deadline) => deadline.remaining(),
             None => self.paused_remaining,
         }
     }
@@ -216,7 +293,7 @@ impl PomodoroPanel {
             if self.paused_remaining.is_zero() {
                 self.paused_remaining = self.length_of(self.phase);
             }
-            self.ends_at = Some(Instant::now() + self.paused_remaining);
+            self.ends_at = Some(Deadline::after(self.paused_remaining));
         }
     }
 
@@ -263,10 +340,14 @@ impl PomodoroPanel {
 
     /// Finish the current phase and move to the next one.
     ///
-    /// The next phase always starts from its full length against a fresh
-    /// `Instant`, never chained from the deadline that just passed. That is
-    /// what stops a machine resumed from an hour of sleep from racing through
-    /// six phases to catch up: at most one phase ends per tick.
+    /// The next phase always gets its full length and, when `auto_start` runs
+    /// it, a fresh deadline — never one chained from the deadline that just
+    /// passed. A machine opened after an hour asleep is, by the wall clock,
+    /// several phases on; what it does is end the phase that ran out — one
+    /// chime, one round counted — and leave the next waiting for a key, or
+    /// with `auto_start` run it from the moment you came back, rather than
+    /// racing through six phases to catch up. At most one phase ends per tick,
+    /// and an hour away is not counted as focus nobody sat through.
     fn advance(&mut self) {
         if self.phase.is_focus() {
             self.completed += 1;
@@ -279,7 +360,7 @@ impl PomodoroPanel {
         self.phase = self.next_phase();
         self.paused_remaining = self.length_of(self.phase);
         self.ends_at = if self.config.auto_start {
-            Some(Instant::now() + self.paused_remaining)
+            Some(Deadline::after(self.paused_remaining))
         } else {
             None
         };
@@ -291,14 +372,18 @@ impl PomodoroPanel {
     /// eighteen minutes into a twenty-five minute focus adds a minute to what is
     /// left rather than silently rewinding you to the start.
     fn adjust(&mut self, delta: i64) {
-        let minutes = match self.phase {
-            Phase::Focus => &mut self.config.focus_minutes,
-            Phase::ShortBreak => &mut self.config.short_break_minutes,
-            Phase::LongBreak => &mut self.config.long_break_minutes,
+        let (minutes, ceiling) = match self.phase {
+            Phase::Focus => (&mut self.config.focus_minutes, self.ceiling[0]),
+            Phase::ShortBreak => (&mut self.config.short_break_minutes, self.ceiling[1]),
+            Phase::LongBreak => (&mut self.config.long_break_minutes, self.ceiling[2]),
         };
 
+        // The ceiling stretches to a longer phase from the config, so `-`
+        // takes a minute off such a phase rather than cutting it to the cap,
+        // and `+` can put it back to what the config says — which is what
+        // retracts the remembered shortening — but no further.
         let before = *minutes;
-        let after = before.saturating_add_signed(delta).clamp(1, MAX_MINUTES);
+        let after = before.saturating_add_signed(delta).clamp(1, ceiling);
         *minutes = after;
 
         if after == before {
@@ -315,7 +400,7 @@ impl PomodoroPanel {
         };
 
         match self.ends_at {
-            Some(_) => self.ends_at = Some(Instant::now() + adjusted),
+            Some(_) => self.ends_at = Some(Deadline::after(adjusted)),
             None => self.paused_remaining = adjusted,
         }
     }
@@ -508,9 +593,14 @@ impl Panel for PomodoroPanel {
         let mut cursor = area.y + area.height.saturating_sub(content) / 2;
 
         // The label, in the utility face so it reads as an instrument legend
-        // rather than as another value.
+        // rather than as another value. Cut with `…` where the panel is
+        // narrower: left to the terminal, `SHORT BREAK` came out as a
+        // whole-looking `SHORT BRE`.
         if cursor < bottom {
-            let label = glyphs::utility(self.phase.label());
+            let label = crate::grid::truncate(
+                &glyphs::utility(self.phase.label()),
+                usize::from(area.width),
+            );
             let x = area.x + area.width.saturating_sub(display_width(&label)) / 2;
             frame.render_widget(
                 Paragraph::new(Span::styled(
@@ -671,6 +761,9 @@ fn draw_clock(
         if top >= bottom {
             return 0;
         }
+        // `05:0` would be a time nobody set; `05:…` says it was cut.
+        let time = crate::grid::truncate(time, usize::from(area.width));
+        let time = time.as_str();
         let width = display_width(time);
         let x = area.x + area.width.saturating_sub(width) / 2;
         frame.render_widget(
@@ -738,7 +831,7 @@ mod tests {
     fn a_phase_that_runs_out_advances_exactly_one_step() {
         let mut p = panel();
         p.paused_remaining = Duration::ZERO;
-        p.ends_at = Some(Instant::now());
+        p.ends_at = Some(Deadline::after(Duration::ZERO));
 
         p.tick();
         assert_eq!(p.phase, Phase::ShortBreak);
@@ -751,6 +844,84 @@ mod tests {
         // A second tick must not cascade: the new phase has its own full length.
         p.tick();
         assert_eq!(p.phase, Phase::ShortBreak);
+    }
+
+    /// Ten minutes left when the lid closed, an hour asleep. `Instant` stops
+    /// with the machine on macOS and Linux, so by it alone the phase still had
+    /// ten minutes to go on waking; the wall clock says it ended fifty minutes
+    /// ago, and that is the one that is right.
+    #[test]
+    fn a_running_phase_counts_through_sleep() {
+        let mut p = panel();
+        p.start();
+        p.ends_at = Some(Deadline {
+            monotonic: Instant::now() + Duration::from_mins(10),
+            wall: SystemTime::now() - Duration::from_mins(50),
+        });
+        assert_eq!(p.remaining(), Duration::ZERO, "an hour asleep spent it");
+
+        p.tick();
+        assert_eq!(p.phase, Phase::ShortBreak, "so the phase ends on waking");
+        assert_eq!(p.completed, 1);
+    }
+
+    /// Each clock is wrong in one direction, and the phase ends by whichever
+    /// says less is left. The monotonic one misses sleep; the wall one can be
+    /// set back, which must neither end a phase nor lengthen it.
+    #[test]
+    fn the_phase_ends_by_whichever_clock_says_less_is_left() {
+        let mono = Instant::now();
+        let wall = SystemTime::now();
+        let deadline = Deadline {
+            monotonic: mono + Duration::from_mins(10),
+            wall: wall + Duration::from_mins(10),
+        };
+        let at = |m: u64, w: u64| {
+            deadline.remaining_at(mono + Duration::from_mins(m), wall + Duration::from_mins(w))
+        };
+        assert_eq!(at(4, 4), Duration::from_mins(6), "awake, they agree");
+        assert_eq!(at(0, 60), Duration::ZERO, "an hour asleep");
+        assert_eq!(at(1, 4), Duration::from_mins(6), "three minutes asleep");
+        assert_eq!(
+            deadline.remaining_at(
+                mono + Duration::from_mins(4),
+                wall - Duration::from_mins(56)
+            ),
+            Duration::from_mins(6),
+            "a wall clock set back an hour neither ends the phase nor lengthens it"
+        );
+    }
+
+    /// An hour asleep with `auto_start` on is, by the wall clock, several
+    /// phases on. The timer does not catch up: the phase that ran out ends
+    /// once, and the next starts from its full length at the moment you came
+    /// back — an hour away is not an hour of focus nobody sat through.
+    #[test]
+    fn waking_ends_one_phase_and_starts_the_next_afresh() {
+        let mut p = PomodoroPanel::new(PomodoroConfig {
+            auto_start: true,
+            ..PomodoroConfig::default()
+        });
+        p.start();
+        p.ends_at = Some(Deadline {
+            monotonic: Instant::now() + Duration::from_mins(10),
+            wall: SystemTime::now() - Duration::from_mins(50),
+        });
+
+        p.tick();
+        assert_eq!(p.phase, Phase::ShortBreak);
+        assert!(p.is_running(), "auto_start carries on into the break");
+        assert!(
+            p.remaining() > Duration::from_secs(5 * 60 - 2),
+            "the break starts whole, not from the deadline that passed: {:?}",
+            p.remaining()
+        );
+
+        for _ in 0..3 {
+            p.tick();
+        }
+        assert_eq!(p.phase, Phase::ShortBreak, "and nothing cascades after it");
+        assert_eq!(p.total_completed, 1, "one round, the one that ran out");
     }
 
     #[test]
@@ -806,6 +977,122 @@ mod tests {
         assert_eq!(p.config.focus_minutes, MAX_MINUTES);
     }
 
+    /// `+` stops at `MAX_MINUTES`, but a config may ask for longer, and the
+    /// first press of either key used to cut such a phase to the cap — taking
+    /// an hour off a 240-minute focus, and off the time left with it, and then
+    /// remembering the 180 over the config's 240.
+    #[test]
+    fn a_phase_configured_past_the_cap_keeps_its_length() {
+        let mut p = PomodoroPanel::new(PomodoroConfig {
+            focus_minutes: 240,
+            ..PomodoroConfig::default()
+        });
+        p.paused_remaining = Duration::from_mins(50);
+
+        p.adjust(1);
+        assert_eq!(p.config.focus_minutes, 240, "`+` past the cap does nothing");
+        assert_eq!(
+            p.remaining(),
+            Duration::from_mins(50),
+            "and takes nothing off what is left"
+        );
+        let mut state = crate::state::UiState::default();
+        p.remember(&mut state);
+        assert_eq!(
+            state.pomodoro_focus_minutes,
+            Some(240),
+            "so what is remembered still matches the config"
+        );
+
+        p.adjust(-1);
+        assert_eq!(p.config.focus_minutes, 239, "`-` shortens it a minute");
+        assert_eq!(p.remaining(), Duration::from_mins(49));
+    }
+
+    /// One launch against a config that sets a 240-minute focus, the way
+    /// `main` runs it: the baseline taken from the config as written, `saved`
+    /// laid over it, the panel built from the result, `deltas` pressed, and
+    /// what would reach the state file.
+    fn launch_at_240(
+        saved: &crate::state::UiState,
+        deltas: &[i64],
+    ) -> (u64, crate::state::UiState) {
+        let mut config = crate::config::Config::default();
+        config.pomodoro.focus_minutes = 240;
+        let baseline = crate::state::UiState::from_config(&config);
+        config.apply_state(saved);
+        let mut p = PomodoroPanel::new(config.pomodoro.clone());
+        for &delta in deltas {
+            p.adjust(delta);
+        }
+        let mut state = crate::state::UiState::default();
+        p.remember(&mut state);
+        (p.config.focus_minutes, state.only_changes_from(&baseline))
+    }
+
+    /// A 240-minute focus shortened to 239 is remembered as 239, and that is
+    /// what the next launch starts at. It started at 180: the state file was
+    /// clamped to the dial's cap, not to the config's own length, so the
+    /// shortening the panel had just allowed was undone by a restart.
+    #[test]
+    fn a_phase_configured_past_the_cap_is_remembered_shortened() {
+        let (_, saved) = launch_at_240(&crate::state::UiState::default(), &[-1]);
+        assert_eq!(saved.pomodoro_focus_minutes, Some(239));
+
+        let (minutes, again) = launch_at_240(&saved, &[]);
+        assert_eq!(minutes, 239, "the restart keeps what was set");
+        assert_eq!(again.pomodoro_focus_minutes, Some(239));
+    }
+
+    /// And `+` takes it back to the config's 240, which retracts the entry —
+    /// in the session that shortened it and after a restart, when the panel is
+    /// built from the remembered 239 and has only the config to say where
+    /// back is. A preference that cannot be set back to the config cannot be
+    /// unset at all (invariant 17).
+    #[test]
+    fn a_phase_configured_past_the_cap_can_be_put_back() {
+        let (minutes, saved) = launch_at_240(&crate::state::UiState::default(), &[-1, 1]);
+        assert_eq!(minutes, 240, "`+` undoes a `-` in the same session");
+        assert_eq!(saved.pomodoro_focus_minutes, None, "{saved:?}");
+
+        let remembered = crate::state::UiState {
+            pomodoro_focus_minutes: Some(239),
+            ..crate::state::UiState::default()
+        };
+        let (minutes, saved) = launch_at_240(&remembered, &[1]);
+        assert_eq!(minutes, 240, "and after a restart");
+        assert_eq!(
+            saved.pomodoro_focus_minutes, None,
+            "back at the config, so nothing is remembered: {saved:?}"
+        );
+        let (minutes, _) = launch_at_240(&remembered, &[1, 1]);
+        assert_eq!(minutes, 240, "but no further than the config");
+    }
+
+    /// `[pomodoro]` bounds a phase only from below, so a hand-edited length
+    /// can be further off than a clock can count, and `+` on an `Instant` or
+    /// a `SystemTime` panics past its range. `SystemTime` on Windows runs out
+    /// in the year 30828, far sooner than `Instant` there, so reading the wall
+    /// clock as well brought the panic within reach of a figure that used to
+    /// start. Such a phase runs to the horizon instead.
+    #[test]
+    fn a_phase_too_long_for_the_clocks_starts_rather_than_panicking() {
+        let mut p = PomodoroPanel::new(PomodoroConfig {
+            focus_minutes: u64::MAX / 60,
+            ..PomodoroConfig::default()
+        });
+        p.start();
+        assert!(p.is_running());
+        assert!(
+            p.remaining() + Duration::from_mins(1) > HORIZON,
+            "{:?}",
+            p.remaining()
+        );
+
+        p.tick();
+        assert_eq!(p.phase, Phase::Focus, "and it is not over as it starts");
+    }
+
     #[test]
     fn adjusting_targets_the_phase_you_are_in() {
         let mut p = panel();
@@ -823,7 +1110,7 @@ mod tests {
         let mut p = panel();
         p.completed = 2;
         p.paused_remaining = Duration::from_secs(30);
-        p.ends_at = Some(Instant::now() + Duration::from_secs(30));
+        p.ends_at = Some(Deadline::after(Duration::from_secs(30)));
 
         p.reset_phase();
         assert!(!p.is_running());
@@ -969,7 +1256,7 @@ mod tests {
         );
 
         let mut expired = PomodoroPanel::new(config);
-        expired.ends_at = Some(Instant::now());
+        expired.ends_at = Some(Deadline::after(Duration::ZERO));
         expired.tick();
         assert!(
             expired.chime_error.is_some(),
@@ -1047,6 +1334,73 @@ mod tests {
             Some(5),
             "the untouched break is still reported; the diff drops it"
         );
+    }
+
+    fn screen(p: &mut PomodoroPanel, width: u16, height: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                p.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// The phase label, and the time where it falls back to text, are cut
+    /// with `…` when the panel is narrower than they are — never by the
+    /// terminal, which left `SHORT BRE` at nine columns: a label that looks
+    /// whole and is not. The silent-clip sweep in `widgets` cannot see it,
+    /// because it builds the panel in focus, and `FOCUS` is short.
+    #[test]
+    fn the_label_and_the_time_say_when_they_have_been_cut() {
+        // One step to a short break; seven to the long break after a set.
+        for steps in [1, 7] {
+            let mut p = panel();
+            for _ in 0..steps {
+                p.advance();
+            }
+            let label = glyphs::utility(p.phase.label());
+            let time = clock_text(p.remaining());
+            let whole_or_marked = |drawn: &str, full: &str| {
+                drawn == full
+                    || drawn
+                        .strip_suffix('…')
+                        .is_some_and(|kept| full.starts_with(kept))
+            };
+            let mut cut = 0;
+            for width in 1..=14u16 {
+                // Six rows is too short for the numerals: the label, the
+                // time as text, the meter and the pips, from the second row.
+                let rows = screen(&mut p, width, 6);
+                let (drawn_label, drawn_time) = (rows[1].trim(), rows[2].trim());
+                assert!(
+                    whole_or_marked(drawn_label, &label),
+                    "{label} drawn as {drawn_label:?} at width {width}"
+                );
+                assert!(
+                    whole_or_marked(drawn_time, &time),
+                    "{time} drawn as {drawn_time:?} at width {width}"
+                );
+                cut += usize::from(drawn_label != label) + usize::from(drawn_time != time);
+            }
+            assert!(cut > 0, "the sweep must reach widths that cut something");
+        }
     }
 
     #[test]
