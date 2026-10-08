@@ -936,6 +936,17 @@ impl Panel for StocksPanel {
         }
     }
 
+    /// Claimed and dropped at the remove confirmation, as in `todo.rs`: a
+    /// paste nobody claims is typed in key by key, and one beginning with `y`
+    /// would answer the question and remove the symbol.
+    fn handle_paste(&mut self, _text: &str) -> KeyOutcome {
+        if matches!(self.mode, Mode::ConfirmRemove { .. }) {
+            KeyOutcome::Consumed
+        } else {
+            KeyOutcome::Ignored
+        }
+    }
+
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
         if !matches!(self.mode, Mode::List) {
             return KeyOutcome::Ignored;

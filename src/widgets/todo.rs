@@ -1216,6 +1216,18 @@ impl Panel for TodoPanel {
         }
     }
 
+    /// Claimed and dropped at the delete confirmation. A paste nobody claims
+    /// is typed in key by key, and one beginning with `y` would answer the
+    /// question and delete the task. Everywhere else the shell's typing is
+    /// what the form wants.
+    fn handle_paste(&mut self, _text: &str) -> KeyOutcome {
+        if matches!(self.mode, Mode::ConfirmDelete { .. }) {
+            KeyOutcome::Consumed
+        } else {
+            KeyOutcome::Ignored
+        }
+    }
+
     fn handle_mouse(&mut self, event: MouseEvent, _area: Rect) -> KeyOutcome {
         // A form owns the panel while it is open; a click landing behind it
         // must not quietly move the selection out from under the editor.
