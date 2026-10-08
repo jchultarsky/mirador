@@ -179,6 +179,35 @@ fn neighbour_of(index: usize, len: usize) -> Option<usize> {
 /// The panels of a layout, with the `(row, column)` each came from.
 type Built = (Vec<Slot>, Vec<(usize, usize)>);
 
+/// The keys of the shell's four modes, read from the config together, each
+/// named for the `[<mode>.keys]` table it comes from.
+///
+/// Both ways in — the start and a reload or reset from the key map — take
+/// their keys from [`ModeKeys::read`] and unpack every field by name, so a
+/// fifth mode added here does not compile until both have been told about
+/// it. They used to be written out twice, once through the named
+/// constructors and once by spelling each scope's name, action table and
+/// config field again by hand.
+struct ModeKeys {
+    arrange: crate::keymap::PanelKeymap<crate::keymap::ArrangeAction>,
+    panel_picker: crate::keymap::PanelKeymap<crate::picker::PickerAction>,
+    theme_picker: crate::keymap::PanelKeymap<crate::theme_picker::ThemePickerAction>,
+    help_overlay: crate::keymap::PanelKeymap<crate::keymap::HelpAction>,
+}
+
+impl ModeKeys {
+    /// Each mode's `[<mode>.keys]` laid over its defaults, or why one of
+    /// them cannot be.
+    fn read(config: &Config) -> std::result::Result<Self, String> {
+        Ok(Self {
+            arrange: crate::keymap::arrange_keymap(&config.arrange.keys)?,
+            panel_picker: crate::picker::keymap(&config.panel_picker.keys)?,
+            theme_picker: crate::theme_picker::keymap(&config.theme_picker.keys)?,
+            help_overlay: crate::keymap::help_keymap(&config.help_overlay.keys)?,
+        })
+    }
+}
+
 /// A panel plus its tick bookkeeping.
 struct Slot {
     /// Which widget this is, so a layout change can carry the panel across
@@ -344,15 +373,13 @@ impl App {
         let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
             .check()
             .map_err(anyhow::Error::msg)?;
-        // Checked with the rest just above, so none of these can fail.
-        let arrange_keys =
-            crate::keymap::arrange_keymap(&config.arrange.keys).map_err(anyhow::Error::msg)?;
-        let panel_picker_keys =
-            crate::picker::keymap(&config.panel_picker.keys).map_err(anyhow::Error::msg)?;
-        let theme_picker_keys =
-            crate::theme_picker::keymap(&config.theme_picker.keys).map_err(anyhow::Error::msg)?;
-        let help_keys =
-            crate::keymap::help_keymap(&config.help_overlay.keys).map_err(anyhow::Error::msg)?;
+        // Checked with the rest just above, so this cannot fail.
+        let ModeKeys {
+            arrange: arrange_keys,
+            panel_picker: panel_picker_keys,
+            theme_picker: theme_picker_keys,
+            help_overlay: help_keys,
+        } = ModeKeys::read(&config).map_err(anyhow::Error::msg)?;
 
         let gradients = config.theme.gradients();
         Ok(Self {
@@ -1062,28 +1089,24 @@ impl App {
 
     /// Hand the shell's modes and every live panel their keys from the
     /// config again.
+    ///
+    /// Both callers apply tables that have just been checked — a reload's,
+    /// or the defaults — so the modes' keys always build. Were one somehow
+    /// not to, the keys in force stay in force, which is what a reload that
+    /// does not check out does too.
     fn rebind_panels(&mut self) {
-        use crate::keymap::PanelKeymap;
-        self.arrange_keys = PanelKeymap::or_defaults(
-            "arrange",
-            crate::keymap::ARRANGE_ACTIONS,
-            &self.config.arrange.keys,
-        );
-        self.panel_picker_keys = PanelKeymap::or_defaults(
-            "panel_picker",
-            crate::picker::ACTIONS,
-            &self.config.panel_picker.keys,
-        );
-        self.theme_picker_keys = PanelKeymap::or_defaults(
-            "theme_picker",
-            crate::theme_picker::ACTIONS,
-            &self.config.theme_picker.keys,
-        );
-        self.help_keys = PanelKeymap::or_defaults(
-            "help_overlay",
-            crate::keymap::HELP_ACTIONS,
-            &self.config.help_overlay.keys,
-        );
+        if let Ok(ModeKeys {
+            arrange,
+            panel_picker,
+            theme_picker,
+            help_overlay,
+        }) = ModeKeys::read(&self.config)
+        {
+            self.arrange_keys = arrange;
+            self.panel_picker_keys = panel_picker;
+            self.theme_picker_keys = theme_picker;
+            self.help_keys = help_overlay;
+        }
         for slot in &mut self.slots {
             slot.panel.set_keys(&self.config);
         }
@@ -1146,11 +1169,7 @@ impl App {
         }
         // The digits pick a panel here as they do outside the mode, and are
         // in no table for the same reason.
-        if let KeyCode::Char(c @ '1'..='9') = key.code {
-            let index = c as usize - '1' as usize;
-            if index < self.slots.len() {
-                self.focus = index;
-            }
+        if self.jump_to_slot(key) {
             return;
         }
 
@@ -1201,23 +1220,15 @@ impl App {
 
         // Focus follows the panel by name, so the moved panel keeps the
         // highlight wherever it lands and nothing here has to chase it.
-        // A move builds no new panel, and only building one can fail, so this
-        // is a guard rather than a path: the layout is put back, and arrange
-        // mode, which draws no picker, has nowhere to say more.
-        if self.rebuild_panels().is_err() {
-            self.config.layout = before;
-            let _ = self.rebuild_panels();
-            return;
-        }
-        self.layout_dirty = true;
+        // A move builds no new panel, and only building one can fail, so a
+        // refusal is a guard rather than a path, and arrange mode, which
+        // draws no picker, has nowhere to say more.
+        let _ = self.commit_layout(before);
     }
 
-    /// Move the row the focused panel sits in, up or down.
-    ///
-    /// Shares `move_focused`'s recovery: a layout the panels cannot be rebuilt
-    /// from is put back, silently, rather than leaving the dashboard in a
-    /// state the config cannot describe. See the comment in the body for why
-    /// there is nothing to say.
+    /// Move the row the focused panel sits in, up or down, putting the layout
+    /// back if the result will not build — silently, for the reason a panel
+    /// move gives.
     fn move_focused_row(&mut self, down: bool) {
         let Some(&(row, _)) = self.positions.get(self.focus) else {
             return;
@@ -1230,15 +1241,36 @@ impl App {
         // Focus follows the panel by name, as it does for a panel move, so the
         // highlight stays on whatever the reader was moving even though every
         // panel in the row changed its flat index.
-        // A move builds no new panel, and only building one can fail, so this
-        // is a guard rather than a path: the layout is put back, and arrange
-        // mode, which draws no picker, has nowhere to say more.
-        if self.rebuild_panels().is_err() {
+        let _ = self.commit_layout(before);
+    }
+
+    /// Rebuild the panels around the layout now in the config, or put
+    /// `before` back and say why not.
+    ///
+    /// Every change to which panels there are, or where they sit, comes
+    /// through here — a panel moved, a row moved, a panel switched on or off.
+    /// Two layout changes go around it. A resize only moves weights, which the
+    /// next draw reads from the config with no panel rebuilt. Esc in arrange
+    /// mode rebuilds the panels itself, from a layout that was live a moment
+    /// ago, so there is nothing to undo, and it puts back whether that layout
+    /// was already waiting to be written rather than marking it.
+    ///
+    /// A layout the panels cannot be built from is undone rather than left
+    /// half-applied, so the dashboard is always one the config can describe,
+    /// and only a change that took is marked as needing to be written. What to
+    /// say about a refusal is the caller's: the picker shows it, arrange mode
+    /// has nowhere to.
+    fn commit_layout(&mut self, before: crate::config::Layout) -> Result<()> {
+        if let Err(error) = self.rebuild_panels() {
+            // Rebuilding from a layout that was live a moment ago cannot
+            // fail, and if it somehow did there is nothing better to fall
+            // back to.
             self.config.layout = before;
             let _ = self.rebuild_panels();
-            return;
+            return Err(error);
         }
         self.layout_dirty = true;
+        Ok(())
     }
 
     /// Act on whatever the picker made of a keypress.
@@ -1343,17 +1375,9 @@ impl App {
             self.config.layout.add_widget(widget);
         }
 
-        if let Err(e) = self.rebuild_panels() {
-            // Put it back. A layout that will not build is a reason to refuse
-            // the toggle, not to leave the dashboard in pieces.
-            self.config.layout = before;
-            let _ = self.rebuild_panels();
-            self.layout_notice = Some(format!("{e:#}"));
-            return;
-        }
-
-        self.layout_notice = None;
-        self.layout_dirty = true;
+        // A layout that will not build is a reason to refuse the toggle, not
+        // to leave the dashboard in pieces, and the picker says why.
+        self.layout_notice = self.commit_layout(before).err().map(|e| format!("{e:#}"));
     }
 
     /// Write the layout back into the config file, if it changed.
@@ -1466,14 +1490,27 @@ impl App {
                 | Action::ResizeShorter,
             )
             | None => {
-                if let KeyCode::Char(c @ '1'..='9') = key.code {
-                    let index = c as usize - '1' as usize;
-                    if index < self.slots.len() {
-                        self.focus = index;
-                    }
-                }
+                self.jump_to_slot(key);
             }
         }
+    }
+
+    /// Focus the panel a digit names, `1` for the first, and say whether the
+    /// key was a digit at all.
+    ///
+    /// A digit with no panel behind it is still a digit: it moves nothing,
+    /// and it is not offered anywhere else. One place for both the dashboard
+    /// and arrange mode, because `1`–`9` are the keys no table may take and
+    /// the two must not come to disagree about what they do.
+    fn jump_to_slot(&mut self, key: KeyEvent) -> bool {
+        let KeyCode::Char(c @ '1'..='9') = key.code else {
+            return false;
+        };
+        let index = c as usize - '1' as usize;
+        if index < self.slots.len() {
+            self.focus = index;
+        }
+        true
     }
 
     /// Move `step` weight from `donor` to `taker` within a set of weights,
@@ -2866,6 +2903,45 @@ mod tests {
             app.slots[app.focus].widget, "todo",
             "focus jumped to another panel"
         );
+    }
+
+    /// A panel that will not build refuses the toggle: the layout and the
+    /// panels on screen are the ones from before, nothing is left to write,
+    /// and the picker is told why. Under test `weather` is such a panel — it
+    /// would start a fetch thread — and a toggle that does build afterwards
+    /// clears the reason again.
+    #[test]
+    fn a_panel_that_will_not_build_is_refused_and_the_layout_put_back() {
+        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        let layout = widgets_by_row(&app);
+        let panels: Vec<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+
+        app.toggle_widget("weather");
+        assert_eq!(widgets_by_row(&app), layout, "the layout came back");
+        let after: Vec<*const u8> = app
+            .slots
+            .iter()
+            .map(|slot| std::ptr::from_ref(&*slot.panel).cast::<u8>())
+            .collect();
+        assert_eq!(after, panels, "and so did the very same panels");
+        assert!(!app.layout_dirty, "a refusal leaves nothing to write");
+        let notice = app.layout_notice.clone().unwrap_or_default();
+        assert!(
+            notice.contains("`weather`"),
+            "the picker says why: {notice:?}"
+        );
+
+        app.toggle_widget("notes");
+        assert!(app.config.layout.places("notes"));
+        assert!(
+            app.layout_dirty,
+            "a toggle that took is waiting to be written"
+        );
+        assert_eq!(app.layout_notice, None, "and the old reason is gone");
     }
 
     #[test]
@@ -4482,6 +4558,24 @@ mod tests {
         assert_eq!(app.focus, 1);
         app.handle_key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
         assert_eq!(app.focus, 1, "an out-of-range index must not move focus");
+    }
+
+    /// The digits pick the panel to move inside arrange mode as they pick
+    /// one outside it. The mode is the second of the two places that read
+    /// them, and until this test nothing had pressed a digit there.
+    #[test]
+    fn number_keys_pick_the_panel_to_move_inside_arrange_mode_too() {
+        let mut app = App::new(resizable()).expect("builds");
+        app.focus = 0;
+        let before = widgets_by_row(&app);
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert_eq!(app.slots[app.focus].widget, "cpu", "3 picked the third");
+        app.handle_key(KeyEvent::from(KeyCode::Char('9')));
+        assert_eq!(app.focus, 2, "an out-of-range index moves nothing");
+        assert!(app.arranging.is_some(), "and the mode is still open");
+        assert_eq!(widgets_by_row(&app), before, "with nothing moved");
     }
 
     #[test]
