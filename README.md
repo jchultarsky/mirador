@@ -1048,6 +1048,8 @@ at the edge stops rather than spawning a row per keypress.
 
 The panels themselves move as you press, so what you see is what you will get.
 `Enter` keeps the arrangement and `Esc` puts everything back exactly as it was.
+`Ctrl+C` quits and keeps it, as `Enter` would: the arrangement on screen when
+you leave is the one you come back to.
 `Tab` picks a different panel to move without leaving the mode, and `Ctrl+←→↑↓`
 still resize while you are in there.
 

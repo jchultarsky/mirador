@@ -633,7 +633,8 @@ impl App {
     /// need restoring when the terminal is what went away.
     ///
     /// Not while arrange mode is open. A resize made inside the mode is part
-    /// of the arrangement, which Keep writes and Esc puts back. Settling it
+    /// of the arrangement, which Keep (or Ctrl+C, see `finish`) writes and Esc
+    /// puts back. Settling it
     /// anyway wrote the file behind the mode's back, so Esc restored the
     /// screen and left the config resized for the next launch. A resize made
     /// before the mode opened is still dirty after Esc and settles here once
@@ -651,6 +652,11 @@ impl App {
     }
 
     /// Shut the panels down and write whatever is still unwritten.
+    ///
+    /// That includes an arrangement still open in arrange mode: Ctrl+C keeps
+    /// it, as Keep would, and only Esc discards one. Decided by the owner on
+    /// 2026-10-07 — Ctrl+C is the way out that always works, and leaving
+    /// should not throw away work that is on screen.
     fn finish(&mut self) {
         for slot in &mut self.slots {
             slot.panel.shutdown();
@@ -4909,6 +4915,41 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             text,
             "outside the mode a settled resize is written"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ctrl+C in arrange mode keeps the arrangement, as Keep would; only Esc
+    /// discards one. The owner's decision of 2026-10-07, pinned so a change to
+    /// the exit path cannot quietly reverse it.
+    #[test]
+    fn ctrl_c_in_arrange_mode_keeps_the_arrangement() {
+        let dir = std::env::temp_dir().join(format!("mirador-ctrlc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "[layout]\nrows = [\n  { height = 1, panels = [\n    { widget = \"clocks\",   width = 50 },\n    { widget = \"calendar\", width = 50 },\n  ] },\n]\n";
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let mut app = App::new(toml::from_str(text).unwrap()).unwrap();
+        app.write_layout_to(path.clone());
+
+        app.handle_key(key(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        let arranged = widths(&app);
+        assert_ne!(arranged, [50, 50], "the resize happened");
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        app.finish();
+
+        let written: crate::config::Config =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let saved: Vec<u16> = written.layout.rows[0]
+            .panels
+            .iter()
+            .map(|p| p.width)
+            .collect();
+        assert_eq!(
+            saved, arranged,
+            "the arrangement on screen is the one written"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
