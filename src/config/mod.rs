@@ -624,25 +624,32 @@ impl Config {
         {
             self.weather.location.clone_from(location);
         }
-        // Durations are clamped rather than dropped: the panel already bounds
-        // them, so an out-of-range figure means a hand-edited file and the
-        // nearest legal value is what was meant.
-        for (slot, saved) in [
-            (
-                &mut self.pomodoro.focus_minutes,
-                state.pomodoro_focus_minutes,
-            ),
-            (
-                &mut self.pomodoro.short_break_minutes,
-                state.pomodoro_short_break_minutes,
-            ),
-            (
-                &mut self.pomodoro.long_break_minutes,
-                state.pomodoro_long_break_minutes,
-            ),
-        ] {
+        // Durations are clamped rather than dropped: an out-of-range figure
+        // means a hand-edited file, and the nearest legal value is what was
+        // meant. Legal is what the panel's dial allows — up to `MAX_MINUTES`,
+        // or to the config's own length where that is longer — so a
+        // 240-minute phase shortened to 239 comes back as 239 rather than cut
+        // to the cap. The config's lengths are kept first, so the panel built
+        // from a remembered one still knows how far `+` may take it back.
+        let pomodoro = &mut self.pomodoro;
+        let configured = *pomodoro.as_configured.get_or_insert([
+            pomodoro.focus_minutes,
+            pomodoro.short_break_minutes,
+            pomodoro.long_break_minutes,
+        ]);
+        let slots = [
+            &mut pomodoro.focus_minutes,
+            &mut pomodoro.short_break_minutes,
+            &mut pomodoro.long_break_minutes,
+        ];
+        let saved = [
+            state.pomodoro_focus_minutes,
+            state.pomodoro_short_break_minutes,
+            state.pomodoro_long_break_minutes,
+        ];
+        for ((slot, saved), configured) in slots.into_iter().zip(saved).zip(configured) {
             if let Some(minutes) = saved {
-                *slot = minutes.clamp(1, crate::widgets::pomodoro::MAX_MINUTES);
+                *slot = minutes.clamp(1, crate::widgets::pomodoro::MAX_MINUTES.max(configured));
             }
         }
     }

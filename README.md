@@ -719,8 +719,16 @@ fill.
 
 `+` and `-` move the phase length *and* what is left of it together, so adding
 a minute eighteen minutes into a focus interval does not rewind you to the
-start. Changes last for the session; `[pomodoro]` decides where the timer
-starts.
+start. A change is remembered across restarts, and a phase set back to what
+`[pomodoro]` says is forgotten again. `+` stops at 180 minutes, or at a longer
+length set in `[pomodoro]`: such a phase is kept, `-` shortens it a minute at a
+time, and `+` takes it back up as far as the config's length.
+
+A running phase counts through sleep. Close the lid with ten minutes to go and
+open it an hour later, and that phase has ended — once, with one chime if you
+asked for one. The timer does not race through the phases you were away for:
+the next waits at its full length for a key, or with `auto_start` set begins
+from the moment you come back. A paused timer stays where you left it.
 
 **A chime is available and off by default**, because a dashboard you leave open
 all day has no business making noise you did not ask for. Set
@@ -823,8 +831,9 @@ full, in the border; and a line of detail: health, cycle count, power draw.
 Nothing is said twice. The cell grows with the panel and keeps its shape, and
 a panel too short or too narrow for an outline draws a bare meter with the
 figure beside it instead. Brass while there is
-plenty; amber below 20% and red below 10% only while running on the battery,
-since a low battery on mains is nothing to be told about. Below 10% and
+plenty, and while charging or full, which the label says; amber below 20% and
+red below 10% only while running on the battery, since a low battery on mains
+is nothing to be told about. Below 10% and
 discharging it is the one battery fact that gets worse if nobody acts, so the
 status bar says so.
 

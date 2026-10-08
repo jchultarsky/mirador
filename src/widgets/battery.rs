@@ -169,10 +169,11 @@ impl BatteryPanel {
 
     /// Brass while there is plenty; the signal colours only when the charge is
     /// low *and* the machine is running on it. A low battery on mains is
-    /// nothing to be told about.
+    /// nothing to be told about, and charging or full is told by the label:
+    /// the face stays brass, because a panel that turns green whenever the
+    /// laptop is plugged in spends a colour on the commonest state there is.
     fn colour(&self, reading: Reading, theme: &crate::theme::Theme) -> Color {
         match reading.flow {
-            Flow::Charging | Flow::Full => theme.success,
             Flow::Discharging if reading.charge_pct < self.config.alert_below_pct => theme.error,
             Flow::Discharging if reading.charge_pct < self.config.warn_below_pct => theme.warning,
             _ => theme.accent,
@@ -688,7 +689,7 @@ mod tests {
         );
         assert_eq!(
             p.colour(reading(7, Flow::Charging, None), &theme),
-            theme.success,
+            theme.accent,
             "low but charging is fine"
         );
         assert_eq!(
@@ -697,9 +698,79 @@ mod tests {
             "low on mains is nothing to shout about"
         );
         assert_eq!(
-            p.colour(reading(100, Flow::Full, None), &theme),
-            theme.success
+            p.colour(reading(80, Flow::Charging, None), &theme),
+            theme.accent,
+            "charging is told by the label, not by turning the face green"
         );
+        assert_eq!(
+            p.colour(reading(100, Flow::Full, None), &theme),
+            theme.accent,
+            "and so is full"
+        );
+    }
+
+    /// The face of a charging or full battery is brass, the way the module
+    /// says: the label, the fill and the figure all wear the accent, and no
+    /// cell anywhere is painted in the success colour. Asserted on the drawn
+    /// buffer rather than on `colour` alone, because the green this replaced
+    /// reached the screen through three separate spans.
+    #[test]
+    fn charging_and_full_are_told_by_the_label_and_the_face_stays_brass() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let theme = &config.theme;
+        assert_ne!(theme.success, theme.accent, "the test needs them apart");
+        let gradients = theme.gradients();
+        for (flow, label) in [(Flow::Charging, "CHARGING"), (Flow::Full, "FULL")] {
+            let mut p = panel(Some(reading(63, flow, Some(2520))));
+            let mut terminal = Terminal::new(TestBackend::new(34, 9)).unwrap();
+            terminal
+                .draw(|frame| {
+                    p.render(
+                        frame,
+                        frame.area(),
+                        RenderContext {
+                            theme,
+                            gradients: &gradients,
+                            focused: true,
+                            watch: &crate::watch::WatchLog::default(),
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let cells: Vec<_> = buffer.content().iter().collect();
+            let painted = |text: &str| -> Vec<Color> {
+                cells
+                    .iter()
+                    .filter(|c| text.contains(c.symbol()))
+                    .map(|c| c.fg)
+                    .collect()
+            };
+            let row = |y: u16| -> String { (0..34).map(|x| buffer[(x, y)].symbol()).collect() };
+            assert!(
+                (0..9).any(|y| row(y).trim() == label),
+                "{flow:?} names itself in the label"
+            );
+            assert!(
+                painted("█").iter().all(|&c| c == theme.accent) && !painted("█").is_empty(),
+                "{flow:?}: the fill is brass"
+            );
+            assert!(
+                painted("6").iter().all(|&c| c == theme.accent) && !painted("6").is_empty(),
+                "{flow:?}: the figure is brass"
+            );
+            let green: Vec<String> = (0..9)
+                .flat_map(|y| (0..34).map(move |x| (x, y)))
+                .filter(|&(x, y)| buffer[(x, y)].fg == theme.success)
+                .map(|(x, y)| format!("{:?} at {x},{y}", buffer[(x, y)].symbol()))
+                .collect();
+            assert!(
+                green.is_empty(),
+                "{flow:?} paints nothing in the success colour: {green:?}"
+            );
+        }
     }
 
     /// The bar for "will this get worse if nobody acts": running down and

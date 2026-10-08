@@ -358,6 +358,20 @@ pub struct PomodoroConfig {
     /// The panel's keys, where the reader has moved them. See
     /// [`crate::keymap::PanelKeymap`].
     pub keys: crate::keymap::KeysConfig,
+    /// The three lengths above as `[pomodoro]` itself gives them — focus,
+    /// short break, long break — kept by
+    /// [`crate::config::Config::apply_state`] before a remembered length
+    /// replaces them. Never read from the file.
+    ///
+    /// `+` climbs to [`crate::widgets::pomodoro::MAX_MINUTES`] or to the
+    /// config's own length, whichever is longer, and the second needs this: a
+    /// panel built from a remembered 239 cannot otherwise know the config says
+    /// 240, so a phase shortened by one `-` could never be put back and the
+    /// 239 would stay in the state file for ever (invariant 17). `None` when
+    /// nothing has been laid over the config, and the panel reads the lengths
+    /// it was built with.
+    #[serde(skip)]
+    pub as_configured: Option<[u64; 3]>,
 }
 
 impl Default for PomodoroConfig {
@@ -371,6 +385,7 @@ impl Default for PomodoroConfig {
             chime: false,
             chime_command: Vec::new(),
             keys: crate::keymap::KeysConfig::default(),
+            as_configured: None,
         }
     }
 }
