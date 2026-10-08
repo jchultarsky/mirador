@@ -281,6 +281,24 @@ pub struct StocksPanel {
     config: StocksConfig,
     watchlist: Watchlist,
     board: Arc<Mutex<Board>>,
+    /// The board as it stood at generation `shown_at`, which is what every
+    /// frame draws.
+    ///
+    /// `render` used to clone the whole board under the lock on every frame —
+    /// each symbol's quote with its intraday series, at one frame a second,
+    /// for numbers that change once a minute. That is work in proportion to
+    /// the watchlist rather than the screen, the mistake `agenda` and `news`
+    /// already made and fixed the same way: copy when the generation moves.
+    shown: Board,
+    /// The generation `shown` was copied at. Its own, not `seen`: that one is
+    /// `tick`'s, and decides whether to draw rather than what.
+    shown_at: u64,
+    /// Each row of `shown` as a sparkline, and the width they were drawn at.
+    ///
+    /// Drawing one averages its whole series, so it is done once for each
+    /// quote that lands and each width the panel is drawn at, not on every
+    /// frame. Emptied whenever `shown` is replaced.
+    sparks: Option<(u16, Vec<String>)>,
     request: Arc<Mutex<Request>>,
     mode: Mode,
     list_state: ListState,
@@ -291,7 +309,8 @@ pub struct StocksPanel {
     /// when nothing has failed — a fetch thread that quietly stopped and a
     /// laptop resumed from sleep both look like success from here.
     stale_after: Duration,
-    /// Bumped by the fetch thread every time it writes a quote or an error.
+    /// Bumped every time the board is written: by the fetch thread for a
+    /// quote or an error, and by `reseed_board` for an edit to the watchlist.
     ///
     /// See `WeatherPanel::generation`: the board is a last-value-wins slot
     /// behind a mutex, so nothing else tells the panel whether it moved.
@@ -377,6 +396,7 @@ impl StocksPanel {
             .iter()
             .map(|s| (s.clone(), Cell::default()))
             .collect();
+        let shown = board.clone();
         let board = Arc::new(Mutex::new(board));
         let request = Arc::new(Mutex::new(Request {
             symbols: watchlist.symbols().to_vec(),
@@ -414,6 +434,9 @@ impl StocksPanel {
             config,
             watchlist,
             board,
+            shown,
+            shown_at: 0,
+            sparks: None,
             request,
             mode: Mode::List,
             list_state: ListState::default(),
@@ -439,6 +462,37 @@ impl StocksPanel {
         match self.board.lock() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    /// Copy the board into what the frames draw if it has moved since the
+    /// last copy, and forget the sparklines drawn from the old one.
+    ///
+    /// The generation is read before the board, so a write that lands in
+    /// between is copied early and copied again next frame, never missed.
+    fn catch_up(&mut self) {
+        let now = self.generation.load(Ordering::Acquire);
+        if now != self.shown_at {
+            self.shown = self.snapshot();
+            self.shown_at = now;
+            self.sparks = None;
+        }
+    }
+
+    /// Draw each shown row's sparkline at `width` into `sparks`, unless the
+    /// board and the width are both what they were when it was last done.
+    fn draw_sparklines(&mut self, width: u16) {
+        if self
+            .sparks
+            .as_ref()
+            .is_none_or(|(drawn, _)| *drawn != width)
+        {
+            let lines = self
+                .shown
+                .iter()
+                .map(|(_, cell)| spark_text(cell, width))
+                .collect();
+            self.sparks = Some((width, lines));
         }
     }
 
@@ -470,7 +524,12 @@ impl StocksPanel {
         crate::selection::up(&mut self.list_state, n, len);
     }
 
-    /// Tell the fetch thread what to poll, and ask it to start now.
+    /// Tell the fetch thread what to poll, and whether to start now.
+    ///
+    /// A request is added to whatever is already waiting, never put in its
+    /// place: removing a symbol needs no fetch, and it used to say so by
+    /// clearing the flag, which also threw away an `r` pressed a moment
+    /// earlier and left the board waiting out the whole interval.
     fn publish_request(&self, refresh: bool) {
         let symbols = self.watchlist.symbols().to_vec();
         let mut guard = match self.request.lock() {
@@ -478,29 +537,36 @@ impl StocksPanel {
             Err(poisoned) => poisoned.into_inner(),
         };
         guard.symbols = symbols;
-        guard.refresh = refresh;
+        guard.refresh |= refresh;
     }
 
     /// Seed the board so a newly added symbol shows as loading rather than
     /// vanishing until the next poll completes.
+    ///
+    /// A write to the board like any other, so it moves the generation as
+    /// `update` does: the frames draw a copy, and nothing else would tell
+    /// them the watchlist changed before the next fetch landed.
     fn reseed_board(&self) {
-        let mut guard = match self.board.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let existing = std::mem::take(&mut *guard);
-        *guard = self
-            .watchlist
-            .symbols()
-            .iter()
-            .map(|symbol| {
-                let previous = existing
-                    .iter()
-                    .find(|(s, _)| s == symbol)
-                    .map(|(_, cell)| cell.clone());
-                (symbol.clone(), previous.unwrap_or_default())
-            })
-            .collect();
+        {
+            let mut guard = match self.board.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let existing = std::mem::take(&mut *guard);
+            *guard = self
+                .watchlist
+                .symbols()
+                .iter()
+                .map(|symbol| {
+                    let previous = existing
+                        .iter()
+                        .find(|(s, _)| s == symbol)
+                        .map(|(_, cell)| cell.clone());
+                    (symbol.clone(), previous.unwrap_or_default())
+                })
+                .collect();
+        }
+        self.generation.fetch_add(1, Ordering::Release);
     }
 
     fn set_status(&mut self, message: impl Into<String>) {
@@ -597,7 +663,11 @@ impl StocksPanel {
         KeyOutcome::Consumed
     }
 
-    /// One row of the board.
+    /// One row of the board, drawing its own sparkline `spark` cells wide.
+    ///
+    /// The board's rows take theirs from [`StocksPanel::draw_sparklines`];
+    /// this is the same row for a test that has no panel to cache it in.
+    #[cfg(test)]
     fn row(
         symbol: &str,
         cell: &Cell,
@@ -607,6 +677,20 @@ impl StocksPanel {
         grid: &Grid,
         spark: u16,
     ) -> Line<'static> {
+        let drawn = spark_text(cell, spark);
+        Self::row_with(symbol, cell, stale, theme, gradients, grid, drawn)
+    }
+
+    /// One row of the board, given its sparkline already drawn.
+    fn row_with(
+        symbol: &str,
+        cell: &Cell,
+        stale: bool,
+        theme: &Theme,
+        gradients: &Gradients,
+        grid: &Grid,
+        spark: String,
+    ) -> Line<'static> {
         let symbol_span = Span::styled(
             symbol.to_string(),
             Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
@@ -614,7 +698,7 @@ impl StocksPanel {
 
         // Never an empty cell: a blank column reads as a broken panel, where
         // an explicit `…` or `–` reads as a fact about the data.
-        let (last, chg, pct, spark_text, tone) = match &cell.quote {
+        let (last, chg, pct, tone) = match &cell.quote {
             // Nothing has ever landed for this symbol. Only here is the row
             // genuinely empty — a failure with a price behind it keeps the
             // price.
@@ -622,14 +706,12 @@ impl StocksPanel {
                 "–".to_string(),
                 "–".to_string(),
                 "–".to_string(),
-                String::new(),
                 theme.error,
             ),
             None => (
                 "…".to_string(),
                 "…".to_string(),
                 "…".to_string(),
-                String::new(),
                 theme.muted,
             ),
             Some((q, _)) => {
@@ -652,11 +734,6 @@ impl StocksPanel {
                     format!("{:.2}", q.price),
                     format!("{change:+.2}"),
                     format!("{:+.2}%", q.change_pct()),
-                    if spark > 0 {
-                        sparkline(&q.series, spark as usize)
-                    } else {
-                        String::new()
-                    },
                     tone,
                 )
             }
@@ -673,7 +750,7 @@ impl StocksPanel {
             Span::styled(last, value_style),
             Span::styled(chg, Style::default().fg(tone)),
             Span::styled(pct, Style::default().fg(tone)),
-            Span::styled(spark_text, Style::default().fg(tone)),
+            Span::styled(spark, Style::default().fg(tone)),
         ])
     }
 
@@ -746,7 +823,27 @@ impl StocksPanel {
     }
 }
 
-/// Poll every symbol, wait, repeat.
+/// A cell's sparkline, `width` cells wide, or nothing while it has no quote.
+fn spark_text(cell: &Cell, width: u16) -> String {
+    cell.quote
+        .as_ref()
+        .map(|(quote, _)| sparkline(&quote.series, usize::from(width)))
+        .unwrap_or_default()
+}
+
+/// How often the fetch thread may ask, and how long it waits between asks.
+#[derive(Debug, Clone, Copy)]
+struct Pace {
+    /// The wait between two rounds when nobody asks for one sooner.
+    interval: Duration,
+    /// The pause between two symbols in one round.
+    stagger: Duration,
+    /// The least time between the starts of two rounds, however they are
+    /// asked for.
+    floor: Duration,
+}
+
+/// Poll every symbol, wait, repeat — never sooner than a minute apart.
 fn fetch_loop(
     source: &dyn QuoteSource,
     board: &Arc<Mutex<Board>>,
@@ -755,6 +852,25 @@ fn fetch_loop(
     generation: &Arc<AtomicU64>,
     interval: Duration,
     stagger: Duration,
+) {
+    let floor = Duration::from_secs(MIN_SECONDS_BETWEEN_POLLS);
+    let pace = Pace {
+        interval,
+        stagger,
+        floor,
+    };
+    poll_rounds(source, board, request, stop, generation, pace);
+}
+
+/// The loop itself, with the floor as a parameter so a test can watch two
+/// rounds without waiting two minutes for them.
+fn poll_rounds(
+    source: &dyn QuoteSource,
+    board: &Arc<Mutex<Board>>,
+    request: &Arc<Mutex<Request>>,
+    stop: &Arc<AtomicBool>,
+    generation: &Arc<AtomicU64>,
+    pace: Pace,
 ) {
     // The floor is enforced here rather than only in the interval, because `r`
     // and a watchlist edit both break the wait early — so a held `r` re-polled
@@ -765,13 +881,23 @@ fn fetch_loop(
     //
     // A wake that arrives too soon waits out the remainder instead of being
     // dropped: the user asked for a refresh and should get one, just not now.
-    let floor = Duration::from_secs(MIN_SECONDS_BETWEEN_POLLS);
     let mut last_poll: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        // A refresh asked for while the floor is waited out is answered by
+        // the round the wait ends in, so the wait takes the request as it
+        // goes without ending early. It used to be left standing, so the
+        // interval's wait after that round woke at once and the whole
+        // watchlist was asked for again a minute later: one `r`, or one
+        // added symbol, cost two rounds. One that lands after the wait's
+        // last look is left for the next wait, which costs a round and loses
+        // nothing.
         if let Some(at) = last_poll
-            && let Some(remaining) = floor.checked_sub(at.elapsed())
-            && crate::poll::wait(remaining, stop, || false) == crate::poll::Wake::Stop
+            && let Some(remaining) = pace.floor.checked_sub(at.elapsed())
+            && crate::poll::wait(remaining, stop, || {
+                take_refresh(request);
+                false
+            }) == crate::poll::Wake::Stop
         {
             return;
         }
@@ -792,20 +918,23 @@ fn fetch_loop(
                 return;
             }
             // Spread the requests out rather than firing them together.
-            std::thread::sleep(stagger);
+            std::thread::sleep(pace.stagger);
         }
 
-        let woke = crate::poll::wait(interval, stop, || {
-            let mut guard = match request.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            std::mem::replace(&mut guard.refresh, false)
-        });
+        let woke = crate::poll::wait(pace.interval, stop, || take_refresh(request));
         if woke == crate::poll::Wake::Stop {
             return;
         }
     }
+}
+
+/// Whether a refresh was asked for, leaving the request clear.
+fn take_refresh(request: &Mutex<Request>) -> bool {
+    let mut guard = match request.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    std::mem::replace(&mut guard.refresh, false)
 }
 
 /// Merge one symbol's result into the shared board, ignoring symbols that were
@@ -978,12 +1107,12 @@ impl Panel for StocksPanel {
             return;
         }
 
-        let board = self.snapshot();
+        self.catch_up();
 
         // Computed before the split, because whether the row exists is decided
         // by whether it has anything to say. On a calm day it does not, and the
         // board gets the row.
-        let status = self.status_line(theme, &board, area.width);
+        let status = self.status_line(theme, &self.shown, area.width);
         let rows = Layout::vertical([
             Constraint::Length(1),                           // header
             Constraint::Min(1),                              // board
@@ -1024,18 +1153,24 @@ impl Panel for StocksPanel {
         );
         frame.render_widget(Paragraph::new(grid.header(theme)), header_area);
 
-        let items: Vec<ListItem> = board
+        // Staleness is read here rather than kept with the rows: it is the one
+        // part of a row that changes with nothing having been fetched.
+        self.draw_sparklines(spark);
+        let sparks = self.sparks.as_ref().map_or(&[][..], |(_, lines)| lines);
+        let items: Vec<ListItem> = self
+            .shown
             .iter()
-            .map(|(symbol, cell)| {
+            .zip(sparks)
+            .map(|((symbol, cell), drawn)| {
                 let stale = cell.is_stale(self.stale_after);
-                ListItem::new(Self::row(
+                ListItem::new(Self::row_with(
                     symbol,
                     cell,
                     stale,
                     theme,
                     ctx.gradients,
                     &grid,
-                    spark,
+                    drawn.clone(),
                 ))
             })
             .collect();
@@ -1825,6 +1960,237 @@ mod tests {
             calls.load(Ordering::Relaxed),
             1,
             "the rate floor was bypassed by a held refresh key"
+        );
+    }
+
+    /// Answers at once and counts its calls, and asks for a refresh during
+    /// the first, the way an `r` pressed while a round is fetching does — so
+    /// the wait after that round wakes, and the floor is waited out.
+    struct Rounds {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        request: Arc<Mutex<Request>>,
+    }
+
+    impl QuoteSource for Rounds {
+        fn name(&self) -> &'static str {
+            "rounds"
+        }
+
+        fn fetch(&self, symbol: &str) -> anyhow::Result<Quote> {
+            // Asked before the call is counted, so a count of one means the
+            // request is already standing.
+            if self.calls.load(Ordering::SeqCst) == 0 {
+                self.request.lock().unwrap().refresh = true;
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Quote {
+                symbol: symbol.to_string(),
+                price: 1.0,
+                previous_close: 1.0,
+                currency: None,
+                series: vec![],
+                delayed: false,
+            })
+        }
+    }
+
+    /// A refresh asked for while the floor is waited out is answered by the
+    /// round the wait ends in. It was left standing as well, so the wait
+    /// after that round woke at once and asked for every symbol again a
+    /// minute later: one `r`, or one added symbol, cost two rounds against a
+    /// source that gates on IP reputation.
+    ///
+    /// Two seconds of the loop with a floor of 600ms and an interval of an
+    /// hour, so every round after the first is one somebody asked for. The
+    /// first asks for the second, which proves a refresh asked for mid-round
+    /// still gets its round; the `r` under test is pressed once the wait
+    /// after it has taken that request, which is to say during the floor.
+    /// Its own round is the second. Before, it had a third, at 1.5s.
+    #[test]
+    fn a_refresh_asked_for_during_the_floor_is_answered_once() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let request = Arc::new(Mutex::new(Request {
+            symbols: vec!["AAPL".into()],
+            refresh: false,
+        }));
+        let source = Rounds {
+            calls: Arc::clone(&calls),
+            request: Arc::clone(&request),
+        };
+        let board = Arc::new(Mutex::new(vec![("AAPL".to_string(), Cell::default())]));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let (counted, pressing, flag) =
+            (Arc::clone(&calls), Arc::clone(&request), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let started = Instant::now();
+            while counted.load(Ordering::SeqCst) == 0 || pressing.lock().unwrap().refresh {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            pressing.lock().unwrap().refresh = true;
+            std::thread::sleep(Duration::from_secs(2).saturating_sub(started.elapsed()));
+            flag.store(true, Ordering::Relaxed);
+        });
+
+        let pace = Pace {
+            interval: Duration::from_hours(1),
+            stagger: Duration::ZERO,
+            floor: Duration::from_millis(600),
+        };
+        poll_rounds(
+            &source,
+            &board,
+            &request,
+            &stop,
+            &Arc::new(AtomicU64::new(0)),
+            pace,
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "one round for the refresh asked mid-round, and none more for the one asked during the floor"
+        );
+    }
+
+    /// Stop the panel's fetch thread and wait for it to go, so the board, the
+    /// generation and the request move only when a test moves them.
+    fn stop_fetching(p: &StocksPanel) {
+        p.stop.store(true, Ordering::Relaxed);
+        let until = Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&p.request) > 1 {
+            assert!(Instant::now() < until, "the fetch thread never stopped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The panel drawn at `width`x`height`, one string per row.
+    fn screen(p: &mut StocksPanel, width: u16, height: u16) -> String {
+        use crate::panel::RenderContext;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let theme = Theme::default();
+        let gradients = theme.gradients();
+        let mut t = Terminal::new(TestBackend::new(width, height)).expect("backend");
+        t.draw(|f| {
+            p.render(
+                f,
+                Rect::new(0, 0, width, height),
+                RenderContext {
+                    theme: &theme,
+                    gradients: &gradients,
+                    focused: true,
+                    watch: &crate::watch::WatchLog::default(),
+                },
+            );
+        })
+        .expect("draws");
+        let buffer = t.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Removing a symbol needs no fetch, and said so by clearing the request
+    /// flag — which also threw away an `r` pressed a moment before, so the
+    /// board waited out the whole interval for the refresh it was asked for.
+    #[test]
+    fn removing_a_symbol_does_not_cancel_a_refresh_already_asked_for() {
+        let (mut p, _g) = panel("keep-refresh", &["AAPL", "MSFT"]);
+        // The thread answers a refresh by clearing the flag; with it gone,
+        // the flag says only what the keys asked for.
+        stop_fetching(&p);
+        press(&mut p, KeyCode::Char('r'));
+        press(&mut p, KeyCode::Char('d'));
+        press(&mut p, KeyCode::Char('y'));
+
+        let guard = p.request.lock().unwrap();
+        assert_eq!(guard.symbols, ["MSFT"], "the removal reached the thread");
+        assert!(
+            guard.refresh,
+            "and the refresh asked for before it waits on"
+        );
+    }
+
+    /// The frames draw a copy of the board, taken when its generation moves.
+    /// An edit to the watchlist writes the board without fetching anything,
+    /// so it moves the generation too — otherwise the copy goes on showing
+    /// the list from before the edit until a quote lands, and with the
+    /// thread stopped here, none ever does.
+    #[test]
+    fn an_edit_to_the_watchlist_is_on_the_next_frame() {
+        // The first word of each row under the header: the symbols on the
+        // board, and the first word of the status line, which is not one.
+        let board = |p: &mut StocksPanel| -> Vec<String> {
+            screen(p, 60, 8)
+                .lines()
+                .skip(1)
+                .filter_map(|row| row.trim_start_matches('▸').split_whitespace().next())
+                .map(str::to_string)
+                .collect()
+        };
+        let (mut p, _g) = panel("next-frame", &["AAPL"]);
+        stop_fetching(&p);
+        assert_eq!(board(&mut p), ["AAPL"]);
+
+        press(&mut p, KeyCode::Char('a'));
+        type_str(&mut p, "MSFT");
+        press(&mut p, KeyCode::Enter);
+        let added = board(&mut p);
+        assert!(added.contains(&"MSFT".to_string()), "added: {added:?}");
+
+        press(&mut p, KeyCode::Char('g'));
+        press(&mut p, KeyCode::Char('d'));
+        press(&mut p, KeyCode::Char('y'));
+        let removed = board(&mut p);
+        assert!(
+            !removed.contains(&"AAPL".to_string()),
+            "removed: {removed:?}"
+        );
+    }
+
+    /// Drawing a sparkline averages the symbol's whole series, and it was
+    /// done for every row on every frame, from a board cloned whole for the
+    /// purpose. Both happen once a quote lands now, and frames in between
+    /// draw what was kept.
+    #[test]
+    fn a_sparkline_is_drawn_once_per_quote_not_once_per_frame() {
+        let (mut p, _g) = panel("sparks", &["AAPL"]);
+        stop_fetching(&p);
+
+        // Mark what the first frame kept: a frame that draws the sparklines
+        // again replaces the mark, and one that reuses them draws it.
+        screen(&mut p, 60, 6);
+        let (_, lines) = p.sparks.as_mut().expect("the first frame drew them");
+        lines[0] = "@@@@".into();
+        let reused = screen(&mut p, 60, 6);
+        assert!(reused.contains("@@@@"), "drawn again:\n{reused}");
+
+        let series = vec![1.0, 3.0, 2.0, 5.0, 4.0];
+        let quote = Quote {
+            symbol: "AAPL".into(),
+            price: 4.0,
+            previous_close: 1.0,
+            currency: None,
+            series: series.clone(),
+            delayed: false,
+        };
+        update(&p.board, &p.generation, "AAPL", Ok(quote));
+        let landed = screen(&mut p, 60, 6);
+        assert!(
+            !landed.contains("@@@@"),
+            "a new quote draws them:\n{landed}"
+        );
+        let (width, lines) = p.sparks.as_ref().expect("drawn for the new quote");
+        assert_eq!(
+            lines[0],
+            sparkline(&series, usize::from(*width)),
+            "from the quote that landed, not the one before it"
         );
     }
 

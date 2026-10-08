@@ -71,6 +71,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal cut them at every size, with nothing to show the rest was
   missing. They now end in `…`, and so does the usual line on a narrow
   terminal.
+- **One refresh of the watchlist asks for each symbol once.** An `r`, or an
+  added symbol, while the markets panel waited out the minute it leaves
+  between rounds was answered by the next round and then again a minute
+  later, so it cost two requests a symbol against a source that blocks by
+  address. Removing a symbol also threw away an `r` pressed
+  just before it, and the board waited out the whole interval instead.
+- **The markets panel copies its board when a price lands, not every
+  frame.** It cloned every quote with its intraday series once a second, for
+  numbers that change once a minute, and redrew each sparkline from the
+  whole series. Both happen when a quote lands now. A quote also keeps at
+  most a thousand intraday prices, averaged down rather than cut: the
+  request asks for 78, and nothing stopped an answer carrying two million.
+- **A long task list builds only the rows on screen.** Every task in the
+  list was turned into a row on every frame, through an index of the whole
+  store rebuilt each time, for a panel that drew the twenty that fit.
+  Scrolling, the selection and clicks are as they were.
+- **The task form's placeholders say when they are cut.** In a form narrower
+  than about 27 columns, `what needs doing` was cut by the terminal to a
+  whole-looking `what needs d`. The placeholders now end in `…` where they
+  do not fit.
 
 ## [1.20.0] - 2026-10-07
 
