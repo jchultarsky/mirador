@@ -219,7 +219,7 @@ pub fn parse_chart(body: &str) -> Result<Quote> {
     let series = result
         .indicators
         .and_then(|i| i.quote.into_iter().next())
-        .map(|q| q.close.into_iter().flatten().collect())
+        .map(|q| bounded(q.close.into_iter().flatten().collect()))
         .unwrap_or_default();
 
     Ok(Quote {
@@ -230,6 +230,30 @@ pub fn parse_chart(body: &str) -> Result<Quote> {
         series,
         delayed: false,
     })
+}
+
+/// The most intraday samples a quote keeps.
+///
+/// The chart asked for is a day at five-minute intervals, which is 78 points,
+/// and a day of one-minute bars would be 390; the markets panel draws its
+/// sparkline twelve cells wide at most. Nothing bounded it before, so a body
+/// at `ureq`'s ten-megabyte cap
+/// could hold two million samples, kept resident for every symbol until the
+/// next fetch and walked again each time a sparkline was drawn from them — the
+/// unbounded headline in `feed`, reached through a number instead of a string.
+const MAX_SERIES: usize = 1_000;
+
+/// `series`, averaged down to [`MAX_SERIES`] samples if it is longer.
+///
+/// Averaged rather than cut: the sparkline is the whole day, so keeping the
+/// first thousand samples would draw a morning beside the latest price, and
+/// keeping the last thousand would draw an afternoon under a column headed
+/// `today`. Every genuine series is far shorter and comes back untouched.
+fn bounded(series: Vec<f64>) -> Vec<f64> {
+    if series.len() <= MAX_SERIES {
+        return series;
+    }
+    bucket_means(&series, MAX_SERIES).collect()
 }
 
 impl QuoteSource for YahooChart {
@@ -438,19 +462,10 @@ pub fn sparkline(series: &[f64], width: usize) -> String {
     let high = series.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let span = high - low;
 
-    (0..width)
-        .map(|cell| {
-            // Bucket the samples so the whole series is represented however
-            // narrow the column is, rather than showing only the first `width`
-            // of them.
-            let start = cell * series.len() / width;
-            let end = (((cell + 1) * series.len()) / width).max(start + 1);
-            let bucket = &series[start.min(series.len() - 1)..end.min(series.len())];
-            if bucket.is_empty() {
-                return BLOCKS[0];
-            }
-            let mean = bucket.iter().sum::<f64>() / bucket.len() as f64;
-
+    // Bucket the samples so the whole series is represented however narrow
+    // the column is, rather than showing only the first `width` of them.
+    bucket_means(series, width)
+        .map(|mean| {
             if span.abs() < f64::EPSILON {
                 return BLOCKS[BLOCKS.len() / 2];
             }
@@ -464,6 +479,23 @@ pub fn sparkline(series: &[f64], width: usize) -> String {
             BLOCKS[index.min(BLOCKS.len() - 1)]
         })
         .collect()
+}
+
+/// The mean of each of the `n` runs `series` is cut into, oldest first.
+///
+/// Shared by the sparkline and by [`bounded`], so a series averaged down at
+/// parse is cut along the same lines a sparkline cuts it. Every sample lands
+/// in exactly one run when the series is longer than `n`; when it is shorter,
+/// a run repeats a sample rather than coming out empty, so a short series
+/// still fills every cell. `series` must not be empty.
+fn bucket_means(series: &[f64], n: usize) -> impl Iterator<Item = f64> + '_ {
+    let len = series.len();
+    (0..n).map(move |run| {
+        let start = run * len / n;
+        let end = (((run + 1) * len) / n).max(start + 1);
+        let bucket = &series[start.min(len - 1)..end.min(len)];
+        bucket.iter().sum::<f64>() / bucket.len() as f64
+    })
 }
 
 #[cfg(test)]
@@ -683,6 +715,46 @@ mod tests {
         let q = parse_chart(body).unwrap();
         assert!(q.series.is_empty(), "{:?}", q.series);
         assert!((q.change() - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// The chart's samples are somebody else's numbers, and nothing bounded
+    /// how many were kept: the request asks for 78, and a body at `ureq`'s cap
+    /// holds two million, resident for every symbol and walked by every
+    /// sparkline drawn from them. Averaged down rather than cut, so the line
+    /// still runs from the open to the close.
+    #[test]
+    fn a_series_longer_than_any_real_day_is_averaged_down_to_the_bound() {
+        let rising: Vec<String> = (0..100_000).map(|i| format!("{i}.0")).collect();
+        let body = SAMPLE.replace(
+            "[211.0, null, 212.5, 213.5]",
+            &format!("[{}]", rising.join(",")),
+        );
+        let q = parse_chart(&body).unwrap();
+        assert_eq!(q.series.len(), MAX_SERIES, "bounded where it is read");
+        let (first, last) = (q.series[0], q.series[MAX_SERIES - 1]);
+        assert!(
+            first < 100.0 && last > 99_900.0,
+            "the whole day, not the first or last of it: {first} .. {last}"
+        );
+        assert!(
+            q.series.windows(2).all(|pair| pair[0] < pair[1]),
+            "and still in the order it was traded"
+        );
+    }
+
+    /// The bound is far above anything a real chart carries, so a real one
+    /// is kept sample for sample: a day of one-minute bars, five times the
+    /// five-minute series the request asks for.
+    #[test]
+    fn a_real_days_series_is_kept_sample_for_sample() {
+        // Quarters, which a float holds exactly, so the comparison is exact.
+        let day: Vec<f64> = (0..390).map(|i| 200.0 + f64::from(i) * 0.25).collect();
+        let close: Vec<String> = day.iter().map(f64::to_string).collect();
+        let body = SAMPLE.replace(
+            "[211.0, null, 212.5, 213.5]",
+            &format!("[{}]", close.join(",")),
+        );
+        assert_eq!(parse_chart(&body).unwrap().series, day);
     }
 
     #[test]

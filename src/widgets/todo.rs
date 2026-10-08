@@ -1050,8 +1050,12 @@ impl TodoPanel {
                 } else {
                     Style::default().fg(theme.muted)
                 };
+                // Cut to the field with its `…` (invariant 19). It was drawn at
+                // its natural width, and a form narrower than about 27
+                // columns let the terminal cut it: `what needs d`, which
+                // reads as a word nobody wrote.
                 let display = if visible.is_empty() && !active {
-                    placeholder(*field).to_string()
+                    truncate(placeholder(*field), usize::from(value_area.width))
                 } else {
                     visible
                 };
@@ -1345,17 +1349,20 @@ impl Panel for TodoPanel {
                 rows[2],
             );
         } else {
-            // `TaskStore::get` is a linear scan, so mapping the whole view
-            // through it was O(view x store) on every frame — over a store that
-            // never drops a completed task, so it grows monotonically with
-            // months of use. One pass to index, then a lookup per row.
-            let by_id: std::collections::HashMap<u64, &Task> =
-                self.store.tasks().iter().map(|t| (t.id, t)).collect();
-            let visible: Vec<&Task> = self
-                .view
-                .iter()
-                .filter_map(|id| by_id.get(id).copied())
-                .collect();
+            // Only the rows the pane can show are built. Every task in the
+            // view used to become a `ListItem` — a gauge, a tag string, a due
+            // label and a line of spans each — for a `List` that then drew
+            // the twenty that fit, so a frame cost as many allocations as
+            // there were open tasks rather than rows on screen. The window
+            // is the one `List` would have scrolled to; it is worked out
+            // first, and the list is handed only what is in it.
+            let (shown, selected) = window(
+                self.list_state.selected(),
+                self.list_state.offset(),
+                self.view.len(),
+                usize::from(rows[2].height),
+            );
+            let visible = tasks_in_order(self.store.tasks(), &self.view[shown.clone()]);
 
             // The list is indented by the selection marker, so the grid gets
             // what is left and the header is indented to match.
@@ -1390,7 +1397,17 @@ impl Panel for TodoPanel {
                 frame.render_widget(Paragraph::new(grid.header(theme)), header_area);
             }
 
-            frame.render_stateful_widget(list, rows[2], &mut self.list_state);
+            // A list with no room draws nothing and, as `List` itself does,
+            // leaves the scroll where it was.
+            if !rows[2].is_empty() {
+                let mut drawn =
+                    ListState::default().with_selected(selected.map(|at| at - shown.start));
+                frame.render_stateful_widget(list, rows[2], &mut drawn);
+                // Kept as `List` would have kept it, so the next frame scrolls
+                // from here and a click maps through the rows on screen.
+                self.list_state.select(selected);
+                *self.list_state.offset_mut() = shown.start;
+            }
         }
 
         if show_notes
@@ -1498,6 +1515,54 @@ fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// The rows of a list `len` long that a `List` `height` rows high shows from
+/// a scroll at `offset`, and the selection clamped into the list.
+///
+/// This is `List`'s own arithmetic for items one row high with no scroll
+/// padding, which is every task row: the scroll stays put while the
+/// selection is in view, moves just far enough to bring it back when it is
+/// not, and is never pulled back to fill the rows below a short tail. It is
+/// copied rather than called because `List` works it out only once it holds
+/// every item, and building every item is the cost this avoids.
+/// `the_window_is_the_one_list_would_have_scrolled_to` holds the copy to the
+/// original.
+fn window(
+    selected: Option<usize>,
+    offset: usize,
+    len: usize,
+    height: usize,
+) -> (std::ops::Range<usize>, Option<usize>) {
+    let last = len.saturating_sub(1);
+    let selected = selected.map(|at| at.min(last));
+    let offset = offset.min(last);
+    let first = match selected {
+        Some(at) if at < offset => at,
+        Some(at) if at >= offset + height => at + 1 - height,
+        _ => offset,
+    };
+    (first..len.min(first + height), selected)
+}
+
+/// The tasks with these ids, in this order, found in one pass over the store.
+///
+/// `TaskStore::get` is a linear scan, so a lookup per row costs a pass each.
+/// The view used to be mapped through an index of the whole store built on
+/// every frame, which is an allocation in proportion to a store that never
+/// drops a completed task. This allocates in proportion to `ids`, which is
+/// a screen of rows. Ids are unique — the store renumbers a repeated one as
+/// it reads the file — so each is found once.
+fn tasks_in_order<'a>(tasks: &'a [Task], ids: &[u64]) -> Vec<&'a Task> {
+    let mut wanted: Vec<(u64, usize)> = ids.iter().copied().zip(0..).collect();
+    wanted.sort_unstable();
+    let mut found: Vec<Option<&Task>> = vec![None; ids.len()];
+    for task in tasks {
+        if let Ok(at) = wanted.binary_search_by_key(&task.id, |&(id, _)| id) {
+            found[wanted[at].1] = Some(task);
+        }
+    }
+    found.into_iter().flatten().collect()
 }
 
 /// Placeholder text for an empty, unfocused field.
@@ -2559,5 +2624,147 @@ mod tests {
             KeyOutcome::Ignored,
             "Tab must reach the app so focus can move"
         );
+    }
+
+    /// The list builds only the rows it can show, so the window has to be
+    /// worked out before `List` sees any of them — which means copying the
+    /// arithmetic `List` uses. Every length, height, scroll and selection
+    /// small enough to enumerate, against `List` itself: the scroll it
+    /// leaves, the selection it settles on, and the rows it draws.
+    #[test]
+    fn the_window_is_the_one_list_would_have_scrolled_to() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        for len in 1..=8usize {
+            for height in 1..=5u16 {
+                for offset in 0..=10 {
+                    for selected in std::iter::once(None).chain((0..=9).map(Some)) {
+                        let list = List::new((0..len).map(|i| ListItem::new(i.to_string())));
+                        let mut state = ListState::default()
+                            .with_offset(offset)
+                            .with_selected(selected);
+                        let mut terminal = Terminal::new(TestBackend::new(4, height)).unwrap();
+                        terminal
+                            .draw(|frame| {
+                                frame.render_stateful_widget(list, frame.area(), &mut state);
+                            })
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let drawn: Vec<usize> = (0..height)
+                            .filter_map(|y| buffer[(0, y)].symbol().parse().ok())
+                            .collect();
+
+                        let case =
+                            format!("{len} long, {height} high, from {offset} with {selected:?}");
+                        let (shown, chosen) = window(selected, offset, len, usize::from(height));
+                        assert_eq!(shown.start, state.offset(), "the scroll: {case}");
+                        assert_eq!(chosen, state.selected(), "the selection: {case}");
+                        assert_eq!(drawn, shown.collect::<Vec<_>>(), "the rows: {case}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Building only the rows on screen means `List` is handed a window and
+    /// never sees the scroll, so the panel keeps it. Walk a list three
+    /// screens long down and back: the marked row is always the selected
+    /// task, and a click always lands on the task under it — a scroll left
+    /// at the top maps a click on the last screen to the first. Which task
+    /// is under the row is read off the screen *before* the click: drawn
+    /// after it, the frame scrolls to whatever was selected, and any task at
+    /// all would look like the one clicked.
+    #[test]
+    fn a_long_list_scrolls_and_clicks_as_it_always_did() {
+        let (mut p, _guard) = panel("window");
+        for i in 0..30 {
+            add_task(&mut p, &format!("Task {i:02}"));
+        }
+        press(&mut p, KeyCode::Char('g'));
+
+        let selected_title = |p: &TodoPanel| {
+            let id = p.selected_id().expect("a selection");
+            p.store.get(id).expect("the task").title.clone()
+        };
+        let keys = std::iter::repeat_n(KeyCode::Char('j'), 29)
+            .chain(std::iter::repeat_n(KeyCode::Char('k'), 29));
+        for (step, code) in keys.enumerate() {
+            press(&mut p, code);
+            let screen = screen_of(&mut p, 40, 12);
+            let title = selected_title(&p);
+            let marked = screen
+                .lines()
+                .find(|row| row.contains('▸'))
+                .unwrap_or_else(|| panic!("{step}: a row is marked:\n{screen}"));
+            assert!(marked.contains(&title), "{step}: {title}:\n{screen}");
+        }
+
+        press(&mut p, KeyCode::Char('G'));
+        let before = screen_of(&mut p, 40, 12);
+        let area = p.list_area.expect("the list was drawn");
+        let first_on_screen = p.list_state.offset();
+        assert!(first_on_screen > 0, "the last screen is scrolled");
+        // Below the top row, so a click that forgets where the list starts on
+        // screen misses as surely as one that forgets the scroll.
+        let row = area.y + 2;
+        let under = before
+            .lines()
+            .nth(usize::from(row))
+            .and_then(|line| line.find("Task ").map(|at| line[at..at + 7].to_owned()))
+            .unwrap_or_else(|| panic!("a task is drawn on row {row}:\n{before}"));
+        assert_ne!(selected_title(&p), under, "the click has somewhere to go");
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        p.handle_mouse(click, area);
+        assert_eq!(selected_title(&p), under, "clicked row {row} of:\n{before}");
+    }
+
+    /// The form's placeholders were drawn at their natural width, so a form
+    /// narrower than about 27 columns let the terminal cut them: `what needs
+    /// d`, a word nobody wrote. Whole, or cut with `…`, at every width.
+    #[test]
+    fn the_forms_placeholders_are_whole_or_say_they_were_cut() {
+        let (mut panel, _guard) = panel("form-placeholders");
+        press(&mut panel, KeyCode::Char('a'));
+        // On priority, every text field is empty and unfocused.
+        for _ in 0..3 {
+            press(&mut panel, KeyCode::Tab);
+        }
+        let fields = [
+            ("Title", "what needs doing"),
+            ("Notes", "optional detail"),
+            ("Due", "empty for none"),
+            ("Tags", "comma separated"),
+        ];
+        let mut cut = 0;
+        for width in 12..=40u16 {
+            let screen = screen_of(&mut panel, width, 20);
+            for (label, placeholder) in fields {
+                let row = screen
+                    .lines()
+                    .find(|row| row.contains(&format!("│{label} ")))
+                    .unwrap_or_else(|| panic!("{width}: `{label}` is drawn:\n{screen}"));
+                let shown = row
+                    .split_once(label)
+                    .map_or("", |(_, rest)| rest)
+                    .trim_end()
+                    .trim_end_matches('│')
+                    .trim();
+                if shown == placeholder {
+                    continue;
+                }
+                let kept = shown.strip_suffix('…').unwrap_or_else(|| {
+                    panic!("{width}: `{placeholder}` cut silently to {shown:?}:\n{screen}")
+                });
+                assert!(placeholder.starts_with(kept), "{width}: {shown:?}");
+                cut += 1;
+            }
+        }
+        assert!(cut > 0, "the sweep reached a width that cuts a placeholder");
     }
 }
