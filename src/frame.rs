@@ -361,13 +361,21 @@ pub fn rule(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, label: &str) 
         return;
     }
 
+    // Measured in the cells ratatui draws: in characters a double-width
+    // label was drawn where it did not fit, and the terminal cut it with
+    // nothing to say so (invariant 19). Not `display_width`, which calls a
+    // halfwidth voiced sound mark zero-width where ratatui gives it a cell;
+    // `walked_width` is the measure `truncate` and `assemble` fit with. And
+    // in `usize`, where a `u16` that could not hold the count fell back to
+    // zero, which is a label that always fits.
     let label = crate::glyphs::utility(label);
-    let label_width = u16::try_from(label.chars().count()).unwrap_or(0);
+    let label_width = crate::grid::walked_width(&label);
+    let width = usize::from(area.width);
     let rule_style = Style::default().fg(theme.rule);
 
     let mut spans = Vec::new();
-    if label.is_empty() || label_width + 4 > area.width {
-        spans.push(Span::styled("─".repeat(area.width as usize), rule_style));
+    if label.is_empty() || label_width + 4 > width {
+        spans.push(Span::styled("─".repeat(width), rule_style));
     } else {
         spans.push(Span::styled(
             label,
@@ -376,8 +384,10 @@ pub fn rule(frame: &mut ratatui::Frame, area: Rect, theme: &Theme, label: &str) 
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(" ", rule_style));
-        let remaining = area.width.saturating_sub(label_width + 1);
-        spans.push(Span::styled("─".repeat(remaining as usize), rule_style));
+        spans.push(Span::styled(
+            "─".repeat(width - label_width - 1),
+            rule_style,
+        ));
     }
 
     frame.render_widget(ratatui::widgets::Paragraph::new(Line::from(spans)), area);
@@ -964,5 +974,65 @@ mod tests {
             }
             assert!(cut, "a sweep that never cut the status tests nothing");
         }
+    }
+
+    /// `rule` as drawn across one row `width` cells wide, read a glyph at a
+    /// time so a double-width label reads back as the text it is. Each step
+    /// is the width ratatui gives the cell it drew, not a measure of
+    /// mirador's, so the reading cannot share a mistake with the code.
+    fn rule_row(width: u16, label: &str) -> String {
+        use ratatui::buffer::CellWidth;
+        let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("backend");
+        terminal
+            .draw(|frame| rule(frame, frame.area(), &Theme::default(), label))
+            .expect("draws");
+        let buffer = terminal.backend().buffer();
+        let mut row = String::new();
+        let mut x = 0;
+        while x < width {
+            let cell = &buffer[(x, 0)];
+            row.push_str(cell.symbol());
+            x += cell.cell_width().max(1);
+        }
+        row
+    }
+
+    /// The cells `text` takes when ratatui draws it, found by drawing it
+    /// somewhere roomy and reading where it stopped.
+    fn drawn_width(text: &str) -> usize {
+        let mut buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 200, 1));
+        let (end, _) = buffer.set_stringn(0, 0, text, usize::MAX, Style::default());
+        usize::from(end)
+    }
+
+    /// A rule's label needs four cells beside it, and those are the cells
+    /// the terminal draws. Measured in characters, `日本語日本語` counted six
+    /// where it draws twelve, so at ten columns it was drawn at all and the
+    /// terminal cut it to `日本語日本` with nothing to say so. Measured with
+    /// `unicode-width`, `ｶﾞｶﾞｶﾞｶﾞｶﾞ` counted five where ratatui draws ten,
+    /// a halfwidth voiced sound mark taking a cell of its own, and at nine
+    /// columns four of its five glyphs came out with no rule after them.
+    /// The label is whole, with a space and at least three cells of rule
+    /// after it, or there is no label and the rule runs the full width —
+    /// judged by what ratatui draws, never by the measure the code uses.
+    #[test]
+    fn a_rule_measures_its_label_in_cells() {
+        for label in ["next hours", "日本語日本", "日本語日本語", "ｶﾞｶﾞｶﾞ", "ｶﾞｶﾞｶﾞｶﾞｶﾞ"]
+        {
+            let shown = crate::glyphs::utility(label);
+            let cells = drawn_width(&shown);
+            for width in 1..=30u16 {
+                let room = usize::from(width);
+                let expected = if cells + 4 > room {
+                    "─".repeat(room)
+                } else {
+                    format!("{shown} {}", "─".repeat(room - cells - 1))
+                };
+                assert_eq!(rule_row(width, label), expected, "{label:?} at {width}");
+            }
+        }
+        assert_eq!(rule_row(14, "next hours"), "NEXT HOURS ───");
+        assert_eq!(rule_row(14, "ｶﾞｶﾞｶﾞｶﾞｶﾞ"), "ｶﾞｶﾞｶﾞｶﾞｶﾞ ───");
+        assert_eq!(rule_row(13, "ｶﾞｶﾞｶﾞｶﾞｶﾞ"), "─".repeat(13));
     }
 }

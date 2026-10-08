@@ -89,8 +89,10 @@ fn prefix_fitting(text: &str, cells: usize) -> usize {
 /// a control character that ratatui drops and joins a malformed sequence
 /// that ratatui draws in two. So every fitting decision in this module —
 /// whether a text fits whole, how wide a word is, what a part costs — is
-/// made with this, and a text that is said to fit is one that does.
-fn walked_width(text: &str) -> usize {
+/// made with this, and a text that is said to fit is one that does. Outside
+/// the module, [`crate::frame::rule`] sizes its label with it for the same
+/// reason.
+pub(crate) fn walked_width(text: &str) -> usize {
     glyphs(text).map(|(_, glyph)| glyph_width(glyph)).sum()
 }
 
