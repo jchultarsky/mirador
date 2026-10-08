@@ -356,6 +356,12 @@ impl WeatherPanel {
             crate::prompt::Outcome::Editing | crate::prompt::Outcome::Chose { .. } => {}
             crate::prompt::Outcome::Cancelled => self.asking = None,
             crate::prompt::Outcome::Submitted(answer) => {
+                // Coordinates first: with them set the weather needs no name,
+                // so an empty answer is refused for their reason, not this one.
+                if coordinates_configured(&self.config) {
+                    prompt.reject(COORDINATES_WIN);
+                    return;
+                }
                 if answer.is_empty() {
                     prompt.reject("a location is needed to fetch any weather");
                     return;
@@ -455,6 +461,26 @@ impl WeatherPanel {
     }
 }
 
+/// Why `L` refuses a place while `[weather]` sets coordinates.
+///
+/// The coordinates win over the name — they are how a reader says "exactly
+/// here" — and the name only labels them. So a new name used to retitle the
+/// panel over the old place's weather, and be remembered that way. Refusing
+/// is the smaller change than clearing coordinates the reader wrote, and it
+/// leaves the config saying what is on screen.
+///
+/// Under the prompt's 60 cells with the action first, so a narrow dialog cuts
+/// the key names rather than what to do: the first wording was 62 cells and
+/// lost its last word on every terminal.
+const COORDINATES_WIN: &str = "remove [weather] latitude/longitude to choose by name";
+
+/// Whether the config fixes the place by coordinates, as `resolve_location`
+/// decides it.
+fn coordinates_configured(config: &Arc<Mutex<WeatherConfig>>) -> bool {
+    let config = settings(config);
+    config.latitude.is_some() && config.longitude.is_some()
+}
+
 /// The weather settings as they stand, which the panel may have changed.
 fn settings(config: &Arc<Mutex<WeatherConfig>>) -> WeatherConfig {
     match config.lock() {
@@ -530,7 +556,7 @@ fn poll(
         if located.is_none() {
             match resolve_location(config) {
                 Ok(place) => located = Some(place),
-                Err(e) => update(state, generation, |s| s.error = Some(format!("{e:#}"))),
+                Err(e) => update(state, generation, |s| s.error = Some(reason(&e))),
             }
         }
 
@@ -544,7 +570,7 @@ fn poll(
                 // The reading and its timestamp are deliberately left alone, so
                 // a blip shows the last good data with its age rather than
                 // nothing.
-                Err(e) => update(state, generation, |s| s.error = Some(format!("{e:#}"))),
+                Err(e) => update(state, generation, |s| s.error = Some(reason(&e))),
             }
         }
 
@@ -556,6 +582,19 @@ fn poll(
             return;
         }
     }
+}
+
+/// Most cells kept of a failure's reason.
+///
+/// The reason is drawn on every frame, over a reading as well as in place of
+/// one, and not all of it is mirador's text: `serde_json` quotes the value it
+/// could not use, so a response with a megabyte string where a number belongs
+/// made a megabyte reason. Every message mirador writes fits with room over.
+const MAX_REASON: usize = 300;
+
+/// Why an attempt failed, as the panel will show it.
+fn reason(error: &anyhow::Error) -> String {
+    crate::grid::truncate(&format!("{error:#}"), MAX_REASON)
 }
 
 /// Apply a change to the shared state and mark it as new.
@@ -615,9 +654,20 @@ struct GeocodeResult {
     longitude: f64,
     #[serde(default)]
     admin1: Option<String>,
+    /// The country's name in English — `language=en` in the request.
+    #[serde(default)]
+    country: Option<String>,
     #[serde(default)]
     country_code: Option<String>,
 }
+
+/// Most cells kept of a place's name or region from the geocoder.
+///
+/// Both are somebody else's text, drawn in the panel's title on every frame,
+/// so they are bounded where they are parsed, as `feed` bounds a headline.
+/// The longest place name in use anywhere is 85 letters; this is room for it
+/// with some to spare.
+const MAX_PLACE: usize = 100;
 
 /// Turn a place name into coordinates.
 fn geocode(query: &str) -> Result<Located> {
@@ -630,8 +680,16 @@ fn geocode(query: &str) -> Result<Located> {
     );
 
     let body = http_get(&url).context("geocoding the configured location")?;
+    place_from(&body, query)
+}
+
+/// Choose the result `query` meant out of a geocoder response.
+///
+/// Split from [`geocode`] so the choice is tested against captured JSON; no
+/// test in this repository touches the network.
+fn place_from(body: &str, query: &str) -> Result<Located> {
     let parsed: GeocodeResponse =
-        serde_json::from_str(&body).context("parsing the geocoding response")?;
+        serde_json::from_str(body).context("parsing the geocoding response")?;
 
     if parsed.results.is_empty() {
         anyhow::bail!(
@@ -642,27 +700,32 @@ fn geocode(query: &str) -> Result<Located> {
 
     let hint = query
         .split_once(',')
-        .map(|(_, rest)| rest.trim().to_ascii_lowercase())
+        .map(|(_, rest)| rest.trim().to_lowercase())
         .unwrap_or_default();
 
+    // The text after the comma may be the region, the country or its
+    // two-letter code. The country was not read at all, so the form the `L`
+    // prompt itself suggests — "Lisbon, Portugal" — never chose anything,
+    // and "London, Canada" was the most populous London.
+    let names = |field: &Option<String>| {
+        field
+            .as_deref()
+            .is_some_and(|text| text.to_lowercase() == hint)
+    };
     let best = parsed
         .results
         .iter()
         .find(|r| {
-            !hint.is_empty()
-                && (r
-                    .admin1
-                    .as_ref()
-                    .is_some_and(|a| a.to_ascii_lowercase() == hint)
-                    || r.country_code
-                        .as_ref()
-                        .is_some_and(|c| c.to_ascii_lowercase() == hint))
+            !hint.is_empty() && (names(&r.admin1) || names(&r.country) || names(&r.country_code))
         })
         .unwrap_or(&parsed.results[0]);
 
+    let name = crate::grid::truncate(&best.name, MAX_PLACE);
     let label = match &best.admin1 {
-        Some(region) if !region.is_empty() => format!("{}, {region}", best.name),
-        _ => best.name.clone(),
+        Some(region) if !region.is_empty() => {
+            format!("{name}, {}", crate::grid::truncate(region, MAX_PLACE))
+        }
+        _ => name,
     };
 
     Ok(Located {
@@ -802,12 +865,19 @@ fn parse_hour(timestamp: &str) -> Option<u8> {
 }
 
 /// The `HH:MM` portion of an ISO local timestamp.
+///
+/// Only digits are kept. The label is drawn in the border on every frame, and
+/// it used to be whatever the response put between the `T` and the second
+/// colon — a time from Open-Meteo, and anything at all from a broken proxy.
 fn hour_label(timestamp: &str) -> Option<String> {
     let time = timestamp.split('T').nth(1)?;
     let mut parts = time.split(':');
     let hour = parts.next()?;
     let minute = parts.next().unwrap_or("00");
-    Some(format!("{hour}:{minute}"))
+    let digits = |part: &str, lengths: std::ops::RangeInclusive<usize>| {
+        lengths.contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit())
+    };
+    (digits(hour, 1..=2) && digits(minute, 2..=2)).then(|| format!("{hour}:{minute}"))
 }
 
 /// A blocking GET with a timeout, returning the body as a string.
@@ -926,12 +996,18 @@ impl Panel for WeatherPanel {
             // Capital by default, because `l` is a movement key nearly
             // everywhere else in mirador and this panel does not scroll.
             Some(WeatherAction::Location) => {
-                self.asking = Some(crate::prompt::Prompt::new(
+                let mut prompt = crate::prompt::Prompt::new(
                     "WEATHER LOCATION",
                     "A place name, e.g. Lisbon, Portugal · Enter saves · Esc cancels",
                     &settings(&self.config).location,
                     crate::prompt::Completion::None,
-                ));
+                );
+                // Said before anything is typed, rather than after a whole
+                // name has been, and again on Enter.
+                if coordinates_configured(&self.config) {
+                    prompt.reject(COORDINATES_WIN);
+                }
+                self.asking = Some(prompt);
                 crate::panel::KeyOutcome::Consumed
             }
             None => crate::panel::KeyOutcome::Ignored,
@@ -1009,14 +1085,9 @@ impl Panel for WeatherPanel {
         ])
         .split(area);
 
-        let notice = is_old.then(|| {
-            let age = state.age().map_or_else(String::new, describe_age);
-            match &state.error {
-                Some(_) => format!("{age} — refresh failing"),
-                None => age,
-            }
-        });
-        Self::render_now(frame, rows[0], theme, &data, show_art, notice.as_deref());
+        let age = is_old.then(|| state.age().map_or_else(String::new, describe_age));
+        let notice = age.as_deref().map(|age| (age, state.error.as_deref()));
+        Self::render_now(frame, rows[0], theme, &data, show_art, notice);
 
         if rows[1].height > 0 {
             crate::frame::rule(frame, rows[1], theme, "next hours");
@@ -1036,9 +1107,10 @@ impl WeatherPanel {
         theme: &crate::theme::Theme,
         data: &WeatherData,
         show_art: bool,
-        // Set when the reading is old, so the panel says so in its own body
-        // rather than only in the small border counter.
-        stale_notice: Option<&str>,
+        // The reading's age when it is old, so the panel says so in its own
+        // body rather than only in the small border counter, and why the last
+        // attempt failed if it did.
+        stale_notice: Option<(&str, Option<&str>)>,
     ) {
         if area.height == 0 {
             return;
@@ -1108,13 +1180,24 @@ impl WeatherPanel {
 
         // Amber rather than red: the reading is still the best available, it is
         // simply not fresh. Red is for a panel with nothing to show.
-        if let Some(notice) = stale_notice {
-            lines.push(Line::from(Span::styled(
-                notice.to_string(),
+        //
+        // The reason shares the age's row and is ellipsised where the row cuts
+        // it; the art is as tall as these rows, so there is none under it to
+        // give. It used to be reduced to "refresh failing", which left a
+        // misspelt `L` answer showing the old place's weather and never saying
+        // the new one was not found.
+        if let Some((age, reason)) = stale_notice {
+            let mut notice = vec![Span::styled(
+                age.to_string(),
                 Style::default()
                     .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
-            )));
+            )];
+            if let Some(reason) = reason {
+                let first = reason.lines().next().unwrap_or_default();
+                notice.push(Span::styled(format!(" — {first}"), muted));
+            }
+            lines.push(crate::grid::assemble(vec![notice], width));
         }
 
         frame.render_widget(Paragraph::new(lines), readings_area);
@@ -1829,5 +1912,246 @@ mod tests {
             &counted_resolve,
             fetch,
         );
+    }
+
+    /// Two cities of one name, in the order the geocoder ranks them.
+    const TWO_LONDONS: &str = r#"{"results":[
+        {"name":"London","latitude":51.51,"longitude":-0.13,
+         "admin1":"England","country":"United Kingdom","country_code":"GB"},
+        {"name":"London","latitude":42.98,"longitude":-81.23,
+         "admin1":"Ontario","country":"Canada","country_code":"CA"}]}"#;
+
+    /// `L` suggests "Lisbon, Portugal", so a country's name after the comma
+    /// has to choose that country. It was compared only with the region and
+    /// the two-letter code, so "London, Canada" was London, England.
+    #[test]
+    fn a_country_named_after_the_comma_chooses_that_country() {
+        let name = |query| place_from(TWO_LONDONS, query).unwrap().name;
+        assert_eq!(name("London, Canada"), "London, Ontario");
+        assert_eq!(name("London, canada"), "London, Ontario", "in any case");
+        // What already worked still does.
+        assert_eq!(name("London, Ontario"), "London, Ontario");
+        assert_eq!(name("London, CA"), "London, Ontario");
+        assert_eq!(name("London"), "London, England", "the first by default");
+        assert_eq!(name("London, Atlantis"), "London, England");
+    }
+
+    /// With `latitude` and `longitude` configured, the coordinates win and
+    /// the location only names them — so `L` used to retitle the panel over
+    /// the old place's weather, and remember the wrong name across restarts.
+    #[test]
+    fn with_coordinates_configured_l_will_not_rename_them() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = WeatherPanel::offline(WeatherConfig {
+            location: "Boston".into(),
+            latitude: Some(42.36),
+            longitude: Some(-71.06),
+            ..WeatherConfig::default()
+        });
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+
+        panel.handle_key(key(KeyCode::Char('L')));
+        for c in ", Lisbon".chars() {
+            panel.handle_key(key(KeyCode::Char(c)));
+        }
+        panel.handle_key(key(KeyCode::Enter));
+        assert!(panel.asking.is_some(), "the answer is refused in place");
+        assert_eq!(settings(&panel.config).location, "Boston");
+        assert!(!*panel.refresh.lock().unwrap(), "and nothing is fetched");
+
+        // Drawn whole: the dialog gives its line 60 cells at most.
+        let screen = |panel: &WeatherPanel| -> String {
+            let prompt = panel.overlay().expect("the prompt is still up");
+            let theme = crate::theme::Theme::default();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|frame| prompt.render(frame, frame.area(), &theme))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            (0..24)
+                .flat_map(|y| (0..80).map(move |x| (x, y)))
+                .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let shown = screen(&panel);
+        assert!(shown.contains(COORDINATES_WIN), "{shown}");
+
+        // An empty answer gets the same reason. The coordinates are the
+        // place, so "a location is needed" would be untrue here.
+        while panel.asking.as_ref().is_some_and(|p| !p.value().is_empty()) {
+            panel.handle_key(key(KeyCode::Backspace));
+        }
+        panel.handle_key(key(KeyCode::Enter));
+        let shown = screen(&panel);
+        assert!(shown.contains(COORDINATES_WIN), "{shown}");
+
+        panel.handle_key(key(KeyCode::Esc));
+        assert!(panel.asking.is_none(), "Esc still leaves");
+    }
+
+    /// The other route to the same mislabel: a place remembered while the
+    /// config had no coordinates, applied over coordinates added since.
+    #[test]
+    fn a_remembered_place_does_not_rename_configured_coordinates() {
+        let remembered = crate::state::UiState {
+            weather_location: Some("Lisbon".into()),
+            ..crate::state::UiState::default()
+        };
+
+        let mut config = crate::config::Config::default();
+        config.weather.location = "Boston".into();
+        config.weather.latitude = Some(42.36);
+        config.weather.longitude = Some(-71.06);
+        config.apply_state(&remembered);
+        assert_eq!(config.weather.location, "Boston");
+
+        config.weather.latitude = None;
+        config.apply_state(&remembered);
+        assert_eq!(
+            config.weather.location, "Lisbon",
+            "without both coordinates the name is the place, and is remembered"
+        );
+    }
+
+    /// Every row the whole panel draws, as text.
+    fn panel_rows(panel: &mut WeatherPanel, width: u16, height: u16) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    /// Once a reading is on screen a failure used to say only "refresh
+    /// failing", so a misspelt `L` answer showed the old place's weather and
+    /// never said the new one was not found. The reason shares the notice's
+    /// row, and is ellipsised where the row cuts it (invariant 19).
+    #[test]
+    fn a_failing_refresh_says_why_even_over_an_old_reading() {
+        let failing = |reason: &str| {
+            let panel = panel_showing(false);
+            update(&panel.state, &Arc::new(AtomicU64::new(0)), |s| {
+                s.data = Some(Box::new(sample_data(false)));
+                s.fetched = Some(Instant::now());
+                s.error = Some(reason.into());
+            });
+            panel
+        };
+        let notice = |rows: Vec<String>| {
+            rows.into_iter()
+                .find(|row| row.contains("0m old"))
+                .map(|row| row.trim_end().to_string())
+                .expect("a failing refresh shows its age")
+        };
+
+        let long = "could not find `Lisbonn`. Try a different spelling, or set \
+                    `latitude` and `longitude` under [weather].";
+        assert!(
+            notice(panel_rows(&mut failing(long), 60, 16)).contains("could not find `Lisbonn`"),
+            "the reason must be on screen"
+        );
+        for width in 34..=120 {
+            let row = notice(panel_rows(&mut failing(long), width, 16));
+            assert!(
+                row.ends_with(long) || row.ends_with('…'),
+                "the reason was cut silently at {width}: `{row}`"
+            );
+        }
+
+        let row = notice(panel_rows(&mut failing("timed out"), 60, 16));
+        assert!(
+            row.ends_with("timed out"),
+            "a reason that fits is shown whole, with no ellipsis: `{row}`"
+        );
+    }
+
+    /// The observation time goes into the border counter on every frame, so
+    /// only a time is kept — not whatever the response put after the `T`.
+    #[test]
+    fn observation_labels_refuse_anything_that_is_not_a_time() {
+        assert_eq!(hour_label("2026-07-25T14"), Some("14:00".to_string()));
+        assert_eq!(hour_label("2026-07-25Tnoon:00"), None);
+        assert_eq!(hour_label("2026-07-25T14:3x"), None);
+        assert_eq!(hour_label("2026-07-25T14:300"), None);
+        let huge = format!("2026-07-25T{}:00", "1".repeat(1_000_000));
+        assert_eq!(hour_label(&huge), None);
+    }
+
+    /// A geocoder's names are somebody else's text and are drawn in the title
+    /// on every frame, so they are bounded where they are parsed — far above
+    /// any real place, whose longest name is 85 letters.
+    #[test]
+    fn a_place_name_from_the_geocoder_is_bounded() {
+        let huge = "x".repeat(1_000_000);
+        let body = format!(
+            r#"{{"results":[{{"name":"{huge}","latitude":1.0,"longitude":2.0,"admin1":"{huge}"}}]}}"#
+        );
+        let place = place_from(&body, "x").unwrap();
+        assert!(
+            crate::grid::display_width(&place.name) < 1_000,
+            "a {}-cell title",
+            crate::grid::display_width(&place.name)
+        );
+        assert!(place.name.contains('…'), "and it says it was cut");
+
+        let longest =
+            "Taumatawhakatangihangakoauauotamateaturipukakapikimaungahoronukupokaiwhenuakitanatahu";
+        let body = format!(
+            r#"{{"results":[{{"name":"{longest}","latitude":1.0,"longitude":2.0,"admin1":"Hawke's Bay"}}]}}"#
+        );
+        assert_eq!(
+            place_from(&body, longest).unwrap().name,
+            format!("{longest}, Hawke's Bay")
+        );
+    }
+
+    /// A failure's reason is drawn on every frame now that it is shown over a
+    /// reading, and `serde_json` quotes the offending value in its message —
+    /// so a response with a megabyte string where a number belongs made a
+    /// megabyte reason. It is bounded where it is recorded.
+    #[test]
+    fn a_failure_reason_is_bounded_where_it_is_recorded() {
+        let huge = "x".repeat(1_000_000);
+        let resolve = |_: &WeatherConfig| -> Result<Located> { anyhow::bail!("{huge}") };
+        let fetch = |_: &WeatherConfig, _: &Located| -> Result<WeatherData> {
+            unreachable!("nothing to fetch without coordinates")
+        };
+        let state = Arc::new(Mutex::new(State::default()));
+        poll_until(
+            &WeatherConfig::default(),
+            &state,
+            &Arc::new(Mutex::new(false)),
+            &Arc::new(AtomicBool::new(false)),
+            Duration::ZERO,
+            &resolve,
+            &fetch,
+            1,
+        );
+        let error = state.lock().unwrap().error.clone().unwrap();
+        assert!(
+            crate::grid::display_width(&error) < 1_000,
+            "a {}-cell reason",
+            crate::grid::display_width(&error)
+        );
+        assert!(error.ends_with('…'), "and it says it was cut");
     }
 }
