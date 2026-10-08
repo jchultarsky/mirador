@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A plugin that stops reading has one tick waiting, not one per poll.**
+  Mirador offers an external panel a `tick` each time it polls the panel,
+  through the same 256-message queue as its keys. Once a plugin had stopped
+  reading long enough to fill its pipe — 4,096 ticks on macOS, about two
+  and a quarter minutes at the default 33 ms while the panel is focused and
+  capturing input, about seventeen minutes at the dashboard's default
+  250 ms otherwise — ticks took the whole queue in 256 polls more, eight
+  seconds or about a minute. The panel then said
+  `plugin input queue is full` about input nobody had typed, and dropped
+  every key that was. At most one tick now waits in the queue, and one
+  that finds no room is dropped without that warning. This changes what
+  protocol v1 delivers to a plugin that falls behind: it no longer has a
+  tick queued for each poll it missed, though ticks already in the pipe
+  still arrive. The protocol document had said ticks arrive at the
+  negotiated refresh cadence, which held only for a panel that is focused
+  and capturing input; it now says they come at most once per
+  `refresh_ms`, save for up to a second after a key a passive panel
+  accepts, and no more often than the dashboard's own loop unless the
+  panel is focused and capturing input. It also says plainly that a tick
+  is a cue to redraw, not a clock; a plugin that counted them to measure
+  time was already losing count whenever the queue was full.
+
 ## [1.22.0] - 2026-10-08
 
 ### Added

@@ -124,7 +124,7 @@ The host applies these v1 limits independently to every panel:
 | Non-fatal or fatal error text | 1,024 UTF-8 bytes |
 | Colour string / one `input.keys` chord | 64 UTF-8 bytes each |
 | Undrained Watch Log events | 64, each at most 1,024 UTF-8 bytes |
-| Host-to-child input queue | 256 messages |
+| Host-to-child input queue | 256 messages, at most one of them a `tick` |
 | Child stderr accepted / retained | 64 KiB per fixed one-second window / latest 8 KiB |
 | Grace after stdout closes with the child still alive | 100 ms |
 | Passive-key frame acknowledgement | 3 x `refresh_ms`, clamped to 100 ms through 1 second |
@@ -292,7 +292,7 @@ After negotiation the host may send the following messages. Between `hello`
 and `ready` the host sends nothing at all, with one exception: `shutdown` may
 follow `hello` immediately when Mirador exits or removes a panel during
 startup. `resize` and `focus` are sent when their value changes, not on a
-schedule, and `tick` arrives at the negotiated refresh cadence.
+schedule.
 
 ```json
 {"type":"resize","columns":80,"rows":24}
@@ -301,6 +301,30 @@ schedule, and `tick` arrives at the negotiated refresh cadence.
 {"type":"paste","text":"one\ntwo"}
 {"type":"shutdown"}
 ```
+
+A `tick` is offered each time Mirador polls the panel for a new frame. That is
+at most once per `refresh_ms`, except while the passive-key barrier described
+under input ownership is open, when it can be polled every 50 ms or sooner.
+It is also no more often than the dashboard's own loop wakes: every
+`tick_rate_ms` of Mirador's `[general]` configuration, 250 ms by default,
+unless the panel is focused and capturing input, or a key or the mouse wakes
+the loop sooner. So a panel that is not focused and capturing is ticked no
+faster than the dashboard's loop, whatever its `refresh_ms`, and an interval
+that runs out between two wakes waits for the next one. No plugin should
+expect a tick for every `refresh_ms`.
+
+At most one tick is ever waiting in Mirador's queue: while one is there
+unwritten, the next is dropped rather than queued behind it. A tick that finds
+the queue full is dropped too, without the warning dropped input gets, since
+the next poll offers another. A plugin that falls behind does not have a tick
+queued for every poll it missed, and ticks never take more than one of the
+queue's places from keys, pastes, mouse events, resizes and focus changes.
+What Mirador has already written is beyond its reach, as with `shutdown`: the
+operating system's pipe buffer holds thousands of ticks (4,096 on macOS), and
+a plugin that stops reading finds those waiting when it resumes. A tick
+carries no time and no sequence. It is a cue to redraw, not a clock: a run of
+them means no more than one, and a plugin that counts them to measure time is
+wrong whenever it falls behind. Read the time from the system clock instead.
 
 Keys include both a stable code and the canonical chord used by `input.keys`:
 
