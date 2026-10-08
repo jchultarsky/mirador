@@ -624,6 +624,38 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Parts for [`assemble`] that end in a way out, fitted to `width` so the
+/// way out is the last to go: whole parts drop, the ones before it first and
+/// from the right, and a narrow row still says how to leave.
+///
+/// `separator` goes at the front of each part after the first that is kept,
+/// so a dropped part takes its separator with it. The way out alone and
+/// still too wide is left to `assemble`, which ellipsises it. A prompt's
+/// help, a dialog's key row and the task and note forms' keys all fit this
+/// way; see `prompt::way_out_last` for the plain-text form.
+pub fn way_out_last(
+    mut parts: Vec<Vec<Span<'static>>>,
+    separator: &Span<'static>,
+    width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let gap = display_width(&separator.content);
+    let row = |parts: &[Vec<Span<'static>>]| {
+        parts
+            .iter()
+            .flatten()
+            .map(|span| display_width(&span.content))
+            .sum::<usize>()
+            + gap * parts.len().saturating_sub(1)
+    };
+    while parts.len() > 1 && row(&parts) > width {
+        parts.remove(parts.len() - 2);
+    }
+    for part in parts.iter_mut().skip(1) {
+        part.insert(0, separator.clone());
+    }
+    parts
+}
+
 /// Pad or truncate `text` to exactly `width` terminal cells.
 ///
 /// Measured in display width rather than characters, so a cell containing a

@@ -26,7 +26,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use crate::grid::{Column, Grid};
 use crate::keymap::{Action, Key, Keymap, Listed};
@@ -230,7 +230,7 @@ impl KeymapDialog {
                     Span::styled(" quit", muted),
                 ],
                 vec![
-                    Span::styled("  Esc", key_style),
+                    Span::styled(format!("  {}", crate::frame::ESC), key_style),
                     Span::styled(" back", muted),
                 ],
                 vec![
@@ -287,7 +287,9 @@ impl KeymapDialog {
     }
 
     /// The pinned last row: the dialog's keys, and where the body is scrolled
-    /// to when it does not fit.
+    /// to when it does not fit, Esc the last of them to go. It dropped from
+    /// the end, so a narrow key map said how to reload and how to scroll and
+    /// not how to leave.
     fn footer(&self, theme: &Theme, width: u16) -> Line<'static> {
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
@@ -300,20 +302,23 @@ impl KeymapDialog {
             };
             parts.push(vec![
                 Span::styled(arrows, key_style),
-                Span::styled(" more  ", muted),
+                Span::styled(" more", muted),
             ]);
         }
-        for (index, (key, action)) in [("r", "reload"), ("d", "defaults"), ("Esc", "close")]
-            .into_iter()
-            .enumerate()
-        {
-            let gap = if index == 0 { "" } else { "  " };
+        for (key, action) in [
+            ("r", "reload"),
+            ("d", "defaults"),
+            (crate::frame::ESC, "close"),
+        ] {
             parts.push(vec![
-                Span::styled(format!("{gap}{key}"), key_style),
+                Span::styled(key, key_style),
                 Span::styled(format!(" {action}"), muted),
             ]);
         }
-        crate::grid::assemble(parts, width)
+        crate::grid::assemble(
+            crate::grid::way_out_last(parts, &Span::styled("  ", muted), width.into()),
+            width,
+        )
     }
 
     /// Draw the dialog centred over whatever is behind it.
@@ -332,25 +337,12 @@ impl KeymapDialog {
         let text_height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
 
         // Borders, a blank row and the footer.
-        let height = text_height.saturating_add(4).min(area.height);
+        let height = text_height
+            .saturating_add(2 + crate::frame::FRAME_HEIGHT)
+            .min(area.height);
         let popup = crate::frame::centred(area, width, height);
 
-        let border = Style::default().fg(theme.border_focused);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(border)
-            .padding(Padding::horizontal(1))
-            .title(Line::from(vec![
-                Span::styled("┤", border),
-                Span::styled(
-                    crate::glyphs::utility("key map"),
-                    Style::default()
-                        .fg(theme.title)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("├", border),
-            ]));
+        let block = crate::frame::dialog_block(theme, "key map", popup.width);
         let inner = block.inner(popup);
         frame.render_widget(Clear, popup);
         frame.render_widget(block, popup);

@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first-run config differed from macOS and Linux for no reason in the code.
   The repository now asks for LF everywhere. A config already on disk is
   untouched, and edits keep whatever endings it has.
+- **Every dialog punches its title into the border.** The `w` picker's
+  `PANELS` and a prompt's label — `ADD A CLOCK`, `WEATHER LOCATION`,
+  `AGENDA FILE` — were laid on the border bare, where the theme picker, the
+  key map and every panel draw `┤TITLE├`. All four dialogs now draw it the
+  same way, and one too narrow for its title cuts it with `…` rather than
+  letting the corner take the closing `├`.
 
 ### Fixed
 
@@ -42,6 +48,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parser stopped on and whether it would finish. When it would, the error says
   what it will change; when it would not, it says what the line becomes and
   the first problem that stops the migration, by line.
+- **The theme picker draws the theme it is previewing on a short terminal.**
+  Its list kept a twelve-row window in a dialog sixteen rows tall, so on a
+  terminal under sixteen rows the foot of the window was cut, footer first,
+  and `End` or `↓` previewed a theme whose name was nowhere on screen. The
+  list now scrolls within the rows the terminal leaves it, as the `w`
+  picker's does, the footer gives way to nothing but the row of the theme
+  being previewed, and a page moves as far as the rows drawn.
+- **A dialog's keys drop whole on a narrow terminal, and Esc goes last.**
+  The `w` and `t` pickers drew their key rows at full width and the terminal
+  cut them wherever the edge fell — `Esc put` with no `back`, and narrower
+  still the keep hint whole and Esc gone without a mark. The key map's row
+  dropped from the end, so a narrow one said how to reload and not how to
+  leave, and a prompt on a screen under twenty columns measured its help
+  for the twenty it asked for. Every dialog's keys now drop whole, the way
+  out last, and Esc on its own and still too wide ends in `…`, as a
+  prompt's help already did.
+- **The `w` picker says when it has cut a message.** The line under its list
+  gives way to what was just refused or why the config could not be
+  written, and most of those are longer than the dialog's forty columns —
+  `the edited config does not describe the requested layout` — so the
+  terminal cut them at every size, with nothing to show the rest was
+  missing. They now end in `…`, and so does the usual line on a narrow
+  terminal.
 
 ## [1.20.0] - 2026-10-07
 

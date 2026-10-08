@@ -14,6 +14,8 @@ use std::ops::Range;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::textfield::byte_at;
+
 #[derive(Debug, Clone)]
 pub struct TextArea {
     /// Always at least one line, so there is somewhere for the cursor to be.
@@ -77,13 +79,6 @@ impl TextArea {
         (self.row, self.col)
     }
 
-    /// Byte offset of character index `col` within `line`.
-    fn byte_at(line: &str, col: usize) -> usize {
-        line.char_indices()
-            .nth(col)
-            .map_or(line.len(), |(index, _)| index)
-    }
-
     fn line_len(&self, row: usize) -> usize {
         self.lines.get(row).map_or(0, |l| l.chars().count())
     }
@@ -120,21 +115,19 @@ impl TextArea {
         let ((start_row, start_col), (end_row, end_col)) = self.selection()?;
         if start_row == end_row {
             let line = &self.lines[start_row];
-            return Some(
-                line[Self::byte_at(line, start_col)..Self::byte_at(line, end_col)].to_string(),
-            );
+            return Some(line[byte_at(line, start_col)..byte_at(line, end_col)].to_string());
         }
 
         let mut selected = String::new();
         let first = &self.lines[start_row];
-        selected.push_str(&first[Self::byte_at(first, start_col)..]);
+        selected.push_str(&first[byte_at(first, start_col)..]);
         selected.push('\n');
         for row in start_row + 1..end_row {
             selected.push_str(&self.lines[row]);
             selected.push('\n');
         }
         let last = &self.lines[end_row];
-        selected.push_str(&last[..Self::byte_at(last, end_col)]);
+        selected.push_str(&last[..byte_at(last, end_col)]);
         Some(selected)
     }
 
@@ -156,14 +149,14 @@ impl TextArea {
 
         if start_row == end_row {
             let line = &mut self.lines[start_row];
-            let start = Self::byte_at(line, start_col);
-            let end = Self::byte_at(line, end_col);
+            let start = byte_at(line, start_col);
+            let end = byte_at(line, end_col);
             line.replace_range(start..end, "");
         } else {
             let first = &self.lines[start_row];
-            let mut joined = first[..Self::byte_at(first, start_col)].to_string();
+            let mut joined = first[..byte_at(first, start_col)].to_string();
             let last = &self.lines[end_row];
-            joined.push_str(&last[Self::byte_at(last, end_col)..]);
+            joined.push_str(&last[byte_at(last, end_col)..]);
             self.lines
                 .splice(start_row..=end_row, std::iter::once(joined));
         }
@@ -175,7 +168,7 @@ impl TextArea {
     }
 
     fn insert_at_cursor(&mut self, c: char) {
-        let byte = Self::byte_at(&self.lines[self.row], self.col);
+        let byte = byte_at(&self.lines[self.row], self.col);
         self.lines[self.row].insert(byte, c);
         self.col += 1;
     }
@@ -194,7 +187,7 @@ impl TextArea {
         let first = parts.next().unwrap_or_default();
         let rest: Vec<&str> = parts.collect();
 
-        let byte = Self::byte_at(&self.lines[self.row], self.col);
+        let byte = byte_at(&self.lines[self.row], self.col);
         let tail = self.lines[self.row].split_off(byte);
         self.lines[self.row].push_str(first);
         self.col += first.chars().count();
@@ -217,7 +210,7 @@ impl TextArea {
     /// Split the current line at the cursor.
     pub fn newline(&mut self) {
         self.delete_selection();
-        let byte = Self::byte_at(&self.lines[self.row], self.col);
+        let byte = byte_at(&self.lines[self.row], self.col);
         let tail = self.lines[self.row].split_off(byte);
         self.lines.insert(self.row + 1, tail);
         self.row += 1;
@@ -230,7 +223,7 @@ impl TextArea {
             return;
         }
         if self.col > 0 {
-            let byte = Self::byte_at(&self.lines[self.row], self.col - 1);
+            let byte = byte_at(&self.lines[self.row], self.col - 1);
             self.lines[self.row].remove(byte);
             self.col -= 1;
         } else if self.row > 0 {
@@ -247,7 +240,7 @@ impl TextArea {
             return;
         }
         if self.col < self.line_len(self.row) {
-            let byte = Self::byte_at(&self.lines[self.row], self.col);
+            let byte = byte_at(&self.lines[self.row], self.col);
             self.lines[self.row].remove(byte);
         } else if self.row + 1 < self.lines.len() {
             let next = self.lines.remove(self.row + 1);

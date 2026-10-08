@@ -61,17 +61,9 @@ impl TextField {
         self.cursor = 0;
     }
 
-    /// Byte offset of character index `idx`.
-    fn byte_at(&self, idx: usize) -> usize {
-        self.value
-            .char_indices()
-            .nth(idx)
-            .map_or(self.value.len(), |(b, _)| b)
-    }
-
     /// Insert a character at the cursor.
     pub fn insert(&mut self, c: char) {
-        let at = self.byte_at(self.cursor);
+        let at = byte_at(&self.value, self.cursor);
         self.value.insert(at, c);
         self.cursor += 1;
     }
@@ -81,7 +73,7 @@ impl TextField {
         if self.cursor == 0 {
             return;
         }
-        let at = self.byte_at(self.cursor - 1);
+        let at = byte_at(&self.value, self.cursor - 1);
         self.value.remove(at);
         self.cursor -= 1;
     }
@@ -91,7 +83,7 @@ impl TextField {
         if self.cursor >= self.len_chars() {
             return;
         }
-        let at = self.byte_at(self.cursor);
+        let at = byte_at(&self.value, self.cursor);
         self.value.remove(at);
     }
 
@@ -105,15 +97,15 @@ impl TextField {
         while i > 0 && !chars[i - 1].is_whitespace() {
             i -= 1;
         }
-        let start = self.byte_at(i);
-        let end = self.byte_at(self.cursor);
+        let start = byte_at(&self.value, i);
+        let end = byte_at(&self.value, self.cursor);
         self.value.replace_range(start..end, "");
         self.cursor = i;
     }
 
     /// Delete from the cursor to the end of the line.
     pub fn delete_to_end(&mut self) {
-        let at = self.byte_at(self.cursor);
+        let at = byte_at(&self.value, self.cursor);
         self.value.truncate(at);
     }
 
@@ -147,7 +139,7 @@ impl TextField {
             KeyCode::Char('a') if ctrl => self.home(),
             KeyCode::Char('e') if ctrl => self.end(),
             KeyCode::Char('u') if ctrl => {
-                let at = self.byte_at(self.cursor);
+                let at = byte_at(&self.value, self.cursor);
                 self.value.replace_range(..at, "");
                 self.cursor = 0;
             }
@@ -217,9 +209,32 @@ impl TextField {
     }
 }
 
+/// The byte offset of the character at `index` in `text`, or `text.len()`
+/// for an index at or past its end — where an insertion at the end goes.
+///
+/// Both editors keep their cursors in characters and slice their text in
+/// bytes, and every edit goes through this to cross between the two. It was
+/// written once here and once in [`crate::textarea`], which put the one place
+/// a character-for-byte confusion could come in in two places.
+pub(crate) fn byte_at(text: &str, index: usize) -> usize {
+    text.char_indices()
+        .nth(index)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Character positions to byte offsets, across characters of one to four
+    /// bytes, with the end and anything past it at the length.
+    #[test]
+    fn a_character_index_lands_on_the_byte_its_character_starts_at() {
+        let text = "aé日🌞";
+        let starts: Vec<usize> = (0..=6).map(|index| byte_at(text, index)).collect();
+        assert_eq!(starts, [0, 1, 3, 6, 10, 10, 10]);
+        assert_eq!(byte_at("", 0), 0);
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

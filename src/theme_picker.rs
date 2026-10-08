@@ -19,12 +19,15 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::cell::Cell;
 use std::path::Path;
 
+use crate::frame::Binding;
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
+use crate::picker::{Step, list_rows, window};
 use crate::theme::Theme;
 
 /// What the theme picker's keys do, under `[theme_picker.keys]`. Esc is not
@@ -118,7 +121,9 @@ pub const ACTIONS: &[Meta<ThemePickerAction>] = &[
         name: "put_back",
         defaults: &[(KeyCode::Char('q'), NONE), (KeyCode::Char('t'), NONE)],
         label: "put back",
-        primary: true,
+        // The footer offers Esc for this instead, under this label: Esc puts
+        // the theme back too, and is the one key no table can take away.
+        primary: false,
         joins: false,
         about: "close and put back the theme you had",
     },
@@ -142,11 +147,25 @@ pub enum Action {
     Cancel,
 }
 
-/// How many rows of the list are on screen at once.
+/// The most rows of the list on screen at once.
 ///
-/// Nine bundled themes plus however many the user wrote is already more than
-/// fits comfortably in a dialog, so this scrolls rather than growing.
+/// Nineteen bundled themes plus however many the user wrote is already more
+/// than fits comfortably in a dialog, so this scrolls rather than growing. A
+/// terminal too short for it gets fewer, decided where the dialog is drawn.
 const ROWS: usize = 12;
+
+/// The rows drawn under the list: a blank and the footer.
+const TRAILER: usize = 2;
+
+/// `keys` with Esc's hint beside them. Esc puts the theme back as `put_back`
+/// does and is in no table, so its hint carries `put_back`'s label.
+fn with_esc(keys: PanelKeymap<ThemePickerAction>) -> PanelKeymap<ThemePickerAction> {
+    let put_back = ACTIONS
+        .iter()
+        .find(|meta| meta.action == ThemePickerAction::PutBack)
+        .expect("put_back is in the table");
+    keys.with_fixed(&[Binding::owned(crate::frame::ESC, put_back.label, true)])
+}
 
 /// An open theme picker.
 #[derive(Debug)]
@@ -156,7 +175,13 @@ pub struct ThemePicker {
     /// labelled as the user's own.
     bundled: usize,
     selected: usize,
-    offset: usize,
+    /// The first name drawn. Only drawing knows how many rows the terminal
+    /// leaves the list, so it is drawing that moves the window, as the panel
+    /// picker's does — moving it in `handle_key` against [`ROWS`] previewed
+    /// themes the terminal had no row to draw.
+    offset: Cell<usize>,
+    /// How many names were drawn last time, which is how far a page moves.
+    page: Cell<usize>,
     keys: PanelKeymap<ThemePickerAction>,
 }
 
@@ -187,22 +212,21 @@ impl ThemePicker {
             .and_then(|name| names.iter().position(|listed| listed == name))
             .unwrap_or(0);
 
-        let mut picker = Self {
+        Self {
             names,
             bundled,
             selected,
-            offset: 0,
-            keys: PanelKeymap::defaults("theme_picker", ACTIONS),
-        };
-        picker.scroll_into_view();
-        picker
+            offset: Cell::new(0),
+            page: Cell::new(ROWS),
+            keys: with_esc(PanelKeymap::defaults("theme_picker", ACTIONS)),
+        }
     }
 
     /// The same picker reading `keys` — `[theme_picker.keys]` as the shell
     /// last loaded it.
     #[must_use]
     pub fn with_keys(mut self, keys: PanelKeymap<ThemePickerAction>) -> Self {
-        self.keys = keys;
+        self.keys = with_esc(keys);
         self
     }
 
@@ -225,7 +249,6 @@ impl ThemePicker {
 
     /// Move the cursor, or report what the shell has to do.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        let last = self.names.len().saturating_sub(1);
         // Esc always puts the theme back, and is in no table.
         if key.code == KeyCode::Esc {
             return Action::Cancel;
@@ -233,36 +256,31 @@ impl ThemePicker {
         let Some(action) = self.keys.action(key) else {
             return Action::None;
         };
-        let moved = match action {
+        let page = self.page.get().max(1);
+        let step = match action {
             ThemePickerAction::Keep => return Action::Accept,
             ThemePickerAction::PutBack => return Action::Cancel,
-            ThemePickerAction::Down => self.selected.saturating_add(1).min(last),
-            ThemePickerAction::Up => self.selected.saturating_sub(1),
-            ThemePickerAction::First => 0,
-            ThemePickerAction::Last => last,
-            ThemePickerAction::PageDown => self.selected.saturating_add(ROWS).min(last),
-            ThemePickerAction::PageUp => self.selected.saturating_sub(ROWS),
+            ThemePickerAction::Down => Step::Down(1),
+            ThemePickerAction::Up => Step::Up(1),
+            ThemePickerAction::First => Step::First,
+            ThemePickerAction::Last => Step::Last,
+            ThemePickerAction::PageDown => Step::Down(page),
+            ThemePickerAction::PageUp => Step::Up(page),
         };
 
+        let moved = step.apply(self.selected, self.names.len());
         if moved == self.selected {
             return Action::None;
         }
         self.selected = moved;
-        self.scroll_into_view();
         self.current()
             .map_or(Action::None, |n| Action::Preview(n.to_string()))
     }
 
-    /// Keep the cursor inside the visible window.
-    fn scroll_into_view(&mut self) {
-        if self.selected < self.offset {
-            self.offset = self.selected;
-        } else if self.selected >= self.offset + ROWS {
-            self.offset = self.selected + 1 - ROWS;
-        }
-    }
-
-    /// The rows to draw: the visible slice of the list, a blank, and the footer.
+    /// The rows to draw inside a dialog `interior` rows tall and `width`
+    /// columns wide: the window of the list that keeps the cursor in view, a
+    /// blank, and the footer. The list gives way first, then the blank —
+    /// never the row the cursor is on.
     ///
     /// Split out of `render` so a test can weigh it. The bug it exists to pin
     /// was invisible on screen — `render` reserved `self.names.len() + 2` lines
@@ -270,9 +288,15 @@ impl ThemePicker {
     /// allocated room for 5,012 every frame and pushed 14. Nothing looked
     /// wrong, which is exactly why a test that only checks what reaches the
     /// screen cannot catch it.
-    fn lines(&self, theme: &Theme) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::with_capacity(ROWS + 2);
-        for (index, name) in self.names.iter().enumerate().skip(self.offset).take(ROWS) {
+    fn lines(&self, theme: &Theme, interior: usize, width: u16) -> Vec<Line<'static>> {
+        let (rows, spaced) = list_rows(interior, TRAILER);
+        let rows = rows.min(ROWS);
+        let offset = window(self.selected, self.offset.get(), rows, self.names.len());
+        self.offset.set(offset);
+        self.page.set(rows);
+
+        let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows + TRAILER);
+        for (index, name) in self.names.iter().enumerate().skip(offset).take(rows) {
             let chosen = index == self.selected;
             let marker = if chosen { "▸ " } else { "  " };
             let style = if chosen {
@@ -292,56 +316,41 @@ impl ThemePicker {
             lines.push(Line::from(spans));
         }
 
-        lines.push(Line::default());
-        // The keep key is the one `[theme_picker.keys]` gave it; Esc always
-        // puts the theme back, whatever else does. Both are spelled as `Key`
-        // spells them and never re-cased: `y` and `Y` are different keys, and
-        // the label face once turned a `keep = "y"` into a footer naming the
-        // one that does nothing.
-        let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
-        let mut footer = Vec::new();
-        if let Some(keep) = self.keys.keys(ThemePickerAction::Keep).first() {
-            footer.push(Span::styled(keep.to_string(), key_style));
-            footer.push(Span::styled(" keep  ", Style::default().fg(theme.muted)));
+        if spaced {
+            lines.push(Line::default());
         }
-        footer.push(Span::styled("Esc", key_style));
-        footer.push(Span::styled(" put back", Style::default().fg(theme.muted)));
-        lines.push(Line::from(footer));
+        // The primary keys as `[theme_picker.keys]` has them — the keep key,
+        // then Esc, which always puts the theme back, whatever else does.
+        // Both are spelled as `Key` spells them and never re-cased: `y` and
+        // `Y` are different keys, and the label face once turned a
+        // `keep = "y"` into a footer naming the one that does nothing.
+        lines.push(crate::frame::key_row(
+            self.keys.bindings(),
+            "  ",
+            theme,
+            width,
+        ));
         lines
     }
 
     /// Draw the dialog centred over whatever is behind it.
     pub fn render(&self, frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
-        let width = 44u16.min(area.width);
-        let rows = u16::try_from(self.names.len().min(ROWS)).unwrap_or(u16::MAX);
-        // List, the two frame rows, the blank row and the footer. Nothing more:
-        // a spare row inside the border reads as a list that has run out rather
-        // than as breathing space.
-        let height = rows.saturating_add(4).min(area.height);
-        let rect = Rect {
-            x: area.x + (area.width.saturating_sub(width)) / 2,
-            y: area.y + (area.height.saturating_sub(height)) / 2,
-            width,
-            height,
-        };
+        // The list, the blank row and the footer inside the frame. Nothing
+        // more: a spare row inside the border reads as a list that has run
+        // out rather than as breathing space.
+        let rows = self.names.len().min(ROWS);
+        let height = u16::try_from(rows + TRAILER)
+            .unwrap_or(u16::MAX)
+            .saturating_add(crate::frame::FRAME_HEIGHT);
+        let rect = crate::frame::centred(area, 44, height);
+        let interior = usize::from(rect.height.saturating_sub(crate::frame::FRAME_HEIGHT));
 
-        let lines = self.lines(theme);
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(theme.border_focused))
-            .padding(Padding::horizontal(1))
-            .title(Line::from(vec![
-                Span::styled("┤", Style::default().fg(theme.border_focused)),
-                Span::styled(
-                    crate::glyphs::utility("theme"),
-                    Style::default()
-                        .fg(theme.title)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("├", Style::default().fg(theme.border_focused)),
-            ]));
+        let lines = self.lines(
+            theme,
+            interior,
+            rect.width.saturating_sub(crate::frame::FRAME_WIDTH),
+        );
+        let block = crate::frame::dialog_block(theme, "theme", rect.width);
 
         frame.render_widget(Clear, rect);
         frame.render_widget(Paragraph::new(lines).block(block), rect);
@@ -444,26 +453,93 @@ mod tests {
         assert_eq!(picker.handle_key(key(KeyCode::Char('q'))), Action::Cancel);
     }
 
-    /// The bug the clock's zone picker shipped with: the cursor walked past the
-    /// bottom of the window and the list stopped following it.
+    /// The theme picker's window was twelve rows, kept by `handle_key`, in a
+    /// dialog sixteen rows tall. On a terminal shorter than that the rows
+    /// under the window's foot were cut, footer first, and the cursor walked
+    /// on into them: `End` previewed a theme whose name was nowhere on
+    /// screen. Swept over every height, with the cursor taken to the end and
+    /// back one row at a time, because the window moving down and the window
+    /// moving up are different arithmetic.
     #[test]
-    fn the_window_follows_the_cursor_past_the_bottom_of_the_list() {
-        let dir = themes_dir("scroll");
-        for i in 0..20 {
+    fn the_theme_under_the_cursor_is_drawn_at_every_height() {
+        let dir = themes_dir("heights");
+        for i in 0..10 {
             write(&dir.0, &format!("mine-{i:02}"));
         }
-        let mut picker = ThemePicker::new(None, Some(&dir.0));
-        assert!(picker.names().len() > ROWS, "needs more rows than fit");
+        let draw = |picker: &ThemePicker, height: u16| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(60, height)).expect("terminal");
+            terminal
+                .draw(|f| picker.render(f, f.area(), &Theme::default()))
+                .expect("draw");
+            let buffer = terminal.backend().buffer().clone();
+            (0..height)
+                .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
 
-        for _ in 0..picker.names().len() {
-            picker.handle_key(key(KeyCode::Down));
-            assert!(
-                picker.selected() >= picker.offset && picker.selected() < picker.offset + ROWS,
-                "cursor {} left the window at offset {}",
-                picker.selected(),
-                picker.offset
-            );
+        for height in 3..=30u16 {
+            let mut picker = ThemePicker::new(None, Some(&dir.0));
+            let count = picker.names().len();
+            assert!(count > ROWS, "needs more themes than the window holds");
+            let visit = |picker: &ThemePicker| {
+                let screen = draw(picker, height);
+                let name = picker.current().expect("a name");
+                assert!(
+                    screen.contains(&format!("▸ {name}")),
+                    "{name} is previewed at height {height} and not drawn:\n{screen}"
+                );
+                // The frame, one row of list and the footer make four rows,
+                // and at four or more the footer is drawn: the list gives way
+                // first, then the blank above the footer.
+                if height >= 4 {
+                    assert!(
+                        screen.contains("Esc put back"),
+                        "the footer went before the blank at height {height}:\n{screen}"
+                    );
+                }
+            };
+            picker.handle_key(key(KeyCode::End));
+            visit(&picker);
+            for _ in 0..count {
+                picker.handle_key(key(KeyCode::Up));
+                visit(&picker);
+            }
         }
+
+        // The window moves when the cursor leaves it, not with every key, and
+        // then by no more than it must. At height 10 the list has six rows.
+        // One row up from the end, the end is still on screen; and one row
+        // past the window's top, the window has moved by exactly one row —
+        // the cursor on the first row and the old top drawn under it. A
+        // window snapped to pages keeps the end on screen too, which is why
+        // the second half is here: it puts the cursor fifth of six.
+        let mut short = ThemePicker::new(None, Some(&dir.0));
+        let names = short.names().to_vec();
+        let last = names.len() - 1;
+        short.handle_key(key(KeyCode::End));
+        let _ = draw(&short, 10);
+        short.handle_key(key(KeyCode::Up));
+        let screen = draw(&short, 10);
+        assert!(
+            screen.contains(&format!("  {}", names[last])),
+            "the window followed the cursor up:\n{screen}"
+        );
+        for _ in 0..5 {
+            short.handle_key(key(KeyCode::Up));
+            let _ = draw(&short, 10);
+        }
+        let screen = draw(&short, 10);
+        let rows: Vec<&str> = screen.lines().collect();
+        let here = rows
+            .iter()
+            .position(|row| row.contains(&format!("▸ {}", names[last - 6])))
+            .unwrap_or_else(|| panic!("the cursor is drawn:\n{screen}"));
+        assert!(
+            rows[here - 1].contains('╭')
+                && rows[here + 1].contains(&format!("  {}", names[last - 5])),
+            "the window moved by more than the one row the cursor left it by:\n{screen}"
+        );
     }
 
     #[test]
@@ -543,7 +619,7 @@ mod tests {
         assert_eq!(picker.handle_key(key(KeyCode::Esc)), Action::Cancel);
 
         let footer: String = picker
-            .lines(&Theme::default())
+            .lines(&Theme::default(), ROWS + TRAILER, 40)
             .last()
             .expect("a footer")
             .spans
@@ -599,7 +675,7 @@ mod tests {
 
         // At the top, part-way down, and at the end.
         for _ in 0..4 {
-            let lines = picker.lines(&Theme::default());
+            let lines = picker.lines(&Theme::default(), ROWS + TRAILER, 40);
             assert!(
                 lines.len() <= ROWS + 2,
                 "{} lines built for a {ROWS}-row window",
