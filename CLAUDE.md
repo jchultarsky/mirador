@@ -2314,9 +2314,40 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.19.2` is released**, as a GitHub release with binaries for macOS
+- **`1.20.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a patch release cut on 2026-10-07
+  and published on crates.io. It is a minor release cut on 2026-10-07
+  carrying the P1 items from the 2026-10-06 code review (#301), as twelve
+  commits rebase-merged so each package stays its own commit: saves that
+  write through symlinks and start private, `[todo].horizon_days` read at
+  last, a misspelt closed-set setting stopping startup, seven shell state
+  leaks, calendar recurrences that keep their days, ends, zones and week
+  starts, tests kept off the network and out of the reader's data
+  directory, `zones.toml` written on first run, ten silent cuts marked,
+  news and feed fixes, and the owner's two decisions of the day — the
+  battery stays brass while charging, and a pomodoro phase counts through
+  sleep. Minor rather than patch because a config value that used to be
+  ignored now stops startup with a message.
+
+  **Every package was implemented by one agent and reviewed twice by
+  others before it was pushed, and both reviews found real defects.** The
+  worst were caught in the fixes themselves: a `WKST` guard that would
+  have shown every fortnightly Outlook or Google meeting only once, a
+  pomodoro length that went back to 180 at the next launch and could not
+  be un-set, a reset that wrote defaults through a link into a dotfiles
+  repository, and a CHANGELOG merge that dropped 21 entries because it
+  read section headings only from added lines. Every commit was built and
+  tested on its own before merging, and the tests-offline commit was
+  ordered ahead of the first that saves a file at construction, so no
+  point in the history lets `cargo test` write into a real data
+  directory.
+
+  Step 0 was the PR head, whose tree `main` matches byte for byte, as a
+  release build under tmux at 120x40 with a fresh home: first run wrote
+  `zones.toml`, the task form kept `Esc cancel`, browsing themes wrote no
+  `state.toml`, the `w` footer read `Esc close`, and `q` quit.
+
+- **`1.19.2`** was a patch release cut on 2026-10-07
   carrying the seven P0 items from the 2026-10-06 code review (#299): a
   `.ics` time that panicked the agenda thread, monthly and yearly rules
   drifting off month-end days, rules expanded in the reader's zone rather
