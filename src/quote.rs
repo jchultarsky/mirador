@@ -174,6 +174,11 @@ struct QuoteSeries {
     close: Vec<Option<f64>>,
 }
 
+/// The most of the quote service's own error text that is kept, in cells.
+/// Yahoo's run to about forty — `No data found, symbol may be delisted` — so
+/// this is twice anything real and still bounds what a frame copies.
+const MAX_DETAIL: usize = 80;
+
 /// Turn a v8 chart response into a [`Quote`].
 ///
 /// Split from the request so it can be tested against captured JSON; the test
@@ -186,6 +191,9 @@ pub fn parse_chart(body: &str) -> Result<Quote> {
             .description
             .or(error.code)
             .unwrap_or_else(|| "unknown error".to_string());
+        // Clipped here, where somebody else's text comes in. The board draws
+        // this on every frame, and the body it came in may be ten megabytes.
+        let detail = crate::grid::truncate(&detail, MAX_DETAIL);
         anyhow::bail!("the quote service rejected the symbol: {detail}");
     }
 
@@ -262,12 +270,24 @@ fn http_get(_url: &str) -> Result<String> {
 
 #[cfg(not(test))]
 fn http_get(url: &str) -> Result<String> {
-    crate::fetch::get(url, HTTP_TIMEOUT, Some(BROWSER_UA)).map_err(|e| match e {
+    crate::fetch::get(url, HTTP_TIMEOUT, Some(BROWSER_UA)).map_err(explain)
+}
+
+/// What a failed request says on the board.
+///
+/// The 429 message used to end by telling the reader that another
+/// `[stocks].source` was needed, when `yahoo` is the only one there is and any
+/// other value is refused at startup. It says what is true now: Yahoo limits by
+/// address, the panel tries again on its own, and on a datacenter or VPN
+/// address waiting will not help. The fact comes first, because the status row
+/// is cut to the panel and what goes is the end of the sentence. When a second
+/// source ships, the advice to choose it belongs back here.
+fn explain(error: ureq::Error) -> anyhow::Error {
+    match error {
         ureq::Error::StatusCode(429) => anyhow::anyhow!(
-            "the quote service is rate-limiting this network (HTTP 429). \
-             Yahoo blocks datacenter and VPN addresses outright; on such a \
-             connection no polling rate will help and another `[stocks].source` \
-             is needed."
+            "rate-limited by Yahoo (HTTP 429), which limits by IP address; \
+             wait and it tries again, though datacenter and VPN addresses are \
+             refused outright"
         ),
         ureq::Error::StatusCode(404) => {
             anyhow::anyhow!("no such symbol")
@@ -276,7 +296,7 @@ fn http_get(url: &str) -> Result<String> {
             anyhow::anyhow!("the quote service returned HTTP {code}")
         }
         other => anyhow::anyhow!("network request failed: {other}"),
-    })
+    }
 }
 
 /// Percent-encode the characters that matter in a path segment.
@@ -618,6 +638,45 @@ mod tests {
                        "description":"No data found, symbol may be delisted"}}}"#;
         let err = parse_chart(body).unwrap_err().to_string();
         assert!(err.contains("delisted"), "got `{err}`");
+    }
+
+    /// The quote service's error text is somebody else's string, and the board
+    /// draws it on every frame, formatting it into the status row before the
+    /// row cuts it to the panel. Unbounded, a response up to `ureq`'s 10 MB
+    /// cap decided how much each frame copied — the `feed` and `themes`
+    /// findings again, at the third parser that reads the network.
+    #[test]
+    fn the_services_error_text_is_bounded_where_it_is_read() {
+        let huge = "symbol may be delisted ".repeat(50_000);
+        let body = format!(
+            r#"{{"chart":{{"result":[],"error":{{"code":"Not Found","description":"{huge}"}}}}}}"#
+        );
+        let err = format!("{:#}", parse_chart(&body).unwrap_err());
+        assert!(err.len() < 200, "a {}-byte error survived", err.len());
+        assert!(err.ends_with('\u{2026}'), "a cut reason says so: `{err}`");
+    }
+
+    /// `[stocks].source` takes one value, and the HTTP 429 message told the
+    /// reader to choose another — which mirador then refuses at startup. It
+    /// says what is true instead, and says it first, because the status row is
+    /// cut to the panel and the end of a sentence is the part that is lost.
+    #[test]
+    fn a_rate_limit_says_what_is_true() {
+        let message = format!("{:#}", explain(ureq::Error::StatusCode(429)));
+        if SOURCE_NAMES.len() == 1 {
+            assert!(
+                !message.contains("[stocks].source"),
+                "there is no other source to choose: `{message}`"
+            );
+        }
+        assert!(
+            crate::grid::truncate(&message, 30).contains("rate-limited by Yahoo"),
+            "the fact has to survive a narrow status row: `{message}`"
+        );
+        assert!(
+            message.contains("IP address"),
+            "say why waiting may not help: `{message}`"
+        );
     }
 
     #[test]

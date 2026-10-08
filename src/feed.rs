@@ -9,8 +9,12 @@
 //!
 //! **RSS 2.0 only.** Every feed sampled while designing this was RSS 2.0 —
 //! BBC, Ars Technica, NASA, Phys.org and Hacker News. Atom exists and is not
-//! read; a feed that produces no items says so in the panel rather than looking
-//! empty, which is the honest failure for something this narrow.
+//! read. An Atom document is refused by name, and a document with neither a
+//! `<channel>` nor an `<item>` — a web page, an error page — is an error too,
+//! so either reaches the panel as a failure with its reason rather than as a
+//! quiet day, which is what both did until 2026-10-07, while the README claimed
+//! Atom was read. An RSS channel with no items is a feed with nothing in it,
+//! and reads as one.
 //!
 //! Parsing goes through `quick-xml` rather than being hand-rolled, which is the
 //! opposite of the call [`crate::ical`] made and worth explaining. iCalendar is
@@ -46,12 +50,20 @@ pub struct Story {
     pub published: Option<Zoned>,
 }
 
+/// What one feed yielded.
+#[derive(Debug, Default)]
+pub struct Feed {
+    pub stories: Vec<Story>,
+    /// Why reading stopped before the end of the document, when it did.
+    pub fault: Option<String>,
+}
+
 /// Pull the stories out of an RSS document.
 ///
 /// Tolerant by design: an item with no title is skipped, an unparseable date
 /// becomes `None`, and unknown elements are ignored. A feed is somebody else's
 /// output and will contain things this does not expect.
-pub fn parse(xml: &str) -> Result<Vec<Story>> {
+pub fn parse(xml: &str) -> Result<Feed> {
     let mut reader = quick_xml::Reader::from_str(xml);
     // Deliberately *not* `trim_text(true)`. An entity splits an element's text
     // into several events, so a headline like `‘Dead stars’ may have appetites`
@@ -60,21 +72,53 @@ pub fn parse(xml: &str) -> Result<Vec<Story>> {
     // `'Dead stars'may have`. Seen on a real feed within a minute of the panel
     // first running. The assembled value is trimmed once, at the end.
     reader.config_mut().trim_text(false);
+    // A bare `&` — `AT&T` as the publisher typed it — is the commonest fault in
+    // a real feed, and by default quick-xml refuses the whole document for it.
+    // It is plainly an ampersand, so it is read as one. The flag covers an `&`
+    // with no `;` before the next `<` or `&`; one *with* a `;` after it reaches
+    // `resolve_entity` as a reference, which gives it back as written.
+    reader.config_mut().allow_dangling_amp = true;
 
     let mut stories = Vec::new();
     let mut in_item = false;
+    let mut root_seen = false;
+    let mut saw_item = false;
+    let mut saw_channel = false;
     // Which element's text is currently being collected. `None` between them.
     let mut field: Option<Field> = None;
     let mut current = Partial::default();
 
     loop {
-        match reader.read_event().context("reading the feed as XML")? {
+        let event = match reader.read_event() {
+            Ok(event) => event,
+            // Broken part-way down. The stories before the fault were read
+            // whole and are still news, so they are kept — and the fault goes
+            // with them rather than being swallowed, because a feed that stops
+            // reading at its third item is still a feed that is broken.
+            Err(e) if !stories.is_empty() => {
+                return Ok(Feed {
+                    stories,
+                    fault: Some(format!("partly unreadable: {e}")),
+                });
+            }
+            Err(e) => return Err(e).context("reading the feed as XML"),
+        };
+        match event {
             XmlEvent::Start(tag) => {
+                let root = !std::mem::replace(&mut root_seen, true);
                 match local_name(tag.name().as_ref()) {
+                    // Atom is valid XML with no `<item>` in it, so without this
+                    // it came back as an empty list and the panel called it a
+                    // quiet day. Named, so the reason reaches the panel.
+                    "feed" if root => {
+                        anyhow::bail!("an Atom feed; mirador reads RSS 2.0 only");
+                    }
                     "item" => {
                         in_item = true;
+                        saw_item = true;
                         current = Partial::default();
                     }
+                    "channel" => saw_channel = true,
                     // Only inside an item: a feed's channel has a `<title>` and
                     // a `<link>` of its own, and reading those as a story is how
                     // the outlet's own name ends up as the first headline.
@@ -117,10 +161,8 @@ pub fn parse(xml: &str) -> Result<Vec<Story>> {
             // not do this for you. What it does do is get the *splitting* right,
             // which is the part a hand-rolled scanner gets wrong.
             XmlEvent::GeneralRef(reference) => {
-                if let Some(which) = field
-                    && let Some(text) = resolve_entity(&reference)
-                {
-                    current.set(which, &text);
+                if let Some(which) = field {
+                    current.set(which, &resolve_entity(&reference));
                 }
             }
             XmlEvent::Eof => break,
@@ -128,7 +170,18 @@ pub fn parse(xml: &str) -> Result<Vec<Story>> {
         }
     }
 
-    Ok(stories)
+    // A document with no `<channel>` and no `<item>` is not a feed with nothing
+    // in it — it is a web page, an error page, or a format this does not read,
+    // and an empty list would reach the panel as a quiet day. A channel with
+    // no items is a real feed on a quiet day, and says so.
+    if !saw_item && !saw_channel {
+        anyhow::bail!("not an RSS feed: no <channel> or <item> in it");
+    }
+
+    Ok(Feed {
+        stories,
+        fault: None,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,24 +261,29 @@ fn clip(text: &str, limit: usize) -> String {
 /// XML only predefines five and anything else has to come from a DTD nobody is
 /// going to fetch — so the five are spelled out here, plus `nbsp`, which feeds
 /// emit constantly despite it being an HTML entity rather than an XML one.
-/// Anything else is dropped rather than shown raw: `&hellip;` in a headline is
-/// noise, and there is no honest way to guess.
-fn resolve_entity(reference: &quick_xml::events::BytesRef<'_>) -> Option<String> {
+///
+/// Anything else is given back as it was written, `&` and `;` included. It used
+/// to be dropped, on the theory that `&hellip;` in a headline is noise — but
+/// what reaches here is not always a reference. A bare `&` with a `;` later in
+/// the same text is read by quick-xml as a reference *up to* the `;`, so
+/// `R&D spending rises; analysts wary` arrives as `R`, a reference named
+/// `D spending rises`, and ` analysts wary`, and dropping the name deleted the
+/// middle of the headline with nothing to say so. There is no honest way to
+/// guess which is which, and showing what the feed wrote never loses a word.
+fn resolve_entity(reference: &quick_xml::events::BytesRef<'_>) -> String {
     if let Ok(Some(character)) = reference.resolve_char_ref() {
-        return Some(character.to_string());
+        return character.to_string();
     }
-    Some(
-        match reference.as_ref() {
-            "amp" => "&",
-            "lt" => "<",
-            "gt" => ">",
-            "quot" => "\"",
-            "apos" => "'",
-            "nbsp" => " ",
-            _ => return None,
-        }
-        .to_string(),
-    )
+    match reference.as_ref() {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => " ",
+        name => return format!("&{name};"),
+    }
+    .to_string()
 }
 
 /// An RFC 2822 date, or `None` if the feed wrote one this cannot read.
@@ -265,7 +323,7 @@ mod tests {
             "<rss><channel><item><title>{huge}</title>\
              <link>http://example.com/{huge}</link></item></channel></rss>"
         );
-        let stories = parse(&xml).expect("parses");
+        let stories = parse(&xml).expect("parses").stories;
         let story = stories.first().expect("one story");
 
         assert!(
@@ -295,7 +353,7 @@ mod tests {
         let title = "Astronomers find a planet where it rains glass sideways, \
                      and the discovery may rewrite how we think gas giants form";
         let xml = format!("<rss><channel><item><title>{title}</title></item></channel></rss>");
-        let stories = parse(&xml).expect("parses");
+        let stories = parse(&xml).expect("parses").stories;
         assert_eq!(stories[0].title, title, "a real headline was clipped");
     }
 
@@ -343,7 +401,7 @@ mod tests {
 
     #[test]
     fn the_feeds_own_title_is_not_a_story() {
-        let stories = parse(SAMPLE).expect("parses");
+        let stories = parse(SAMPLE).expect("parses").stories;
         assert!(
             !stories.iter().any(|s| s.title == "The Feed Itself"),
             "the channel's own title became a headline: {:?}",
@@ -356,7 +414,7 @@ mod tests {
     /// this: CDATA and entities, decoded rather than shown.
     #[test]
     fn cdata_and_entities_come_out_as_text() {
-        let stories = parse(SAMPLE).expect("parses");
+        let stories = parse(SAMPLE).expect("parses").stories;
         assert_eq!(
             stories[0].title,
             "Wildfire now nine miles from Bordeaux, mayor warns"
@@ -376,7 +434,7 @@ mod tests {
     /// separately eats the space that followed. `'Dead stars'may have`.
     #[test]
     fn a_space_next_to_an_entity_survives() {
-        let stories = parse(SAMPLE).expect("parses");
+        let stories = parse(SAMPLE).expect("parses").stories;
         let quoted = stories
             .iter()
             .find(|s| s.title.contains("Dead stars"))
@@ -393,7 +451,7 @@ mod tests {
     /// is missing or malformed still appears, without an age.
     #[test]
     fn the_date_forms_feeds_actually_emit_all_read() {
-        let stories = parse(SAMPLE).expect("parses");
+        let stories = parse(SAMPLE).expect("parses").stories;
         let by_title = |want: &str| {
             stories
                 .iter()
@@ -419,13 +477,130 @@ mod tests {
         );
     }
 
+    /// Something that is not an RSS feed is an error that says what it is,
+    /// never an empty list. An empty list reaches the panel as a quiet day, and
+    /// a reader looking at `No stories.` has no way to learn that the address
+    /// they configured is a web page.
     #[test]
-    fn something_that_is_not_a_feed_is_an_error_or_an_empty_list() {
+    fn something_that_is_not_a_feed_is_an_error_naming_the_cause() {
         // Not XML at all.
-        assert!(parse("<<<not xml").is_err() || parse("<<<not xml").unwrap().is_empty());
+        assert!(parse("<<<not xml").is_err());
         // Valid XML, no items.
-        let stories = parse("<html><body>hello</body></html>").unwrap();
-        assert!(stories.is_empty(), "{stories:?}");
+        let err = parse("<html><body>hello</body></html>").expect_err("no items is not a feed");
+        assert!(format!("{err:#}").contains("<item>"), "got `{err:#}`");
+    }
+
+    /// An RSS channel with no items is a feed on a quiet day, not a broken one;
+    /// refusing it would put an outlet that published nothing today under
+    /// "Cannot read the feeds".
+    #[test]
+    fn an_empty_channel_is_an_empty_feed_not_a_failure() {
+        let feed = parse("<rss version=\"2.0\"><channel><title>Quiet</title></channel></rss>")
+            .expect("an empty channel is still a feed");
+        assert!(feed.stories.is_empty(), "{:?}", feed.stories);
+        assert_eq!(feed.fault, None);
+    }
+
+    /// The README said Atom was read, and the parser never had an arm for
+    /// `<entry>`: an Atom document is valid XML holding no `<item>`, so it came
+    /// back as an empty list and the panel called it a quiet day. Refused by
+    /// name instead, so the reason reaches the panel's failure line.
+    #[test]
+    fn an_atom_feed_says_so_rather_than_looking_empty() {
+        let atom = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Releases</title>
+  <entry>
+    <title>v1.2.0</title>
+    <link href="https://example.org/releases/v1.2.0"/>
+    <updated>2026-10-01T12:00:00Z</updated>
+  </entry>
+</feed>"#;
+        let err = parse(atom).expect_err("Atom is not read");
+        assert!(
+            format!("{err:#}").contains("Atom"),
+            "the failure should name the cause, got `{err:#}`"
+        );
+    }
+
+    /// A bare `&` — `AT&T` as the publisher typed it — is the commonest fault in
+    /// a real feed, and quick-xml refuses the whole document for it by default.
+    /// It is plainly an ampersand, and is read as one.
+    #[test]
+    fn a_bare_ampersand_is_read_as_one() {
+        let xml = SAMPLE.replace("AT&amp;T", "AT&T");
+        let feed = parse(&xml).expect("a bare `&` is not worth the whole feed");
+        assert_eq!(feed.stories.len(), 5, "every story survives");
+        assert_eq!(
+            feed.stories[2].title,
+            "AT&T reverses course on the physical button"
+        );
+        assert_eq!(feed.fault, None, "nothing was lost, so nothing is reported");
+    }
+
+    /// The flag above covers an `&` with no `;` before the next `<` or `&`.
+    /// When a `;` comes first, quick-xml reads everything up to it as the name
+    /// of a reference whatever the flag says, and a name this does not know was
+    /// dropped — taking the text between with it, in silence. `R&D spending
+    /// rises; analysts wary` came out as `R analysts wary`, and a link with a
+    /// `;` in its query came out as a different address that was then
+    /// linkified and opened. A name that is not one of the six is given back
+    /// as it was written.
+    #[test]
+    fn a_bare_ampersand_before_a_semicolon_keeps_the_text_between() {
+        let xml = "<rss><channel>\
+            <item><title>R&D spending rises; analysts wary</title>\
+                  <link>https://example.com/a?id=1&amp;x=2&page=3;view=full</link></item>\
+            <item><title>Q&A: why it matters; more</title></item>\
+            <item><title>AT&T; Verizon merge</title></item>\
+            <item><title>Wait&hellip; what</title></item>\
+            </channel></rss>";
+        let feed = parse(xml).expect("parses");
+        let titles: Vec<&str> = feed.stories.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "R&D spending rises; analysts wary",
+                "Q&A: why it matters; more",
+                "AT&T; Verizon merge",
+                "Wait&hellip; what",
+            ],
+            "the text between an `&` and a later `;` is part of the headline"
+        );
+        assert_eq!(
+            feed.stories[0].link, "https://example.com/a?id=1&x=2&page=3;view=full",
+            "a link must reach the panel as the address it was"
+        );
+        assert_eq!(feed.fault, None, "nothing was lost, so nothing is reported");
+    }
+
+    /// One ill-formed tag in the third item used to discard the two stories
+    /// read whole before it. They are kept, and the fault rides alongside them
+    /// so the panel can still say the feed did not read cleanly.
+    #[test]
+    fn a_fault_part_way_down_keeps_the_stories_before_it() {
+        let xml = SAMPLE.replace(
+            "<title>AT&amp;T reverses course on the physical button</title>",
+            "<title>AT&amp;T reverses course on the physical button</titel>",
+        );
+        let feed = parse(&xml).expect("two good stories are still news");
+        let titles: Vec<&str> = feed.stories.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Wildfire now nine miles from Bordeaux, mayor warns",
+                "\u{2018}Dead stars\u{2019} may have surprisingly healthy appetites",
+            ],
+            "the stories before the fault, and nothing after it"
+        );
+        assert!(
+            feed.fault.as_deref().is_some_and(|f| f.contains("partly")),
+            "the fault must be reported, not swallowed: {:?}",
+            feed.fault
+        );
+
+        // A fault before any story has nothing to keep, and is still an error.
+        assert!(parse("<rss><channel><item><title>x</titel></item></channel></rss>").is_err());
     }
 
     #[test]

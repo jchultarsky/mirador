@@ -644,7 +644,8 @@ The shipped feeds are science, space and technology only. Choosing outlets for
 general or political news is an editorial act this project has no business
 making on your behalf; add your own in `[news.feeds]`. A topic *is* a feed —
 RSS has no topic parameter, so subscribing to a science feed is how you ask for
-science.
+science. Feeds must be RSS 2.0: Atom is not read, and an Atom feed is
+reported as a feed that failed, rather than shown as one with nothing in it.
 
 Only the headline, link and date are read. Feed summaries are article prose
 belonging to whoever wrote them. Refresh is hourly, and an hour is also the
@@ -1475,7 +1476,7 @@ is what makes the same binary work on macOS, Linux and Windows terminals.
 | Crate | What it does here |
 | --- | --- |
 | [ratatui](https://ratatui.rs) | Every widget, layout and redraw |
-| [quick-xml](https://github.com/tafia/quick-xml) | Reading RSS and Atom well enough for a headline |
+| [quick-xml](https://github.com/tafia/quick-xml) | Reading RSS 2.0 well enough for a headline |
 | [jiff](https://github.com/BurntSushi/jiff) | Dates, IANA timezones, the "2 days late" arithmetic |
 | [sysinfo](https://github.com/GuillaumeGomez/sysinfo) | CPU and network counters, per platform |
 | [ureq](https://github.com/algesten/ureq) | Blocking HTTP for weather and quotes |

@@ -153,6 +153,10 @@ const USEFUL_WIDTH: u16 = 62;
 /// How long a request may take before it is given up on.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Cells taken by the list's highlight symbol, `▸ ` focused and two spaces
+/// not, which `List` reserves in front of every line once a story is selected.
+const HIGHLIGHT_WIDTH: u16 = 2;
+
 /// What the fetch thread has produced.
 #[derive(Debug, Default)]
 struct State {
@@ -300,11 +304,7 @@ impl NewsPanel {
     /// its two-cell highlight symbol once a selection exists, and the links
     /// have to follow.
     fn link_headlines(&self, frame: &mut Frame, body: Rect, headline_rows: &[(u16, u16, usize)]) {
-        let indent = if self.selected.selected().is_some() {
-            2
-        } else {
-            0
-        };
+        let indent = self.indent();
         let buf = frame.buffer_mut();
         for &(y, w, index) in headline_rows {
             if y >= body.y + body.height {
@@ -320,6 +320,22 @@ impl NewsPanel {
                 &self.shown[index].link,
                 &format!("news-{index}"),
             );
+        }
+    }
+
+    /// How far `List` shifts every line right: the width of its highlight
+    /// symbol once a selection exists, and nothing before.
+    ///
+    /// The headlines are wrapped to the width left after it, not to the panel.
+    /// Wrapped to the panel, every row the wrap filled lost its last two cells
+    /// to the terminal from the first `j` onwards, with no `…` to say so —
+    /// `Krakatau` drawn as `Kraka` above a row that carried on as if nothing
+    /// had gone missing.
+    fn indent(&self) -> u16 {
+        if self.selected.selected().is_some() {
+            HIGHLIGHT_WIDTH
+        } else {
+            0
         }
     }
 
@@ -578,17 +594,13 @@ impl Panel for NewsPanel {
             return;
         }
 
-        let blocks = story_blocks(&self.shown, width, theme);
-        let budget = usize::from(body.height);
-        let mut keep = how_many_fit(&blocks, budget);
-        // A headline too tall for the panel would otherwise leave it blank with
-        // stories loaded, which reads as broken rather than as short. Show the
-        // first one clipped instead: `List` draws only items that fit entirely,
-        // so the clipping has to happen here.
-        let clipped = keep == 0 && budget > 0;
-        if clipped {
-            keep = 1;
-        }
+        let drawn_width = area.width.saturating_sub(self.indent());
+        let blocks = fitted_blocks(
+            story_blocks(&self.shown, drawn_width, theme),
+            usize::from(body.height),
+            drawn_width,
+        );
+        let keep = blocks.len();
 
         let mut items: Vec<ListItem> = Vec::with_capacity(keep);
         // `(row, width, story)` for every title row that will reach the
@@ -597,10 +609,7 @@ impl Panel for NewsPanel {
         // punched in after the draw need to know where each headline landed.
         let mut headline_rows: Vec<(u16, u16, usize)> = Vec::new();
         let mut row = body.y;
-        for (index, mut lines) in blocks.into_iter().take(keep).enumerate() {
-            if clipped {
-                lines.truncate(budget);
-            }
+        for (index, mut lines) in blocks.into_iter().enumerate() {
             // Every line after the masthead is a wrapped title row.
             for (offset, line) in lines.iter().enumerate().skip(1) {
                 headline_rows.push((row + offset as u16, line.width() as u16, index));
@@ -818,16 +827,26 @@ fn link_lines(link: &str, width: u16) -> Vec<String> {
 /// that way. Air rather than rules: a separator between every story would be
 /// more furniture than content at this width, and the panel is meant to read
 /// like a page.
+///
+/// `width` is the width the lines will be *drawn* at — the panel's, less the
+/// highlight symbol's once a story is selected — so the wrap and
+/// [`how_many_fit`] both measure what the screen will hold. The masthead's age
+/// is dropped whole when it does not fit beside the name, and a name too long
+/// on its own is cut with `…`, never by the terminal.
 fn story_blocks(
     stories: &[Story],
-    width: usize,
+    width: u16,
     theme: &crate::theme::Theme,
 ) -> Vec<Vec<Line<'static>>> {
     stories
         .iter()
         .map(|story| {
-            let mut lines = vec![Line::from(masthead(story, theme))];
-            for line in crate::grid::wrap(&story.title, width) {
+            let parts = masthead(story, theme)
+                .into_iter()
+                .map(|span| vec![span])
+                .collect();
+            let mut lines = vec![crate::grid::assemble(parts, width)];
+            for line in crate::grid::wrap(&story.title, usize::from(width)) {
                 lines.push(Line::from(Span::styled(
                     line,
                     Style::default().fg(theme.text),
@@ -836,6 +855,53 @@ fn story_blocks(
             lines
         })
         .collect()
+}
+
+/// The blocks that reach the screen: as many as fit whole in `budget` rows, or
+/// the first one clipped to them when not even that does.
+///
+/// A headline too tall for the panel would otherwise leave it blank with
+/// stories loaded, which reads as broken rather than as short. `List` draws
+/// only items that fit entirely, so the clipping has to happen here — and the
+/// last row kept ends in `…`, because rows that fill the body look finished
+/// either way.
+fn fitted_blocks(
+    mut blocks: Vec<Vec<Line<'static>>>,
+    budget: usize,
+    width: u16,
+) -> Vec<Vec<Line<'static>>> {
+    let keep = how_many_fit(&blocks, budget);
+    if keep > 0 || budget == 0 {
+        blocks.truncate(keep);
+        return blocks;
+    }
+    blocks.truncate(1);
+    if let Some(first) = blocks.first_mut() {
+        first.truncate(budget);
+        if let Some(last) = first.pop() {
+            first.push(ends_in_ellipsis(last, width));
+        }
+    }
+    blocks
+}
+
+/// `line` with `…` after its last visible character, abridged to `width` if
+/// that does not fit.
+///
+/// For the last row of a story clipped to the panel's height: the rows below
+/// it are never drawn, so nothing at any width shows them missing, and a row
+/// that happens to end at a word reads as the end of the headline. Through
+/// [`crate::grid::assemble`] as one part, so the styles survive and the `…`
+/// lands wherever the cut falls. When only the masthead fits, the masthead is
+/// the row that says the headline is missing.
+fn ends_in_ellipsis(line: Line<'static>, width: u16) -> Line<'static> {
+    let mut spans = line.spans;
+    if let Some(last) = spans.last_mut() {
+        last.content = last.content.trim_end().to_string().into();
+    }
+    let style = spans.last().map(|span| span.style).unwrap_or_default();
+    spans.push(Span::styled("\u{2026}", style));
+    crate::grid::assemble(vec![spans], width)
 }
 
 /// How many of `blocks` fit whole in `budget` rows.
@@ -908,45 +974,31 @@ fn fetch_loop(
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            match read_feed(url) {
-                Ok(mut found) => {
-                    found.truncate(per_feed);
-                    for mut story in found {
-                        // Bounded for the same reason the feed's own fields are:
-                        // `masthead` uppercases this on every frame, so an
-                        // over-long name — this one comes from the config rather
-                        // than from the feed, but still — would be re-allocated
-                        // sixty times a minute.
-                        story.source = name.chars().take(crate::feed::MAX_SOURCE).collect();
-                        stories.push(story);
-                    }
-                }
-                Err(e) => failures.push(format!("{name}: {e:#}")),
-            }
+            take_feed(name, read_feed(url), per_feed, &mut stories, &mut failures);
         }
 
         let stories = interleave(stories);
 
+        // A total failure keeps what is on screen; a partial one takes what
+        // arrived. Either way the age below says how fresh it is.
+        //
+        // And a pass that found nothing with nothing failing — no feeds to
+        // read, or every one read and empty — is a quiet day, and is recorded
+        // as a reading like any other. It used to be recorded only when it
+        // found a story, so `No stories.` could never be drawn and such a
+        // panel said `Reading…` for as long as it ran.
+        let replace = !stories.is_empty() || failures.is_empty();
         let failed = (!failures.is_empty()).then(|| failures.join("; "));
-        match state.lock() {
-            Ok(mut guard) => {
-                // A total failure keeps what is on screen; a partial one takes
-                // what arrived. Either way the age below says how fresh it is.
-                if !stories.is_empty() {
-                    guard.stories = stories;
-                    guard.fetched = Some(Instant::now());
-                }
-                guard.error = failed;
-            }
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                if !stories.is_empty() {
-                    guard.stories = stories;
-                    guard.fetched = Some(Instant::now());
-                }
-                guard.error = failed;
-            }
+        let mut guard = match state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if replace {
+            guard.stories = stories;
+            guard.fetched = Some(Instant::now());
         }
+        guard.error = failed;
+        drop(guard);
         generation.fetch_add(1, Ordering::Release);
 
         let woke = crate::poll::wait(interval, stop, || match refresh.lock() {
@@ -956,6 +1008,39 @@ fn fetch_loop(
         if woke == crate::poll::Wake::Stop {
             return;
         }
+    }
+}
+
+/// Add one feed's answer to the pass: its stories, named for the panel, and
+/// its failure, named for the footer.
+///
+/// A feed read up to a fault gives both. The stories before the fault are
+/// shown, where they used to be thrown away with the rest of the document,
+/// and the feed is still reported, because it is still broken.
+fn take_feed(
+    name: &str,
+    result: anyhow::Result<crate::feed::Feed>,
+    per_feed: usize,
+    stories: &mut Vec<Story>,
+    failures: &mut Vec<String>,
+) {
+    let feed = match result {
+        Ok(feed) => feed,
+        Err(e) => {
+            failures.push(format!("{name}: {e:#}"));
+            return;
+        }
+    };
+    if let Some(fault) = feed.fault {
+        failures.push(format!("{name}: {fault}"));
+    }
+    for mut story in feed.stories.into_iter().take(per_feed) {
+        // Bounded for the same reason the feed's own fields are: `masthead`
+        // uppercases this on every frame, so an over-long name — this one
+        // comes from the config rather than from the feed, but still — would
+        // be re-allocated sixty times a minute.
+        story.source = name.chars().take(crate::feed::MAX_SOURCE).collect();
+        stories.push(story);
     }
 }
 
@@ -1006,7 +1091,7 @@ fn interleave(stories: Vec<Story>) -> Vec<Story> {
 }
 
 /// Fetch and parse one feed.
-fn read_feed(url: &str) -> anyhow::Result<Vec<Story>> {
+fn read_feed(url: &str) -> anyhow::Result<crate::feed::Feed> {
     let body = crate::fetch::get(url, HTTP_TIMEOUT, None)?;
     crate::feed::parse(&body)
 }
@@ -1867,6 +1952,168 @@ mod tests {
         }
     }
 
+    /// `No stories.` is the quiet day, and nothing could reach it: the fetch
+    /// thread recorded a reading only when a pass brought back at least one
+    /// story, so a pass with nothing to read — or one that read every feed and
+    /// found nothing — left the panel saying `Reading…` for the life of the
+    /// session, which reads as a hang rather than as an empty feed.
+    #[test]
+    fn a_pass_that_found_nothing_says_so_rather_than_reading_for_ever() {
+        let mut panel = NewsPanel::new(&NewsConfig {
+            feeds: Vec::new(),
+            ..NewsConfig::default()
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !panel.tick() {
+            assert!(
+                Instant::now() < deadline,
+                "the fetch thread never finished its pass"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let screen = draw(&mut panel, 46, 6);
+        assert!(
+            screen.contains("No stories."),
+            "a finished pass with nothing in it is a quiet day, got:\n{screen}"
+        );
+        assert!(
+            !screen.contains("Reading"),
+            "the pass has finished, so nothing is being read:\n{screen}"
+        );
+    }
+
+    /// A feed broken part-way down gives the panel the stories before the
+    /// fault and a failure naming the feed, so the footer still says the
+    /// refresh is not clean. And an Atom feed's refusal reaches the same list by
+    /// name, which is the line the panel shows when nothing could be read.
+    #[test]
+    fn a_partly_readable_feed_is_shown_and_still_reported() {
+        let broken = "<rss><channel>\
+             <item><title>First</title></item>\
+             <item><title>Second</title></item>\
+             <item><title>Third</titel></item>\
+             </channel></rss>";
+        let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry/></feed>"#;
+        let mut stories = Vec::new();
+        let mut failures = Vec::new();
+        take_feed(
+            "NASA",
+            crate::feed::parse(broken),
+            12,
+            &mut stories,
+            &mut failures,
+        );
+        take_feed(
+            "RELEASES",
+            crate::feed::parse(atom),
+            12,
+            &mut stories,
+            &mut failures,
+        );
+
+        let shown: Vec<(&str, &str)> = stories
+            .iter()
+            .map(|s| (s.source.as_str(), s.title.as_str()))
+            .collect();
+        assert_eq!(shown, [("NASA", "First"), ("NASA", "Second")]);
+        assert_eq!(failures.len(), 2, "{failures:?}");
+        assert!(
+            failures[0].starts_with("NASA: partly unreadable"),
+            "{failures:?}"
+        );
+        assert!(
+            failures[1].starts_with("RELEASES: ") && failures[1].contains("Atom"),
+            "{failures:?}"
+        );
+    }
+
+    /// The silent-clip sweep in `widgets/mod.rs`, run on this panel with a
+    /// story selected — which that sweep never does, and which is the state the
+    /// panel is in from the first `j`, `o`, `y`, `Enter` or turn of the wheel.
+    ///
+    /// `List` indents every item by its two-cell highlight symbol once a
+    /// selection exists, and the headlines were wrapped to the whole width
+    /// regardless, so any row the wrap filled lost its last two cells to the
+    /// terminal with no `…`. Same differencing as the original: a row at width
+    /// W that is exactly the first W cells of the same row at W+1, with
+    /// something in cell W, was cut. A whole word dropped at a space, a word
+    /// that reappears at the head of the next row, and anything ending in `…`
+    /// are not cuts.
+    #[test]
+    fn no_headline_is_cut_silently_once_a_story_is_selected() {
+        let stories = [
+            (
+                "NASA",
+                "Anak Krakatau rumbles again as satellites watch the plume",
+            ),
+            (
+                "PHYS.ORG",
+                "Some black holes grow much faster than their galaxies",
+            ),
+            (
+                "ARS TECHNICA",
+                "A very long headline that has to wrap on any panel narrower than it",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(n, (source, title))| Story {
+            link: format!("https://example.test/story-{n}"),
+            ..story(source, title, 10)
+        })
+        .collect();
+        let mut panel = NewsPanel::offline(&NewsConfig::default(), stories);
+        panel.selected.select(Some(0));
+
+        let height = 14u16;
+        let cells = |panel: &mut NewsPanel, width: u16| -> Vec<Vec<String>> {
+            let buffer = raw_buffer(panel, width, height);
+            (0..height)
+                .map(|y| {
+                    (0..width)
+                        .map(|x| crate::link::without_links(buffer[(x, y)].symbol()))
+                        .collect()
+                })
+                .collect()
+        };
+
+        let mut findings = Vec::new();
+        let mut prev = cells(&mut panel, 6);
+        for width in 7..=100u16 {
+            let cur = cells(&mut panel, width);
+            let w = usize::from(width) - 1;
+            for (y, (narrow, wide)) in prev.iter().zip(&cur).enumerate() {
+                let narrow_text: String = narrow.concat();
+                let overflowed = wide[w].trim() != "";
+                let same_prefix = narrow[..] == wide[..w];
+                let marked = narrow_text.trim_end().ends_with('\u{2026}');
+                let mid_token = narrow[w - 1].trim() != "";
+                let wrapped = prev
+                    .get(y + 1)
+                    .is_some_and(|next| next.concat().trim_start().starts_with(wide[w].as_str()));
+                if overflowed && same_prefix && !marked && mid_token && !wrapped {
+                    findings.push(format!(
+                        "width {w} row {y}: {:?} continues as {:?}",
+                        narrow_text.trim_end(),
+                        wide[w]
+                    ));
+                }
+            }
+            prev = cur;
+        }
+        assert!(
+            panel.selected.selected().is_some(),
+            "the sweep must have run with a story selected"
+        );
+        assert!(
+            findings.is_empty(),
+            "{} silent cut(s) with a story selected:\n  {}",
+            findings.len(),
+            findings.join("\n  ")
+        );
+    }
+
     /// A headline taller than the panel must still show something. A blank
     /// panel with stories loaded reads as broken rather than as short.
     #[test]
@@ -1883,5 +2130,61 @@ mod tests {
             screen.contains("NASA"),
             "nothing was drawn at all; got:\n{screen}"
         );
+    }
+
+    /// And the clip says so. The rows past the body used to be dropped in
+    /// silence, so the last one kept ended wherever the wrap had put it — a
+    /// finished-looking line above nothing (invariant 19, along the height).
+    ///
+    /// `no_headline_is_cut_silently_once_a_story_is_selected` cannot see it:
+    /// it varies the width and differences adjacent renders, and a row that is
+    /// never drawn leaves nothing to difference. So this pins the height and
+    /// sweeps the width, with and without a selection, and asserts both
+    /// halves — a headline that fits carries no `…` — so an ellipsis stuck on
+    /// unconditionally fails too. A body of one row holds only the masthead,
+    /// and that row is the one that says the headline is missing.
+    #[test]
+    fn a_headline_taller_than_the_panel_ends_in_an_ellipsis() {
+        const TITLE: &str = "Anak Krakatau rumbles again as satellites watch the plume from orbit";
+        for selected in [false, true] {
+            let mut panel =
+                NewsPanel::offline(&NewsConfig::default(), vec![story("NASA", TITLE, 5)]);
+            if selected {
+                panel.selected.select(Some(0));
+            }
+            let indent = if selected { HIGHLIGHT_WIDTH } else { 0 };
+            for height in 2..=5u16 {
+                // The age takes the bottom row; the story has the rest.
+                let body = usize::from(height) - 1;
+                let (mut cut, mut whole) = (0, 0);
+                for width in 12..=120u16 {
+                    let screen = draw(&mut panel, width, height);
+                    let rows: Vec<&str> = screen.lines().collect();
+                    let last = rows[body - 1].trim_end();
+                    let title_rows = crate::grid::wrap(TITLE, usize::from(width - indent)).len();
+                    if 1 + title_rows > body {
+                        cut += 1;
+                        assert!(
+                            last.ends_with('\u{2026}'),
+                            "a headline needing {title_rows} rows was cut to {} without \
+                             saying so at {width}x{height}:\n{screen}",
+                            body - 1
+                        );
+                    } else {
+                        whole += 1;
+                        assert!(
+                            !screen.contains('\u{2026}'),
+                            "a headline that fits must not claim to be cut at \
+                             {width}x{height}:\n{screen}"
+                        );
+                    }
+                }
+                assert!(
+                    cut > 0 && (whole > 0 || body == 1),
+                    "the sweep must reach both a cut and a whole headline at height \
+                     {height}: cut {cut}, whole {whole}"
+                );
+            }
+        }
     }
 }
