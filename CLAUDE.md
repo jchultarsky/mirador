@@ -2394,9 +2394,48 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.21.0` is released**, as a GitHub release with binaries for macOS
+- **`1.22.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
   and published on crates.io. It is a minor release cut on 2026-10-08
+  carrying the P3 backlog from the 2026-10-06 code review and the 28
+  findings that review never gave a priority (#305), as eight commits
+  rebase-merged: the key map wide enough to explain every key whole, empty
+  panels naming the key `[<widget>.keys]` actually gave them, note bodies
+  taking the line keys every one-line field has, the notes caret where
+  typing lands, wrapping that never starts a row with the whitespace a
+  break took, a forecast that opens on the hour in progress, quotes and
+  calendar reads bounded against hostile input, `--migrate-config` reading
+  past a comment on a header line, a plugin told to stop even when it has
+  fallen behind, and a disk fold that keeps one APFS container whole while
+  separating two backup disks of one size. Minor rather than patch
+  because a note body gains four keys.
+
+  **Triage came first and it paid for itself**: of 47 findings, eleven
+  had already been fixed by the three releases since the review, and one
+  was not a defect, so the work was 33 rather than 47. **Three review
+  rounds, and every one found defects in the fixes**: a shared comment
+  stripper that commented out a key in a table it no longer recognised;
+  a disk-fold line, measured against a `dd` from `/dev/urandom`, that
+  split the owner's own disk when a write ran at the SSD's real speed
+  (the drift is up to 641 MB, not 48); and a wrapping rule that starved
+  the plugin host's line budget, so a value after a run of padding
+  vanished with rows to spare. Two process traps are worth keeping. A
+  squash with `commit.cleanup=whitespace` keeps git's own "This is a
+  combination of N commits" template, three such commits then share a
+  subject, and `--autosquash` places a fixup by subject — so name fixups'
+  targets by id in a hand-written todo, and apply messages with an `exec
+  git commit --amend --cleanup=verbatim -F`. And `git -C <repo> branch -f
+  X HEAD` run from another worktree resolves `HEAD` in `<repo>`: a branch
+  created that way was empty, and a per-commit loop over it checked
+  nothing and said nothing.
+
+  Step 0 was this code as a release build under tmux with a fresh home:
+  the first run at 120x40, the key map with every explanation whole, the
+  empty tasks, notes and markets panels naming their keys, the notes
+  title's caret after Home, the add-clock prompt at 50 columns dropping
+  its identifier column whole, and `q` quit.
+
+- **`1.21.0`** was a minor release cut on 2026-10-08
   carrying the P2 items from the 2026-10-06 code review (#303), as
   seventeen commits rebase-merged: one copy where the same thing had been
   written out several times (the TOML stores, the dialogs' frame and
