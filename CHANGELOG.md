@@ -131,6 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `…` measured it a character at a time, as one. Each such emoji left the
   line a cell wider than its room, and the terminal cut the excess without
   a mark. The cut now measures them as they are drawn.
+- **A prompt's caret stays after the text once the field is full.** Typing
+  past the width of a prompt's field — a long path to the agenda file, say —
+  scrolls the text, and the caret stopped a cell short of the end and sat
+  on the last character typed, hiding the one just entered. It now sits in
+  the cell after the text, which the field always kept free for it.
+- **The key map's footer names the keys its reset question takes.** While
+  `d` asked whether to put every key back, the footer still offered
+  `r reload`, `d defaults` and `Esc close`, and each of them answered no
+  instead. It reads `y reset  Esc keep` until the question is answered.
 
 ## [1.20.0] - 2026-10-07
 
