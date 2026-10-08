@@ -858,11 +858,17 @@ fn visible_wire_line(
     theme: &crate::theme::Theme,
 ) -> Line<'static> {
     // A two-cell glyph in a one-cell panel is replaced by one ellipsis. Count
-    // enough source width to produce every requested replacement row.
-    let cell_budget = width.max(2).saturating_mul(rows.saturating_add(1));
+    // enough source width to produce every requested replacement row, and a
+    // row of look-ahead. Padding a break takes draws nothing, so a run of it
+    // is kept only as far as the wrap needs and each row is allowed the run
+    // after it as well as its own cells (see `WrapSource`); what is left out
+    // is still read, so it is still paid for in bytes.
+    let cell_budget =
+        crate::grid::WrapSource::row_cells(width.max(2)).saturating_mul(rows.saturating_add(1));
     let byte_budget = cell_budget
         .saturating_mul(RENDER_BYTES_PER_CELL)
         .clamp(256, MAX_RETAINED_FRAME_TEXT_BYTES);
+    let mut source = crate::grid::WrapSource::new(width);
     let mut output = Vec::new();
     let mut bytes = 0usize;
     let mut cells = 0usize;
@@ -873,15 +879,27 @@ fn visible_wire_line(
         for character in span.text.chars() {
             let character_bytes = character.len_utf8();
             let character_width = crate::grid::char_width(character);
-            if bytes.saturating_add(character_bytes) > byte_budget
-                || (character_width > 0 && cells.saturating_add(character_width) > cell_budget)
-            {
+            if bytes.saturating_add(character_bytes) > byte_budget {
+                complete = false;
+                break;
+            }
+            bytes = bytes.saturating_add(character_bytes);
+            if !source.needs(character) {
+                continue;
+            }
+            if character_width > 0 && cells.saturating_add(character_width) > cell_budget {
                 complete = false;
                 break;
             }
             text.push(character);
-            bytes = bytes.saturating_add(character_bytes);
             cells = cells.saturating_add(character_width);
+        }
+        // Where the budget ran out the line was cut, and a cut that leaves
+        // rows to spare would otherwise end in silence (invariant 19): an
+        // ellipsis where the text stops says so. A cut by the cell budget
+        // lands past the rows on show, so its ellipsis is never drawn.
+        if !complete {
+            text.push('…');
         }
         if !text.is_empty() {
             output.push(Span::styled(text, span_style(span, theme)));
@@ -1607,6 +1625,85 @@ mod tests {
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD)
+        );
+    }
+
+    fn wire_rows(text: &str, width: u16, height: u16) -> Vec<String> {
+        let source = [WireLine {
+            spans: vec![WireSpan::plain(text)],
+        }];
+        wrapped_wire_lines(&source, width, height, &crate::theme::Theme::default())
+            .iter()
+            .map(|row| row.spans.iter().map(|span| span.content.as_ref()).collect())
+            .collect()
+    }
+
+    /// A run of spaces at a break draws nothing at all, since the break takes
+    /// it. So a prefix that spent a cell of its budget on every space would be
+    /// used up by padding, and the value it padded lost with a row to spare
+    /// and nothing to say so: a plugin right-aligning `80%` beside `Battery`
+    /// would show `Battery` alone.
+    #[test]
+    fn a_value_after_padding_reaches_the_row_it_has() {
+        assert_eq!(
+            wire_rows(&format!("abc{}def", " ".repeat(40)), 10, 3),
+            ["abc       ", "def"]
+        );
+        for padding in [100, 300] {
+            assert_eq!(
+                wire_rows(&format!("Battery{}80%", " ".repeat(padding)), 30, 2),
+                [format!("Battery{}", " ".repeat(23)), "80%".to_string()],
+                "{padding} spaces"
+            );
+        }
+        // What is kept of each run is still spent, so every row is allowed
+        // its run as well as its own cells.
+        let unit = format!("abcdefghi{}", " ".repeat(50));
+        assert_eq!(
+            wire_rows(&unit.repeat(3), 10, 3),
+            ["abcdefghi ", "abcdefghi ", "abcdefghi "]
+        );
+
+        // Wherever the padding is wider than the row and whatever kind of
+        // space it is made of, the panel draws exactly what wrapping the whole
+        // line draws in the rows it has.
+        let mut compared = 0;
+        for pad in [" ", "\u{a0}", "\u{3000}", " \u{a0}", "\t "] {
+            for count in [1, 9, 10, 11, 12, 25, 40] {
+                for value in ["80%", "Re: invoice", "日本語のニュース"] {
+                    let text = format!("Now playing: Song{}{value}", pad.repeat(count));
+                    for width in 1..=24u16 {
+                        for height in 1..=4u16 {
+                            let whole: Vec<String> = crate::grid::wrap(&text, usize::from(width))
+                                .into_iter()
+                                .take(usize::from(height))
+                                .collect();
+                            let drawn = wire_rows(&text, width, height);
+                            assert_eq!(drawn.len(), whole.len(), "{text:?} at {width}x{height}");
+                            for (drawn, whole) in drawn.iter().zip(&whole) {
+                                // Bar a glyph wider than its row, which is
+                                // replaced by an ellipsis on purpose.
+                                if crate::grid::display_width(whole) <= usize::from(width) {
+                                    compared += 1;
+                                    assert_eq!(drawn, whole, "{text:?} at {width}x{height}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(compared > 10_000, "the sweep compared only {compared} rows");
+    }
+
+    /// Padding wider than the line can afford to read at all still ends the
+    /// read, and the rows it leaves say the line was cut rather than stopping
+    /// as though it had ended.
+    #[test]
+    fn a_line_cut_before_its_rows_are_full_says_so() {
+        assert_eq!(
+            wire_rows(&format!("Battery{}80%", " ".repeat(5000)), 30, 2),
+            [format!("Battery{}", " ".repeat(23)), "…".to_string()]
         );
     }
 

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The key map's explanations arrive whole.** At its widest the dialog gave
+  them 34 cells and nineteen were longer, so they ended in `…` on every
+  screen. It now grows to 100 columns, and the six longest — four of arrange
+  mode's and the task list's two priority keys — are reworded to fit.
+- **An empty panel offers the key you gave it.** The task, notes, markets and
+  agenda panels' empty states, and the watch log's line about where calendar
+  entries come from, named the default key whatever `[<widget>.keys]` said.
+  They name the key the panel reads now, and leave the offer out when the
+  action is unbound.
+- **An empty markets, notes or task panel says its whole hint.** The markets
+  and notes hints went to the terminal at full length, so at the width the
+  shipped layout gives the markets panel the hint stopped just after the key
+  it names, and a notes search that matched nothing said "Nothing matches
+  this search. Esc to clea" in a pane 40 columns wide, with nothing to say
+  the rest was gone; the task list's was cut to one row with an `…`, so a
+  narrow panel lost the key it names over rows left blank. All three wrap
+  into the rows the panel has now, and end in `…` only where those run out.
+  With no search and no failed save, an empty notes panel gives its sentence
+  every row above the status line, rather than the half under a blank list
+  and a row saying `no notes`, and an empty task list gives it the row that
+  said the sort order of nothing; an empty markets board writes in the row
+  its header would take and may grow as tall as the hint needs.
+- **Wrapped text no longer leaves a gap where a row breaks.** A note, a
+  headline or a task's notes carried spaces at a break over to the next row:
+  the one after a word exactly as wide as its row, and the second of two
+  after a full stop wherever the row broke between them. The row they were
+  carried to was indented by a cell or, when the
+  next word did not fit beside the space, left blank. A no-break space, an
+  ideographic space or a tab at a break is taken the same way.
+- **An empty watch log says when its explanation has been cut.** Its rows ran
+  off the foot of the panel in silence: at 100x34 the default dashboard's
+  log stopped mid-sentence at "the day turning, a task", and a log 30 cells
+  by 10 rows stopped at "Calendar entries come from", before the key that
+  sentence names. The last row that fits now ends in `…`.
+- **An external panel's line cut short by the render budget says so.** The
+  host reads only as much of a line as its rows can show, and a line too
+  dense for that budget, such as one heavy in combining marks, stopped where
+  the budget did, over rows left blank and with nothing to say the rest was
+  missing. It now ends in `…`.
+
 ## [1.21.0] - 2026-10-08
 
 ### Changed

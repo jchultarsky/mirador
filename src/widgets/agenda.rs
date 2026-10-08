@@ -161,6 +161,20 @@ pub fn keymap(keys: &KeysConfig) -> Result<PanelKeymap<AgendaAction>, String> {
     PanelKeymap::new("agenda", ACTIONS, keys)
 }
 
+/// The keys a panel given `keys` reads: the table laid over the defaults, or
+/// the defaults where it does not check out, as [`PanelKeymap::or_defaults`]
+/// says.
+fn live_keys(keys: &KeysConfig) -> PanelKeymap<AgendaAction> {
+    PanelKeymap::or_defaults("agenda", ACTIONS, keys)
+}
+
+/// The key that sets the calendar file, as an agenda panel given `keys`
+/// reads it, or `None` when `file` is unbound. The watch log names it, and
+/// takes it from here so that the two panels cannot disagree about it.
+pub(crate) fn file_key(keys: &KeysConfig) -> Option<crate::keymap::Key> {
+    live_keys(keys).keys(AgendaAction::File).first().copied()
+}
+
 /// The keys the panel starts with, until `build` hands it the config's
 /// through [`Panel::set_keys`].
 fn default_keys() -> PanelKeymap<AgendaAction> {
@@ -745,7 +759,7 @@ impl Panel for AgendaPanel {
     }
 
     fn set_keys(&mut self, config: &crate::config::Config) {
-        self.keys = PanelKeymap::or_defaults("agenda", ACTIONS, &config.agenda.keys);
+        self.keys = live_keys(&config.agenda.keys);
     }
 
     fn max_width(&self) -> Option<u16> {
@@ -977,12 +991,15 @@ impl AgendaPanel {
                         Line::from(TextSpan::styled("Nothing to show.", muted)),
                         Line::from(""),
                     ];
-                    lines.extend(wrapped_lines(
-                        "Set [agenda].file to an .ics you already have — an export, \
-                         or whatever your calendar syncs to, or press f.",
-                        area.width,
-                        muted,
-                    ));
+                    // The key `[agenda.keys]` gave `file`, and no offer when
+                    // it gave none.
+                    let set_it = "Set [agenda].file to an .ics you already have — an \
+                                  export, or whatever your calendar syncs to";
+                    let set_it = match self.keys.keys(AgendaAction::File).first() {
+                        Some(key) => format!("{set_it}, or press {key}."),
+                        None => format!("{set_it}."),
+                    };
+                    lines.extend(wrapped_lines(&set_it, area.width, muted));
                     lines.push(Line::from(""));
                     // Wrapped, not truncated. This line exists to tell you
                     // where to put the file, and a path cut off at the panel
@@ -1966,5 +1983,43 @@ mod tests {
         let tz = TimeZone::system();
         let expected = ical::local_midnight(today + Span::new().days(3), &tz).unwrap();
         assert_eq!(until, expected.timestamp());
+    }
+
+    /// The empty panel offers the key that sets the file, and it is the key
+    /// `[agenda.keys]` gave `file`: it said `f` whatever the table said. With
+    /// `file` unbound the offer goes and the sentence still ends.
+    #[test]
+    fn the_empty_panel_names_the_file_key_it_has() {
+        let dir = TempDir::new("agenda-empty-keys");
+        let missing = dir.join("no-such-calendar.ics");
+        let text = |keys: &str| {
+            let mut panel = AgendaPanel::new(&AgendaConfig::default(), missing.clone());
+            for _ in 0..50 {
+                if panel.tick() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let config: crate::config::Config =
+                toml::from_str(&format!("[agenda.keys]\n{keys}")).expect("a config");
+            panel.set_keys(&config);
+            // Rows joined by a space, so a sentence reads the same wherever
+            // the wrap fell.
+            screen(&mut panel, 60, 14)
+                .iter()
+                .map(|row| row.trim_end())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let moved = text("file = \"i\"");
+        assert!(moved.contains("No agenda file"), "the empty state: {moved}");
+        assert!(moved.contains("or press i."), "{moved}");
+        assert!(!moved.contains("press f"), "{moved}");
+
+        let unbound = text("file = []");
+        assert!(unbound.contains("syncs to."), "{unbound}");
+        assert!(!unbound.contains("press"), "{unbound}");
+
+        assert!(text("").contains("or press f."));
     }
 }

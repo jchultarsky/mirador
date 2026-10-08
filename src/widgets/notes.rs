@@ -799,13 +799,19 @@ impl NotesPanel {
         // Borrowed from the store field rather than through `selected()`, so
         // the wrap cache — a different field — can still be filled below.
         let Some(note) = self.selected_id().and_then(|id| self.store.get(id)) else {
-            let message = if self.view.is_empty() && self.filter.is_empty() {
-                "No notes yet. Press `a` to write one."
+            // The key `[notes.keys]` gave `new`, and no offer when it gave
+            // none. Prose in a pane of several rows, so wrapped into them,
+            // and the last row says so if they run out (invariant 19).
+            let message = if !self.view.is_empty() || !self.filter.is_empty() {
+                "Nothing matches this search. Esc to clear.".to_string()
+            } else if let Some(key) = self.keys.keys(NotesAction::New).first() {
+                format!("No notes yet. Press `{key}` to write one.")
             } else {
-                "Nothing matches this search. Esc to clear."
+                "No notes yet.".to_string()
             };
             frame.render_widget(
-                Paragraph::new(Span::styled(message, Style::default().fg(theme.muted))),
+                Paragraph::new(crate::grid::fitted_rows(&message, area, false))
+                    .style(Style::default().fg(theme.muted)),
                 area,
             );
             return;
@@ -902,20 +908,22 @@ impl NotesPanel {
         frame.render_widget(body, rows[2]);
     }
 
-    /// The active search, and the count when the border is not already showing
-    /// it — or `None` when neither has anything to say.
+    /// The active search, and the count when nothing else on screen is
+    /// showing it — or `None` when neither has anything to say.
     ///
     /// The count used to be here unconditionally, which printed the same fact
     /// twice: `┤1├` in the border and `1 note` on the first interior row, two
     /// rows apart. Same shape as the tasks summary, found the same way and
-    /// fixed the same way — the border keeps it, and the row comes back for
-    /// the two cases where the border stops carrying it.
+    /// fixed the same way — the border keeps it, and the row comes back where
+    /// the border stops carrying it and nothing else says it instead.
     ///
-    /// Those two are worth naming, because they are the moments the line is
-    /// most useful. An empty panel has no counter at all, and `no notes` is
-    /// then the only thing telling the reader the panel is working rather than
-    /// broken; and a failed save takes the counter for `unsaved!`, which is
+    /// Those cases are worth naming, because they are the moments the line is
+    /// most useful. A failed save takes the counter for `unsaved!`, which is
     /// the worst possible moment to also stop saying how much is at stake.
+    /// An empty panel has no counter at all, and under a search `no notes`
+    /// says why nothing matched. Without one the message in the body says `No
+    /// notes yet`, and `no notes` straight above it was the count twice again,
+    /// in a row the message needed for the key it names.
     ///
     /// Fitted to `width` as one part, so a long search term ends in `…`
     /// rather than wherever the terminal's edge fell — the term is as long
@@ -923,7 +931,7 @@ impl NotesPanel {
     fn summary_line(&self, theme: &Theme, width: u16) -> Option<Line<'static>> {
         let total = self.store.notes().len();
         let mut spans = Vec::new();
-        if total == 0 || self.store.last_error.is_some() {
+        if self.store.last_error.is_some() || (total == 0 && !self.filter.is_empty()) {
             spans.push(Span::styled(
                 match total {
                     0 => "no notes".to_string(),
@@ -1324,8 +1332,9 @@ impl Panel for NotesPanel {
 
         // Computed before the split: whether the row exists is decided by
         // whether it has anything to say, and on a calm unfiltered panel it
-        // does not — so the list and the note it is pointing at get the row.
-        // The footprint therefore changes when a search opens or a save fails,
+        // does not — so the list and the note it is pointing at get the row,
+        // or on an empty panel the message saying there are none. The
+        // footprint therefore changes when a search opens or a save fails,
         // which are both moments the panel has visibly changed anyway.
         let summary = self.summary_line(theme, area.width);
         let rows = Layout::vertical([
@@ -1344,6 +1353,22 @@ impl Panel for NotesPanel {
         // that wants room for prose, and neither gets enough. Stacking gives
         // both the full width and spends height instead.
         let body = rows[1];
+
+        // With nothing listed there is no list and no note for it to point
+        // at, so no split: the message has the whole body. Split, the list's
+        // half stood blank above the rule while the message was cut in the
+        // half under it, and at a height of 4 that half had no rows at all
+        // and the offer was gone without an `…` (invariant 19).
+        if self.view.is_empty() {
+            self.detail_area = Some(body);
+            self.render_detail(frame, body, theme);
+            frame.render_widget(
+                Paragraph::new(self.status_line(theme, rows[2].width)),
+                rows[2],
+            );
+            return;
+        }
+
         let side_by_side = self.config.preview.eq_ignore_ascii_case("beside");
 
         // A rule between the two halves. Without it the panel reads as one
@@ -1375,7 +1400,7 @@ impl Panel for NotesPanel {
             (parts[0], parts[2])
         };
 
-        if !self.view.is_empty() && list_area.height > 1 {
+        if list_area.height > 1 {
             self.render_list(frame, list_area, theme, ctx.focused);
         }
 
@@ -1573,11 +1598,12 @@ mod tests {
     /// panel over — spotted only because the README's drawing of this panel
     /// was screenshotted beside the drawing of that one.
     ///
-    /// Three states, because the row has to come back for two of them: an
-    /// empty panel, where there is no counter at all and `no notes` is the
-    /// only thing saying the panel works; a failed save, where the counter is
-    /// spent on `unsaved!`; and a search, which is a fact the border does not
-    /// carry in words.
+    /// The row has to come back where nothing else says the count: a failed
+    /// save, where the counter is spent on `unsaved!`; a search, which is a
+    /// fact the border does not carry in words; and an empty panel under a
+    /// search, where there is no counter at all. An empty panel with no
+    /// search has none either, and its message says `No notes yet` — so a
+    /// `no notes` above it is the count twice again.
     #[test]
     fn the_note_count_is_shown_once_and_by_the_border() {
         let (mut p, _g) = panel("count-once");
@@ -1587,9 +1613,15 @@ mod tests {
                 .map(|line| line.spans.iter().map(|s| s.content.to_string()).collect())
         };
 
-        // Empty: no counter in the border, so the line is what says so.
+        // Empty: no counter in the border, and the message says so.
         assert_eq!(p.counter(), None, "an empty panel has no counter");
+        assert_eq!(text(&p), None, "the message says it: {:?}", text(&p));
+        p.filter = "release".to_string();
+        assert_eq!(text(&p).as_deref(), Some("no notes   search: release"));
+        p.filter.clear();
+        p.store.last_error = Some("read-only file system".to_string());
         assert_eq!(text(&p).as_deref(), Some("no notes"));
+        p.store.last_error = None;
 
         add_note(&mut p, "Release checklist", "Bump the version");
         assert_eq!(
@@ -2373,5 +2405,84 @@ mod tests {
         p.config.preview = "beside".to_string();
         let (list, detail) = draw(&mut p);
         assert!(detail.x > list.x, "beside: {list:?} {detail:?}");
+    }
+
+    /// An empty panel says how to write the first note, with the key
+    /// `[notes.keys]` gave `new` — it said `a` whatever the table said — and
+    /// without the offer when `new` is unbound.
+    #[test]
+    fn an_empty_panel_names_the_new_key_it_has() {
+        let text = |keys: &str| {
+            let (mut p, _g) = panel("empty-keys");
+            let config: crate::config::Config =
+                toml::from_str(&format!("[notes.keys]\n{keys}")).expect("a config");
+            p.set_keys(&config);
+            rows_of(&mut p, 120, 12).join("\n")
+        };
+        let moved = text("new = \"c\"");
+        assert!(moved.contains("Press `c` to write one."), "{moved}");
+        assert!(!moved.contains("`a`"), "{moved}");
+
+        let unbound = text("new = []");
+        assert!(unbound.contains("No notes yet."), "{unbound}");
+        assert!(!unbound.contains("Press"), "{unbound}");
+
+        assert!(text("").contains("No notes yet. Press `a` to write one."));
+    }
+
+    /// Invariant 19 for the empty panel: its message arrives whole wherever
+    /// the panel has the rows for it, and otherwise its last row ends in `…`.
+    ///
+    /// It went to the terminal at its natural width, which cut it where the
+    /// pane ended and said nothing. One row ending in `…` would be honest and
+    /// still wrong, because the pane is several rows tall: at 20x10 that reads
+    /// `No notes yet. Press…` over blank rows, the key it exists to name gone.
+    /// Swept over height as well as width, since a cut along the height is
+    /// the one a width sweep cannot see.
+    ///
+    /// The room is every row above the status line, not the note pane's.
+    /// With no note to show, the list half above the rule was left blank and
+    /// the message was cut in the pane under it: `No notes yet. Press…` at
+    /// 20x5 under a blank row, and at a height of 4 the pane had no rows at
+    /// all and the offer was gone without an `…`. A sweep that measured the
+    /// pane, and skipped it where it had no rows, approved every one of
+    /// those. One that started under row 0 approved the next: `no notes`
+    /// there, over `No notes yet`, said the count twice and cut the key at
+    /// 30x3.
+    #[test]
+    fn an_empty_panels_message_is_whole_where_it_has_the_rows() {
+        let whole = "No notes yet. Press `a` to write one.";
+        // The longest word; narrower, a word is broken and the rows cannot
+        // be joined back into the sentence.
+        let longest = 5;
+        let (mut p, _g) = panel("empty-cut");
+        let (mut cut, mut wrapped) = (0, 0);
+        for height in 2..=16u16 {
+            for width in 4..=60u16 {
+                let rows = rows_of(&mut p, width, height);
+                // The last row is the status line's; the panel has nothing
+                // else to show. Row 0 included: a summary there saying `no
+                // notes` over `No notes yet` took a row the key needed.
+                let body = &rows[..usize::from(height) - 1];
+                let lines: Vec<&str> = body
+                    .iter()
+                    .map(|row| row.trim_end())
+                    .take_while(|row| !row.is_empty())
+                    .collect();
+                let said = lines.join(" ");
+                let room = body.len();
+                let needed = usize::from(crate::grid::wrapped_height(whole, width));
+                if needed > room {
+                    cut += 1;
+                    assert!(said.ends_with('…'), "at {width}x{height}: {rows:#?}");
+                    assert_eq!(lines.len(), room, "at {width}x{height}: {rows:#?}");
+                } else if width >= longest {
+                    assert_eq!(said, whole, "at {width}x{height}: {rows:#?}");
+                    wrapped += usize::from(needed > 1);
+                }
+            }
+        }
+        assert!(cut > 0, "the sweep reached a size that cuts the message");
+        assert!(wrapped > 0, "the sweep reached a size that wraps it");
     }
 }
