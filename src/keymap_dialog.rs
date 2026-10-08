@@ -47,10 +47,12 @@ pub enum Request {
 }
 
 /// The key table. The action column is sized to its longest name,
-/// `resize_narrower`, since that is the word a reader copies into a key table;
-/// the explanation goes first when the dialog is squeezed, then the defaults.
+/// `priority_previous`, since that is the word a reader copies into a key
+/// table — `every_listed_action_name_fits_its_column_whole` holds every
+/// listed name to it; the explanation goes first when the dialog is squeezed,
+/// then the defaults.
 pub const COLUMNS: &[Column] = &[
-    Column::fixed("action", 15),
+    Column::fixed("action", 17),
     Column::flex("keys", 2),
     Column::flex("default", 2).drops_below(44),
     Column::flex("does", 5).drops_below(64),
@@ -501,6 +503,42 @@ mod tests {
             keys_style(at("per_core")),
             "a moved key stands out"
         );
+    }
+
+    /// The action column holds the word a reader copies into a key table, so
+    /// every name the dialog lists has to arrive whole. `priority_previous`
+    /// is two cells wider than the column was, and read `priority_previ…` —
+    /// a name that, pasted, the reload refuses. Every listed name is checked,
+    /// the shell's and every panel's and mode's, so the next long one fails
+    /// here rather than on somebody's config.
+    #[test]
+    fn every_listed_action_name_fits_its_column_whole() {
+        let panels = panel_keys("");
+        let theme = Theme::default();
+        let text: Vec<String> = KeymapDialog::new()
+            .lines(&Keymap::default(), &panels, None, &theme, WIDTH)
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        let names: Vec<&str> = Action::LISTED
+            .iter()
+            .map(|action| action.name())
+            .chain(
+                panels
+                    .iter()
+                    .flat_map(|(_, listing)| listing.iter().map(|listed| listed.name)),
+            )
+            .collect();
+        assert!(
+            names.contains(&"priority_previous"),
+            "the sweep reaches the panels"
+        );
+        for name in names {
+            assert!(
+                text.iter().any(|row| row.starts_with(&format!("{name} "))),
+                "{name} is cut: {text:#?}"
+            );
+        }
     }
 
     /// A changed key is the one thing a reader opening this after a bad edit

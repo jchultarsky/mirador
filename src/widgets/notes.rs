@@ -198,10 +198,12 @@ const SELECTION_BINDINGS: &[Binding] = &[
     Binding::extra("Esc", "cancel"),
 ];
 
-/// Columns of the note list. The date is right-aligned so the dates line up.
+/// Columns of the note list. The date is right-aligned so the dates line up,
+/// and is one cell wider than the shipped `%d %b` for the `·` an edited note
+/// carries — sized to the date alone, every edited note read `·25 J…`.
 pub(crate) const COLUMNS: &[Column] = &[
     Column::flex("title", 1),
-    Column::fixed("date", 6).right().drops_below(24),
+    Column::fixed("date", 7).right().drops_below(25),
 ];
 
 /// Which field the edit form is on.
@@ -382,22 +384,27 @@ impl NotesPanel {
     /// The selected body wrapped to `width`, wrapping only if it has to.
     ///
     /// See [`WrappedBody`] for why this is keyed on the text rather than on an
-    /// id and a dirty flag.
-    fn wrapped_body(&mut self, body: &str, width: u16) -> &[String] {
-        let fresh = self
-            .wrapped_body
+    /// id and a dirty flag. A function over the cache rather than a method on
+    /// `self`, so the body can be borrowed straight from `self.store` while
+    /// the cache is filled: as a method it needed `&mut self`, and the reader
+    /// cloned the whole body every frame to get one — an allocation the size
+    /// of the note, which is the cost the cache exists to avoid.
+    fn wrapped_body<'a>(
+        cache: &'a mut Option<WrappedBody>,
+        body: &str,
+        width: u16,
+    ) -> &'a [String] {
+        let fresh = cache
             .as_ref()
             .is_some_and(|cache| cache.width == width && cache.source == body);
         if !fresh {
-            self.wrapped_body = Some(WrappedBody {
+            *cache = Some(WrappedBody {
                 source: body.to_string(),
                 width,
                 rows: crate::grid::wrap(body, usize::from(width)),
             });
         }
-        self.wrapped_body
-            .as_ref()
-            .map_or(&[], |cache| cache.rows.as_slice())
+        cache.as_ref().map_or(&[], |cache| cache.rows.as_slice())
     }
 
     /// Rows the selected body occupies, from the cache when it is warm.
@@ -722,7 +729,9 @@ impl NotesPanel {
             return;
         }
 
-        let Some(note) = self.selected() else {
+        // Borrowed from the store field rather than through `selected()`, so
+        // the wrap cache — a different field — can still be filled below.
+        let Some(note) = self.selected_id().and_then(|id| self.store.get(id)) else {
             let message = if self.view.is_empty() && self.filter.is_empty() {
                 "No notes yet. Press `a` to write one."
             } else {
@@ -742,11 +751,16 @@ impl NotesPanel {
         ])
         .split(area);
 
-        // Wrapped by `grid` rather than by ratatui, whose own wrapper panics on
-        // text mirador did not write — and a note is exactly that. See
-        // `grid::wrapped`.
+        // One row, so cut to it with an ellipsis. It used to be wrapped — by
+        // `grid`, since ratatui's wrapper panics on text mirador did not
+        // write — and the row drew the first line of the wrap and dropped the
+        // rest in silence. The whole title is in the list above.
         frame.render_widget(
-            Paragraph::new(crate::grid::wrapped(&note.title, rows[0].width)).style(
+            Paragraph::new(crate::grid::truncate(
+                &note.title,
+                usize::from(rows[0].width),
+            ))
+            .style(
                 Style::default()
                     .fg(theme.accent)
                     .add_modifier(Modifier::BOLD),
@@ -775,9 +789,6 @@ impl NotesPanel {
         if rows[2].height == 0 {
             return;
         }
-        // Taken by value because filling the wrap cache needs `&mut self`, and
-        // `note` is borrowed from `self.store`.
-        let body_text = note.body.clone();
         let body = if note.body.trim().is_empty() {
             Paragraph::new(Span::styled("(no body)", Style::default().fg(theme.muted)))
         } else {
@@ -787,7 +798,7 @@ impl NotesPanel {
             // the pane — see `WrappedBody` and #178.
             let scroll = usize::from(self.body_scroll);
             let height = usize::from(rows[2].height);
-            let wrapped = self.wrapped_body(&body_text, rows[2].width);
+            let wrapped = Self::wrapped_body(&mut self.wrapped_body, &note.body, rows[2].width);
             let visible: Vec<Line<'static>> = wrapped
                 .iter()
                 .skip(scroll.min(wrapped.len()))
@@ -822,7 +833,11 @@ impl NotesPanel {
     /// then the only thing telling the reader the panel is working rather than
     /// broken; and a failed save takes the counter for `unsaved!`, which is
     /// the worst possible moment to also stop saying how much is at stake.
-    fn summary_line(&self, theme: &Theme) -> Option<Line<'static>> {
+    ///
+    /// Fitted to `width` as one part, so a long search term ends in `…`
+    /// rather than wherever the terminal's edge fell — the term is as long
+    /// as the reader made it.
+    fn summary_line(&self, theme: &Theme, width: u16) -> Option<Line<'static>> {
         let total = self.store.notes().len();
         let mut spans = Vec::new();
         if total == 0 || self.store.last_error.is_some() {
@@ -844,7 +859,7 @@ impl NotesPanel {
                 Style::default().fg(theme.label),
             ));
         }
-        (!spans.is_empty()).then(|| Line::from(spans))
+        (!spans.is_empty()).then(|| crate::grid::assemble(vec![spans], width))
     }
 
     /// The bottom line: a delete confirmation, the search prompt, or the last
@@ -1004,26 +1019,59 @@ impl NotesPanel {
             frame.render_widget(Paragraph::new(lines), rows[3]);
         }
 
-        let footer = match (&form.error, status) {
-            (Some(message), _) => Span::styled(message.clone(), Style::default().fg(theme.error)),
-            (None, Some((message, is_error))) => Span::styled(
-                message.to_string(),
+        frame.render_widget(
+            Paragraph::new(Self::form_footer(form, status, theme, rows[4].width)),
+            rows[4],
+        );
+    }
+
+    /// The form's last row, fitted to `width`. A message — an error, or a
+    /// status carrying an operating system's error text — is prose and is cut
+    /// with an ellipsis as one part; the keys are parts of their own and drop
+    /// whole, so no hint is left half-spelled. Both used to be drawn at their
+    /// natural width and cut by the terminal. Where the keys end in the way
+    /// out it is the last to go, as in a prompt's help; see
+    /// `prompt::way_out_last`.
+    fn form_footer(
+        form: &EditForm,
+        status: Option<(&str, bool)>,
+        theme: &Theme,
+        width: u16,
+    ) -> Line<'static> {
+        let muted = Style::default().fg(theme.muted);
+        let message = |text: String, style: Style| vec![vec![Span::styled(text, style)]];
+        let keys = |hints: [&'static str; 3]| {
+            hints
+                .iter()
+                .enumerate()
+                .map(|(index, hint)| {
+                    let gap = if index == 0 { "" } else { "   " };
+                    vec![Span::styled(format!("{gap}{hint}"), muted)]
+                })
+                .collect()
+        };
+        let parts = match (&form.error, status) {
+            (Some(text), _) => message(text.clone(), Style::default().fg(theme.error)),
+            (None, Some((text, is_error))) => message(
+                text.to_string(),
                 Style::default().fg(if is_error { theme.error } else { theme.muted }),
             ),
-            (None, None) if form.body.has_selection() => Span::styled(
-                "Ctrl+C copy   Ctrl+V replace   Ctrl+S save",
-                Style::default().fg(theme.muted),
-            ),
-            (None, None) if form.field == Field::Body => Span::styled(
-                "Shift+arrows select   Ctrl+A all   Ctrl+V paste",
-                Style::default().fg(theme.muted),
-            ),
-            (None, None) => Span::styled(
-                "Tab body   Ctrl+S save   Esc cancel",
-                Style::default().fg(theme.muted),
+            (None, None) if form.body.has_selection() => {
+                keys(["Ctrl+C copy", "Ctrl+V replace", "Ctrl+S save"])
+            }
+            (None, None) if form.field == Field::Body => {
+                keys(["Shift+arrows select", "Ctrl+A all", "Ctrl+V paste"])
+            }
+            (None, None) => crate::prompt::way_out_last(
+                ["Tab body", "Ctrl+S save", "Esc cancel"]
+                    .map(str::to_string)
+                    .to_vec(),
+                "   ",
+                usize::from(width),
+                muted,
             ),
         };
-        frame.render_widget(Paragraph::new(footer), rows[4]);
+        crate::grid::assemble(parts, width)
     }
 }
 
@@ -1195,7 +1243,7 @@ impl Panel for NotesPanel {
         // does not — so the list and the note it is pointing at get the row.
         // The footprint therefore changes when a search opens or a save fails,
         // which are both moments the panel has visibly changed anyway.
-        let summary = self.summary_line(theme);
+        let summary = self.summary_line(theme, area.width);
         let rows = Layout::vertical([
             Constraint::Length(u16::from(summary.is_some())), // summary
             Constraint::Min(1),                               // master + detail
@@ -1470,7 +1518,7 @@ mod tests {
         let (mut p, _g) = panel("count-once");
         let theme = Theme::default();
         let text = |p: &NotesPanel| -> Option<String> {
-            p.summary_line(&theme)
+            p.summary_line(&theme, 80)
                 .map(|line| line.spans.iter().map(|s| s.content.to_string()).collect())
         };
 
@@ -2001,6 +2049,154 @@ mod tests {
                     })
                     .unwrap();
             }
+        }
+    }
+
+    /// An edited note's date carries a `·` saying which date it is, and the
+    /// column was sized to the date alone: at the shipped `%d %b` the mark
+    /// pushed it a cell over, and every edited note read `·25 J…`. Swept from
+    /// the narrowest width that still shows the column.
+    #[test]
+    fn an_edited_notes_date_is_drawn_whole_beside_its_mark() {
+        let (mut p, _g) = panel("edited-date");
+        add_note(&mut p, "Release", "Bump the version.");
+        press(&mut p, KeyCode::Enter);
+        type_str(&mut p, "s");
+        chord(&mut p, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let note = &p.store.notes()[0];
+        assert!(note.updated.is_some(), "the edit was recorded");
+        let date = format!("·{}", note.shown_date().strftime(&p.config.date_format));
+        for width in 27..=80u16 {
+            let rows = rows_of(&mut p, width, 16);
+            let row = rows
+                .iter()
+                .find(|row| row.contains("Releases"))
+                .unwrap_or_else(|| panic!("{width}: {rows:#?}"));
+            assert!(
+                row.trim_end().ends_with(&date) && !row.contains('…'),
+                "{width}: {row:?} should end in {date:?}"
+            );
+        }
+    }
+
+    /// The detail pane gives the title one row. It was handed the title
+    /// *wrapped*, so the row showed the first line of a long title and the
+    /// rest went with nothing to say it had: a cut along the height, which
+    /// the width sweep cannot see. A short title must come through bare, so
+    /// an ellipsis stuck on unconditionally fails too.
+    #[test]
+    fn a_long_title_in_the_detail_pane_ends_in_an_ellipsis() {
+        for (title, name) in [
+            (
+                "Bump the version and run the four gates before tagging",
+                "long",
+            ),
+            ("Groceries", "short"),
+        ] {
+            let (mut p, _g) = panel(&format!("detail-title-{name}"));
+            add_note(&mut p, title, "body text");
+            for width in 12..=70u16 {
+                let rows = rows_of(&mut p, width, 20);
+                let rule = rows
+                    .iter()
+                    .position(|row| !row.trim().is_empty() && row.trim().chars().all(|c| c == '─'))
+                    .unwrap_or_else(|| panic!("{width}: no rule: {rows:#?}"));
+                let shown = rows[rule + 1].trim_end();
+                if crate::grid::display_width(title) <= usize::from(width) {
+                    assert_eq!(shown, title, "{width}: fits, so whole");
+                } else {
+                    assert!(
+                        shown.ends_with('…'),
+                        "{width}: {shown:?} is cut and must say so"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The form's last row carries an error, a status or the keys, and was
+    /// drawn as one bare span: `a note needs a ` at fifteen columns, with
+    /// nothing saying the rest had gone. A message is prose and is
+    /// ellipsised; the keys drop whole.
+    #[test]
+    fn the_form_footer_is_whole_or_says_it_was_cut() {
+        let (mut p, _g) = panel("form-footer");
+        press(&mut p, KeyCode::Char('a'));
+        chord(&mut p, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let message = "a note needs a title";
+        for width in 4..=60u16 {
+            let rows = rows_of(&mut p, width, 10);
+            let footer = rows[9].trim_end();
+            assert!(
+                footer == message || footer.ends_with('…'),
+                "{width}: {footer:?}"
+            );
+        }
+
+        // The keys: each is whole or absent, never half a hint. A fresh form,
+        // since the error above stays until the form is left.
+        press(&mut p, KeyCode::Esc);
+        press(&mut p, KeyCode::Char('a'));
+        press(&mut p, KeyCode::Tab);
+        let whole = [
+            "",
+            "Shift+arrows select",
+            "Shift+arrows select   Ctrl+A all",
+            "Shift+arrows select   Ctrl+A all   Ctrl+V paste",
+        ];
+        for width in 4..=60u16 {
+            let rows = rows_of(&mut p, width, 10);
+            let footer = rows[9].trim_end();
+            assert!(
+                whole.contains(&footer) || footer.ends_with('…'),
+                "{width}: {footer:?}"
+            );
+        }
+
+        // On the title the keys end in the way out, and it is the last to
+        // go, as in a prompt's help: it dropped first, so a footer 22 to 34
+        // cells wide said how to save and not how to leave.
+        press(&mut p, KeyCode::BackTab);
+        let whole = [
+            "Tab body   Ctrl+S save   Esc cancel",
+            "Tab body   Esc cancel",
+            "Esc cancel",
+        ];
+        let mut dropped = 0;
+        for width in 4..=60u16 {
+            let rows = rows_of(&mut p, width, 10);
+            let footer = rows[9].trim_end();
+            if footer.is_empty() {
+                continue;
+            }
+            assert!(
+                whole.contains(&footer) || "Esc cancel".starts_with(footer.trim_end_matches('…')),
+                "{width}: {footer:?}"
+            );
+            if footer != whole[0] {
+                dropped += 1;
+            }
+        }
+        assert!(dropped > 0, "the sweep reached a width that drops a part");
+    }
+
+    /// The summary row says what is being searched for, and a search term is
+    /// as long as the reader made it. It was drawn at its natural width, so
+    /// the terminal cut the term wherever the edge fell.
+    #[test]
+    fn a_long_search_term_in_the_summary_ends_in_an_ellipsis() {
+        let (mut p, _g) = panel("search-summary");
+        add_note(&mut p, "Groceries", "milk and an invoice question");
+        press(&mut p, KeyCode::Char('/'));
+        type_str(&mut p, "an invoice question");
+        let whole = "search: an invoice question";
+        for width in 4..=60u16 {
+            let rows = rows_of(&mut p, width, 12);
+            let summary = rows[0].trim_end();
+            assert!(
+                summary == whole || summary.ends_with('…'),
+                "{width}: {summary:?}"
+            );
         }
     }
 

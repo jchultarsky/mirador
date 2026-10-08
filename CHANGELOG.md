@@ -219,6 +219,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reason could too, because the JSON parser quotes the value it rejects.
   Names and reasons are now cut at parse with `…`, far above anything real,
   and an observation time that is not a time is dropped.
+- **An edited note's date can be read.** The mark that says a note was
+  edited took the date column one cell past its width, so at the shipped
+  date format every edited note read `·25 J…`. The column is a cell wider
+  and the date is whole.
+- **The notes panel marks what it cuts.** A long title in the note pane,
+  a long search term above the list, and an error in the note form were
+  each drawn at their full length and cut wherever the panel's edge fell.
+  Each now ends in `…` where it does not fit, and the form's keys drop
+  whole rather than being cut in half, `Esc cancel` the last to go.
+- **The task form shows its whole hint, its whole error and its way out.**
+  The row under the fields was one row high and drew only the first line of
+  what it was given, so the Due hint lost `or empty.` and a date it could
+  not read lost the list of forms it would take. The message now has the
+  rows the form can spare, and ends in `…` when even those are not enough.
+  The key row below it was cut to `Esc can` on the default dashboard; its
+  keys now drop whole, `Esc cancel` the last to go.
+- **The task filter offers whole tags.** With nothing typed, the filter bar
+  lists the tags in use, and on a narrow panel the last of them was cut to
+  something like `#mira`, a tag that does not exist. Tags that do not fit
+  are left off.
+- **A prompt's help keeps `Esc cancels`.** The help line under a prompt was
+  cut at the dialog's edge, and two of them never fitted: the weather
+  location's and the add-a-clock prompt's lost the end of `Esc cancels` at
+  every terminal size. Both are shorter, and a help line that does not fit
+  now drops whole parts, the way out last.
+- **The calculator shows the end of a long sum as it is typed.** An entry
+  wider than its column was cut from the right, so the cursor and
+  everything typed after the edge went out of sight. It now shows `…`, the
+  last of the entry and the cursor.
+- **The key map shows `priority_previous` whole.** Its action column was
+  two cells narrower than that name, which read `priority_previ…` — the one
+  column whose job is to be copied into a key table.
+- **The watch log's "since you were here" line fits a narrow panel.** Below
+  21 columns its label was drawn whole and cut by the terminal; it now ends
+  in `…`.
 
 ## [1.19.2] - 2026-10-07
 

@@ -734,7 +734,7 @@ impl Panel for ClocksPanel {
                 self.editing = None;
                 self.asking = Some(crate::prompt::Prompt::new(
                     "ADD A CLOCK",
-                    "Type to narrow · ↑↓ to choose · Enter adds · Esc cancels",
+                    "↑↓ choose · Enter adds · Esc cancels",
                     "",
                     crate::prompt::Completion::Places(crate::zones::PLACES),
                 ));
