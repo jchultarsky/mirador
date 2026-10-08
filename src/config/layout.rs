@@ -11,7 +11,7 @@ use serde::Deserialize;
 ///
 /// `height` and `width` are relative weights, not absolute cells, so a layout
 /// keeps its proportions at any terminal size.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Layout {
     pub rows: Vec<LayoutRow>,
@@ -80,18 +80,25 @@ impl Default for Layout {
 }
 
 impl Layout {
+    /// Every panel this layout places, in row-major order.
+    ///
+    /// An iterator rather than a list, because the questions asked of it are
+    /// membership tests — the `w` picker asks [`Layout::places`] once per name
+    /// it draws, every frame it is open — and a membership test has no use
+    /// for a list built only to be searched and dropped.
+    fn panels(&self) -> impl Iterator<Item = &LayoutPanel> {
+        self.rows.iter().flat_map(|row| row.panels.iter())
+    }
+
     /// Every widget this layout places, in row-major order.
+    #[cfg(test)]
     pub fn widgets(&self) -> Vec<&str> {
-        self.rows
-            .iter()
-            .flat_map(|row| row.panels.iter())
-            .map(|panel| panel.widget.as_str())
-            .collect()
+        self.panels().map(|panel| panel.widget.as_str()).collect()
     }
 
     /// Whether `widget` appears anywhere.
     pub fn places(&self, widget: &str) -> bool {
-        self.widgets().contains(&widget)
+        self.panels().any(|panel| panel.widget == widget)
     }
 
     /// Place `widget`, appending it to the row carrying the fewest panels.
@@ -151,7 +158,7 @@ impl Layout {
     /// an empty layout is rejected at startup — turning off the final panel
     /// would produce a config that cannot be loaded next time.
     pub fn remove_widget(&mut self, widget: &str) -> bool {
-        if self.widgets().iter().all(|placed| *placed == widget) {
+        if self.panels().all(|panel| panel.widget == widget) {
             return false;
         }
         for row in &mut self.rows {
@@ -163,7 +170,7 @@ impl Layout {
 }
 
 /// One horizontal band of the dashboard.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LayoutRow {
     /// Relative height weight.
@@ -181,7 +188,7 @@ impl Default for LayoutRow {
 }
 
 /// One panel within a row.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LayoutPanel {
     /// Widget id: any name in `WIDGET_NAMES` (`clocks` through `calculator`),

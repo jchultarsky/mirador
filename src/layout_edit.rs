@@ -33,11 +33,12 @@
 //! the failure mode of an unusual config is "your change did not stick",
 //! reported, rather than "your config is now broken".
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Result, bail};
 
 use crate::config::{Config, Layout, LayoutRow};
+use crate::store::strip_comment;
 
 /// Rewrite the `[layout]` block of `source` so it describes `desired`.
 ///
@@ -55,7 +56,6 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
     // row — or to a row that did not exist a moment ago — take the comments
     // written above it along with it.
     let blocks = panel_blocks(&lines, &map);
-    let duplicates = duplicated_widgets(&map);
     let pairing = pair_rows(&map, desired);
 
     let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
@@ -71,7 +71,7 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
     // the case that needs it: any layout whose rows stay in order goes through
     // the per-row edits below, so an ordinary resize still rewrites one number
     // on one line.
-    if let Some(reordered) = reorder_rows(&lines, &map, &blocks, &duplicates, &pairing, desired)? {
+    if let Some(reordered) = reorder_rows(&lines, &map, &blocks, &pairing, desired)? {
         let from = map.rows[0].from;
         let to = map.rows[map.rows.len() - 1].closing_line + 1;
         out.splice(from..to, reordered);
@@ -108,7 +108,7 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
             edits.push(Edit::Replace {
                 from: after,
                 to: after,
-                text: row_block(&lines, &map, &blocks, &duplicates, want)?,
+                text: row_block(&lines, &map, &blocks, want)?,
             });
             continue;
         };
@@ -155,7 +155,7 @@ pub fn apply(source: &str, desired: &Layout) -> Result<String> {
         edits.push(Edit::Replace {
             from,
             to,
-            text: panel_lines(&lines, &blocks, &duplicates, want, template)?,
+            text: panel_lines(&lines, &blocks, want, template)?,
         });
     }
 
@@ -194,7 +194,7 @@ fn finish(source: &str, out: &[String], desired: &Layout) -> Result<String> {
     // what it was meant to say, the edit is wrong and is thrown away.
     let reparsed: Config = toml::from_str(&result)
         .map_err(|e| anyhow::anyhow!("the edited config no longer parses: {e}"))?;
-    if shape(&reparsed.layout) != shape(desired) {
+    if reparsed.layout != *desired {
         bail!("the edited config does not describe the requested layout");
     }
 
@@ -211,8 +211,7 @@ fn finish(source: &str, out: &[String], desired: &Layout) -> Result<String> {
 fn reorder_rows(
     lines: &[&str],
     map: &LayoutMap,
-    blocks: &HashMap<String, PanelBlock>,
-    duplicates: &HashSet<&str>,
+    blocks: &HashMap<String, Entry>,
     pairing: &[Option<usize>],
     desired: &Layout,
 ) -> Result<Option<Vec<String>>> {
@@ -227,7 +226,7 @@ fn reorder_rows(
     let mut out = Vec::new();
     for (want_index, want) in desired.rows.iter().enumerate() {
         let Some(text_index) = pairing[want_index] else {
-            out.extend(row_block(lines, map, blocks, duplicates, want)?);
+            out.extend(row_block(lines, map, blocks, want)?);
             continue;
         };
         let row = &map.rows[text_index];
@@ -292,28 +291,11 @@ fn reorder_rows(
             );
         } else {
             let template = row.panels.first().map_or(row.header_line, |p| p.line);
-            out.extend(panel_lines(lines, blocks, duplicates, want, template)?);
+            out.extend(panel_lines(lines, blocks, want, template)?);
         }
         out.push(lines[row.closing_line].to_string());
     }
     Ok(Some(out))
-}
-
-/// A layout reduced to what this module promises to reproduce.
-fn shape(layout: &Layout) -> Vec<(u16, Vec<(String, u16)>)> {
-    layout
-        .rows
-        .iter()
-        .map(|row| {
-            (
-                row.height,
-                row.panels
-                    .iter()
-                    .map(|p| (p.widget.clone(), p.width))
-                    .collect(),
-            )
-        })
-        .collect()
 }
 
 enum Edit {
@@ -378,8 +360,8 @@ struct PanelBlock {
 /// which is the one thing the round-trip check at the end of [`apply`] cannot
 /// catch on its own — it compares layouts, and a layout does not carry the
 /// formatting or the comments that make the edit worth doing. Its sibling, a
-/// widget named twice, lives in [`duplicated_widgets`] and is consulted only
-/// where an entry is reused, so that a plain resize is not refused with it.
+/// widget named twice, is [`Entry::Twice`] and is consulted only where an entry
+/// is reused, so that a plain resize is not refused with it.
 fn check_editable(map: &LayoutMap, current: &Config) -> Result<()> {
     if map.rows.len() != current.layout.rows.len() {
         bail!(
@@ -392,7 +374,7 @@ fn check_editable(map: &LayoutMap, current: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Every widget named more than once anywhere in the block.
+/// A widget's entry, or the fact that it has no entry of its own.
 ///
 /// A panel's entry is looked up by widget name, so a name used twice has no
 /// single entry to be. Rebuilding a row then writes one of the two entries for
@@ -412,32 +394,33 @@ fn check_editable(map: &LayoutMap, current: &Config) -> Result<()> {
 /// they are already on and never touches an entry, so a plain `Ctrl+arrow`
 /// resize is safe even in a file like this, and refusing it would be a wider
 /// answer than the problem.
-fn duplicated_widgets(map: &LayoutMap) -> HashSet<&str> {
-    let mut seen = HashSet::new();
-    let mut twice = HashSet::new();
-    for panel in map.rows.iter().flat_map(|row| row.panels.iter()) {
-        if !seen.insert(panel.widget.as_str()) {
-            twice.insert(panel.widget.as_str());
-        }
-    }
-    twice
+///
+/// The twin is a variant rather than a set beside the map, so that reading an
+/// entry and meeting the refusal are one `match`: a second set had to be
+/// carried through every function between [`apply`] and the lookup, and the
+/// rule held only while each of them passed it on.
+enum Entry {
+    /// Named once, and this is its entry.
+    Once(PanelBlock),
+    /// Named more than once, so neither entry is unambiguously its own.
+    Twice,
 }
 
 /// Every panel's entry, keyed by widget.
-fn panel_blocks(lines: &[&str], map: &LayoutMap) -> HashMap<String, PanelBlock> {
+fn panel_blocks(lines: &[&str], map: &LayoutMap) -> HashMap<String, Entry> {
     let mut blocks = HashMap::new();
-    for row in &map.rows {
-        for panel in &row.panels {
-            blocks.insert(
-                panel.widget.clone(),
-                PanelBlock {
+    for panel in map.rows.iter().flat_map(|row| row.panels.iter()) {
+        blocks
+            .entry(panel.widget.clone())
+            .and_modify(|entry| *entry = Entry::Twice)
+            .or_insert_with(|| {
+                Entry::Once(PanelBlock {
                     lines: lines[panel.from..=panel.line]
                         .iter()
                         .map(|line| (*line).to_string())
                         .collect(),
-                },
-            );
-        }
+                })
+            });
     }
     blocks
 }
@@ -483,24 +466,21 @@ fn pair_rows(map: &LayoutMap, desired: &Layout) -> Vec<Option<usize>> {
 /// The panel entries of `want`, in order, reusing each panel's captured lines.
 fn panel_lines(
     lines: &[&str],
-    blocks: &HashMap<String, PanelBlock>,
-    duplicates: &HashSet<&str>,
+    blocks: &HashMap<String, Entry>,
     want: &LayoutRow,
     template: usize,
 ) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for panel in &want.panels {
-        if duplicates.contains(panel.widget.as_str()) {
-            bail!(
+        match blocks.get(&panel.widget) {
+            Some(Entry::Twice) => bail!(
                 "`{}` appears more than once in `[layout]`, so its entry cannot \
                  be told apart from its twin and rewriting the row would caption \
                  one panel with the other's comment. Give each panel a distinct \
                  widget, or move this row by hand",
                 panel.widget
-            );
-        }
-        match blocks.get(&panel.widget) {
-            Some(block) => {
+            ),
+            Some(Entry::Once(block)) => {
                 let last = block.lines.len().saturating_sub(1);
                 for (offset, text) in block.lines.iter().enumerate() {
                     if offset == last {
@@ -520,8 +500,7 @@ fn panel_lines(
 fn row_block(
     lines: &[&str],
     map: &LayoutMap,
-    blocks: &HashMap<String, PanelBlock>,
-    duplicates: &HashSet<&str>,
+    blocks: &HashMap<String, Entry>,
     want: &LayoutRow,
 ) -> Result<Vec<String>> {
     let model = &map.rows[0];
@@ -535,7 +514,7 @@ fn row_block(
     let template = model.panels.first().map_or(model.header_line, |p| p.line);
 
     let mut out = vec![format!("{indent}{{ height = {}, panels = [", want.height)];
-    out.extend(panel_lines(lines, blocks, duplicates, want, template)?);
+    out.extend(panel_lines(lines, blocks, want, template)?);
     out.push(format!("{indent}] }},"));
     Ok(out)
 }
@@ -632,19 +611,6 @@ fn map_layout(lines: &[&str]) -> Result<LayoutMap> {
         );
     }
     Ok(LayoutMap { rows })
-}
-
-/// Everything before an unquoted `#`.
-fn strip_comment(line: &str) -> &str {
-    let mut in_string = false;
-    for (index, ch) in line.char_indices() {
-        match ch {
-            '"' => in_string = !in_string,
-            '#' if !in_string => return &line[..index],
-            _ => {}
-        }
-    }
-    line
 }
 
 /// `key = "value"` on this line.
@@ -825,7 +791,7 @@ units = "imperial"
             lines[at + 1].contains(r#""calendar""#),
             "the comment should sit directly above calendar:\n{out}"
         );
-        assert_eq!(shape(&layout_of(&out)), shape(&desired));
+        assert_eq!(layout_of(&out), desired);
     }
 
     /// Pushing a panel past the edge of the dashboard gives it a row of its
@@ -853,7 +819,7 @@ units = "imperial"
             out.contains("# Wide enough for two months side by side."),
             "the comment follows the panel into its new row:\n{out}"
         );
-        assert_eq!(shape(&written), shape(&desired));
+        assert_eq!(written, desired);
     }
 
     /// The other half of the same gesture: the last panel out of a row closes
@@ -876,7 +842,7 @@ units = "imperial"
         // it leaves a file that does not parse.
         assert!(out.contains("\n]\n"), "the rows array still closes:\n{out}");
         assert!(out.contains(r#"units = "imperial""#), "the rest survives");
-        assert_eq!(shape(&written), shape(&desired));
+        assert_eq!(written, desired);
     }
 
     /// A panel moving between rows is the one structural change the old code
@@ -897,7 +863,7 @@ units = "imperial"
             out.contains("# Wide enough for two months side by side."),
             "the comment moved rows with the panel:\n{out}"
         );
-        assert_eq!(shape(&written), shape(&desired));
+        assert_eq!(written, desired);
     }
 
     /// Resizing must stay a one-number edit. Rebuilding the row would work and
@@ -979,8 +945,7 @@ units = "imperial"
                     let reparsed = toml::from_str::<Config>(&out)
                         .unwrap_or_else(|e| panic!("shape {index} produced unparsable TOML: {e}"));
                     assert_eq!(
-                        shape(&reparsed.layout),
-                        shape(want),
+                        reparsed.layout, *want,
                         "shape {index} wrote a layout nobody asked for"
                     );
                     // The rest of the file is not this module's business.
@@ -1071,6 +1036,37 @@ rows = [
             out.matches("# the right one").count(),
             1,
             "a comment was duplicated: {out}"
+        );
+    }
+
+    /// The round-trip check at the end of `apply` is the whole safety story,
+    /// and nothing else in this suite needed it: every other test asserts what
+    /// a good edit writes, or a refusal some earlier check makes, so taking
+    /// the comparison out left them all green. This is an edit that goes wrong
+    /// and parses. `2_6` is TOML for 26, the line-reader sees a `2`, and
+    /// writing 30 over that digit leaves `30_6` — a width of 306 that loads
+    /// without complaint. Only comparing the layout written with the one asked
+    /// for can see it.
+    #[test]
+    fn an_edit_that_parses_but_says_something_else_is_thrown_away() {
+        let src = "\
+[layout]
+rows = [
+  { height = 50, panels = [
+    { widget = \"todo\",  width = 2_6 },
+    { widget = \"notes\", width = 30 },
+  ] },
+]
+";
+        let mut want = layout_of(src);
+        assert_eq!(want.rows[0].panels[0].width, 26, "the fixture is TOML");
+        want.rows[0].panels[0].width = 30;
+
+        let err = apply(src, &want).expect_err("a misread number must not be written");
+        assert!(
+            err.to_string()
+                .contains("does not describe the requested layout"),
+            "refused, but not by the round-trip check: {err}"
         );
     }
 
@@ -1233,8 +1229,7 @@ rows = [
                             panic!("`{name}` want {index} produced unparsable TOML: {e}")
                         });
                         assert_eq!(
-                            shape(&reparsed.layout),
-                            shape(want),
+                            reparsed.layout, *want,
                             "`{name}` want {index} wrote a layout nobody asked for"
                         );
                         assert!(
@@ -1354,7 +1349,7 @@ rows = [
         // Either it maps it correctly or it refuses; what it must never do is
         // write something that does not say what was asked.
         if let Ok(out) = apply(flat, &desired) {
-            assert_eq!(shape(&layout_of(&out)), shape(&desired));
+            assert_eq!(layout_of(&out), desired);
         }
     }
 
@@ -1428,8 +1423,8 @@ rows = [
 
         let edited = apply(SAMPLE, &desired).expect("a row swap must be writable");
         assert_eq!(
-            shape(&layout_of(&edited)),
-            shape(&desired),
+            layout_of(&edited),
+            desired,
             "the file must describe the swapped layout"
         );
     }
@@ -1520,7 +1515,7 @@ rows = [
         desired.rows[1].height = 10;
 
         let edited = apply(COMPACT, &desired).expect("a resize must still work");
-        assert_eq!(shape(&layout_of(&edited)), shape(&desired));
+        assert_eq!(layout_of(&edited), desired);
     }
 
     /// The reorder path must not steal work from the cheap one. A plain resize

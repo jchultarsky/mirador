@@ -99,6 +99,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settled at −37.63 in April 2020 — and the percentage took the close's sign,
   so a rise from −10 to −5 read `+5.00` beside `-50.00%`. It is measured
   against the close's size now, and reads `+50.00%`.
+- **`--migrate-config` sees a table header with a comment after it.**
+  `[theme] # my colours` is a header to TOML, but the migration reads the
+  file as text and did not count it as one, so a retired key under it was
+  neither rewritten nor mentioned in the load error, which pointed at
+  `--print-config` rather than at the migration. Comments are now read past
+  the same way the layout editor reads past them, while a `#` inside a quoted
+  name, as in `[plugins.config.'chan#1']`, is still not taken for one.
 
 ## [1.21.0] - 2026-10-08
 
