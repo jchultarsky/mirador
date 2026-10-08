@@ -28,8 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[pomodoro]` lengths were checked only for being above zero, and the panel
   turns minutes into seconds unchecked, so a hand-edited length too large
   for that sum crashed a debug build and gave a release build a phase of
-  some other length nobody wrote. Like the two refresh settings, each now
-  stops at a year, and a config past it is refused with the key named.
+  some other length nobody wrote. Like the weather, markets and news refresh
+  settings, each now stops at a year, and a config past it is refused with
+  the key named.
 - **`--migrate-config` no longer overwrites an earlier backup.** It copied the
   original to `config.toml.bak` whether or not that name was taken, so the
   config a `--reset-config` had set aside there, or an earlier migration's
@@ -155,6 +156,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `refresh_secs = 3600`. The default layout hid it, because the clock
   redraws every minute. The panel now redraws when an event starts or ends,
   and as each minute of the countdown goes by.
+- **An absurd `[news].refresh_minutes` is refused instead of overflowing.**
+  The feed interval is turned from minutes into seconds unchecked, and it
+  was left out when the weather and markets intervals were bounded, so a
+  hand-edited value large enough crashed a debug build at startup and gave
+  a release build an interval of nothing at all: every feed fetched again
+  and again with no wait. It now stops at a year like the others, and a
+  config past it is refused with the key named.
 
 ## [1.20.0] - 2026-10-07
 
