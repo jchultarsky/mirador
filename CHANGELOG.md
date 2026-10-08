@@ -254,6 +254,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The watch log's "since you were here" line fits a narrow panel.** Below
   21 columns its label was drawn whole and cut by the terminal; it now ends
   in `…`.
+- **Headlines keep their last letters once a story is selected.** The list
+  moves every line two cells right to make room for its `▸` as soon as a
+  story is selected, and the headlines were still wrapped to the whole
+  width, so from the first `j`, `o`, `y` or `Enter` any row the wrap filled
+  lost its last two letters with no `…` — `Krakatau` drawn as `Kraka`. They
+  are now wrapped to the width they are drawn at. A source and age too long
+  for the panel drop the age, and then cut the name with `…`, instead of
+  being cut mid-word. A headline taller than the panel, shown clipped, now
+  ends its last row in `…` instead of stopping wherever the wrap left it.
+- **The news panel says `No stories.` when there are none.** A pass that read
+  every feed and found nothing, or had no feeds to read, was never recorded,
+  so the panel said `Reading…` for as long as it ran.
+- **An Atom feed is reported instead of looking empty.** mirador reads RSS
+  2.0, and the README said Atom too. An Atom feed, or an address that is not
+  a feed at all, came back as an empty feed with no error, so the panel
+  could not tell it from a quiet one. It now counts as a feed that failed,
+  and a panel with nothing to show names it under `Cannot read the feeds`
+  with the reason: "an Atom feed; mirador reads RSS 2.0 only", or "not an
+  RSS feed". An RSS feed that simply has nothing in it today is still a
+  quiet feed. The README now says RSS 2.0.
+- **A feed with one fault in it keeps the headlines before it.** A single
+  bare `&` anywhere in a feed, or one broken tag, threw away every headline
+  in that feed. A bare `&` is now read as the ampersand it is, and any other
+  fault keeps the headlines read before it while the feed is still reported
+  as failing.
+- **A bare `&` with a `;` after it no longer deletes the text between.**
+  `R&D spending rises; analysts wary` was shown as `R analysts wary`, and a
+  link whose address had both pointed somewhere else. A reference mirador
+  cannot resolve — anything but the five XML entities, `nbsp` and a
+  character number — is now shown as written, `&hellip;` included, which
+  used to be dropped.
+- **A rate-limited watchlist no longer asks for a source that does not
+  exist.** The HTTP 429 message ended by saying another `[stocks].source`
+  was needed, and `yahoo` is the only one there is: any other value stops
+  startup. It now says, first, that Yahoo is rate-limiting this address,
+  that the panel will try again, and that a datacenter or VPN address is
+  refused outright.
+- **The quote service's error text is bounded.** Yahoo's reason for
+  refusing a symbol was kept whole and formatted into the markets panel on
+  every frame, however long it was. It is now cut at 80 columns with `…`,
+  twice anything real.
 
 ## [1.19.2] - 2026-10-07
 
