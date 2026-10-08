@@ -195,6 +195,37 @@ impl State {
     }
 }
 
+/// The panel's own copy of [`State`], made only when it can have changed.
+///
+/// `render` used to deep-copy the shared state on every frame — the boxed
+/// reading with its forecast slots and its strings — to draw a reading that
+/// changes once every `refresh_minutes`, while the dashboard redraws every
+/// second. This is the cache `news` and `agenda` keep, filled by `render`
+/// rather than by `tick`: `render` is its only reader, and filling it there
+/// covers the first frame and a `u` press without a second path.
+#[derive(Debug, Default)]
+struct Shown {
+    /// The generation and the units the copy was made at; `None` until the
+    /// first frame.
+    at: Option<(u64, bool)>,
+    /// The state as of `at`, its reading already in the display units.
+    state: State,
+}
+
+/// The handles the panel shares with its fetch thread.
+///
+/// One value rather than five arguments: `poll` took them beside its
+/// interval and its two injected calls, eight in all, under an `#[allow]`
+/// that gave no reason. Each field is a clone of the panel's own `Arc`.
+#[derive(Debug)]
+struct Shared {
+    config: Arc<Mutex<WeatherConfig>>,
+    state: Arc<Mutex<State>>,
+    refresh: Arc<Mutex<bool>>,
+    stop: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+}
+
 /// The weather panel.
 #[derive(Debug)]
 pub struct WeatherPanel {
@@ -233,6 +264,8 @@ pub struct WeatherPanel {
     generation: Arc<AtomicU64>,
     /// The generation the last frame drew.
     seen: u64,
+    /// What the frames draw from; see [`Shown`].
+    shown: Shown,
 }
 
 impl Drop for WeatherPanel {
@@ -276,23 +309,17 @@ impl WeatherPanel {
         // changing the location from the panel is a swap here rather than
         // stopping a thread and starting another.
         let config = Arc::new(Mutex::new(config));
-        let shared_config = Arc::clone(&config);
-        let shared = Arc::clone(&state);
-        let shared_refresh = Arc::clone(&refresh);
-        let shared_stop = Arc::clone(&stop);
-        let shared_generation = Arc::clone(&generation);
+        let shared = Shared {
+            config: Arc::clone(&config),
+            state: Arc::clone(&state),
+            refresh: Arc::clone(&refresh),
+            stop: Arc::clone(&stop),
+            generation: Arc::clone(&generation),
+        };
 
         std::thread::Builder::new()
             .name("mirador-weather".into())
-            .spawn(move || {
-                fetch_loop(
-                    &shared_config,
-                    &shared,
-                    &shared_refresh,
-                    &shared_stop,
-                    &shared_generation,
-                );
-            })
+            .spawn(move || fetch_loop(&shared))
             .expect("spawning the weather thread");
 
         Self {
@@ -307,6 +334,7 @@ impl WeatherPanel {
             stop,
             generation,
             seen: 0,
+            shown: Shown::default(),
         }
     }
 
@@ -335,6 +363,7 @@ impl WeatherPanel {
             stop: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             seen: 0,
+            shown: Shown::default(),
         }
     }
 
@@ -455,6 +484,27 @@ impl WeatherPanel {
         }
     }
 
+    /// Bring [`Shown`] up to date: copy the shared state, and restate its
+    /// reading in the display units, only when the fetch thread has written
+    /// since the last copy or `u` has changed the units.
+    fn refresh_shown(&mut self) {
+        // Read before the copy, so the copy is at least as new as the number
+        // it is filed under. A write landing in between costs one more copy
+        // on the next frame, never a missed one.
+        let at = (self.generation.load(Ordering::Acquire), self.imperial);
+        if self.shown.at == Some(at) {
+            return;
+        }
+        let mut state = self.snapshot();
+        state.data = state
+            .data
+            .map(|data| Box::new(self.in_display_units(*data)));
+        self.shown = Shown {
+            at: Some(at),
+            state,
+        };
+    }
+
     /// Whether the reading on screen should be flagged as old.
     fn is_stale(&self, state: &State) -> bool {
         state.error.is_some() || state.age().is_some_and(|age| age > self.stale_after)
@@ -490,24 +540,9 @@ fn settings(config: &Arc<Mutex<WeatherConfig>>) -> WeatherConfig {
 }
 
 /// Fetch now, then every `refresh_minutes`, until `stop` is set.
-fn fetch_loop(
-    config: &Arc<Mutex<WeatherConfig>>,
-    state: &Arc<Mutex<State>>,
-    refresh: &Arc<Mutex<bool>>,
-    stop: &Arc<AtomicBool>,
-    generation: &Arc<AtomicU64>,
-) {
-    let interval = Duration::from_secs(settings(config).refresh_minutes.max(1) * 60);
-    poll(
-        config,
-        state,
-        refresh,
-        stop,
-        generation,
-        interval,
-        &resolve_location,
-        &fetch_weather,
-    );
+fn fetch_loop(shared: &Shared) {
+    let interval = Duration::from_secs(settings(&shared.config).refresh_minutes.max(1) * 60);
+    poll(shared, interval, &resolve_location, &fetch_weather);
 }
 
 /// The loop itself, with its two network calls as parameters.
@@ -520,17 +555,19 @@ fn fetch_loop(
 type Resolver<'a> = &'a dyn Fn(&WeatherConfig) -> Result<Located>;
 type Fetcher<'a> = &'a dyn Fn(&WeatherConfig, &Located) -> Result<WeatherData>;
 
-#[allow(clippy::too_many_arguments)]
 fn poll(
-    config: &Arc<Mutex<WeatherConfig>>,
-    state: &Arc<Mutex<State>>,
-    refresh: &Arc<Mutex<bool>>,
-    stop: &Arc<AtomicBool>,
-    generation: &Arc<AtomicU64>,
+    shared: &Shared,
     interval: Duration,
     resolve_location: Resolver<'_>,
     fetch_weather: Fetcher<'_>,
 ) {
+    let Shared {
+        config,
+        state,
+        refresh,
+        stop,
+        generation,
+    } = shared;
     // Resolved once and then kept: a place does not move, and geocoding is a
     // second request nobody asked for.
     //
@@ -676,7 +713,7 @@ fn geocode(query: &str) -> Result<Located> {
     let city = query.split(',').next().unwrap_or(query).trim();
     let url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=10&language=en&format=json",
-        urlencode(city)
+        crate::fetch::percent_encode(city)
     );
 
     let body = http_get(&url).context("geocoding the configured location")?;
@@ -891,25 +928,6 @@ fn http_get(url: &str) -> Result<String> {
     })
 }
 
-/// Percent-encode the characters that matter for a query string value.
-fn urlencode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            b' ' => out.push_str("%20"),
-            other => {
-                use std::fmt::Write as _;
-                // Writing into a String is infallible.
-                let _ = write!(out, "%{other:02X}");
-            }
-        }
-    }
-    out
-}
-
 impl Panel for WeatherPanel {
     fn title(&self) -> String {
         self.with_state(|state| match &state.data {
@@ -1029,12 +1047,11 @@ impl Panel for WeatherPanel {
             return;
         }
 
-        let mut state = self.snapshot();
-        let is_old = self.is_stale(&state);
+        self.refresh_shown();
+        let state = &self.shown.state;
+        let is_old = self.is_stale(state);
 
-        // `take`, not `clone`: `state` is already this function's own copy, so
-        // cloning the boxed reading out of it made a second one for nothing.
-        let Some(reading) = state.data.take() else {
+        let Some(data) = state.data.as_deref() else {
             // Nothing has ever landed. Only here is the panel genuinely empty.
             let lines = match &state.error {
                 Some(message) => {
@@ -1065,10 +1082,6 @@ impl Panel for WeatherPanel {
             return;
         };
 
-        // Unboxed once and left unboxed: it was immediately re-boxed, which is
-        // an allocation to hold a value that never leaves this function.
-        let data = self.in_display_units(*reading);
-
         // The art is the one indulgence in this panel, so it is the first thing
         // dropped when the panel gets short.
         let show_art = area.height >= 7 && area.width >= 34;
@@ -1087,14 +1100,14 @@ impl Panel for WeatherPanel {
 
         let age = is_old.then(|| state.age().map_or_else(String::new, describe_age));
         let notice = age.as_deref().map(|age| (age, state.error.as_deref()));
-        Self::render_now(frame, rows[0], theme, &data, show_art, notice);
+        Self::render_now(frame, rows[0], theme, data, show_art, notice);
 
         if rows[1].height > 0 {
             crate::frame::rule(frame, rows[1], theme, "next hours");
         }
 
         if rows[2].height > 0 {
-            render_forecast(frame, rows[2], theme, &data);
+            render_forecast(frame, rows[2], theme, data);
         }
     }
 }
@@ -1319,6 +1332,7 @@ mod tests {
             stop: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             seen: 0,
+            shown: Shown::default(),
         }
     }
 
@@ -1652,15 +1666,6 @@ mod tests {
     }
 
     #[test]
-    fn urlencode_escapes_spaces_and_punctuation() {
-        assert_eq!(urlencode("Boston"), "Boston");
-        assert_eq!(urlencode("New York"), "New%20York");
-        assert_eq!(urlencode("a,b"), "a%2Cb");
-        assert_eq!(urlencode("Zürich"), "Z%C3%BCrich");
-        assert_eq!(urlencode("a-b_c.d~e"), "a-b_c.d~e");
-    }
-
-    #[test]
     fn the_forecast_starts_at_the_current_hour_not_at_midnight() {
         let hours = upcoming_hours(&sample(), 10);
         assert_eq!(hours[0].hour, 14, "past hours must be dropped");
@@ -1877,6 +1882,11 @@ mod tests {
     ///
     /// `poll` deliberately has no iteration limit — that is the whole point of
     /// it — so a test bounds it from the outside, the way `shutdown` does.
+    // Eight: the four parts of `Shared` a test chooses (this wraps the config
+    // in its mutex and makes the generation), `poll`'s interval and its two
+    // injected calls, and the bound. Taking a `Shared` instead would put a
+    // config mutex and a generation none of them reads into each of the three
+    // tests that call this.
     #[allow(clippy::too_many_arguments)]
     fn poll_until(
         config: &WeatherConfig,
@@ -1899,19 +1909,16 @@ mod tests {
         };
         // `poll` reads the config from behind a mutex now, because the panel
         // can change the location while the thread is running.
-        let shared = Arc::new(Mutex::new(config.clone()));
+        let shared = Shared {
+            config: Arc::new(Mutex::new(config.clone())),
+            state: Arc::clone(state),
+            refresh: Arc::clone(refresh),
+            stop: Arc::clone(stop),
+            generation,
+        };
         // `poll` checks `stop` at the top of each pass, so the pass that trips
         // the flag still completes.
-        poll(
-            &shared,
-            state,
-            refresh,
-            stop,
-            &generation,
-            interval,
-            &counted_resolve,
-            fetch,
-        );
+        poll(&shared, interval, &counted_resolve, fetch);
     }
 
     /// Two cities of one name, in the order the geocoder ranks them.
@@ -2081,6 +2088,53 @@ mod tests {
         assert!(
             row.ends_with("timed out"),
             "a reason that fits is shown whole, with no ellipsis: `{row}`"
+        );
+    }
+
+    /// A frame draws the panel's own copy of the reading, made when the fetch
+    /// thread has written — the generation moved — or `u` changed the units,
+    /// not a fresh deep copy of the shared state every frame. A write that
+    /// leaves the generation alone is therefore not drawn: nothing in the
+    /// program writes that way, and it is how this test sees that a frame did
+    /// not copy. Against the per-frame copy the second frame says `second`.
+    #[test]
+    fn a_frame_copies_the_reading_only_when_it_can_have_changed() {
+        let mut panel = panel_showing(false);
+        let own = Arc::clone(&panel.generation);
+        let state = Arc::clone(&panel.state);
+        let failing = |generation: &Arc<AtomicU64>, why: &str| {
+            update(&state, generation, |s| {
+                s.data = Some(Box::new(sample_data(false)));
+                s.fetched = Some(Instant::now());
+                s.error = Some(why.into());
+            });
+        };
+        let says = |panel: &mut WeatherPanel, text: &str| {
+            panel_rows(panel, 60, 16)
+                .iter()
+                .any(|row| row.contains(text))
+        };
+
+        failing(&own, "first");
+        assert!(says(&mut panel, "first"), "the first frame copies");
+
+        failing(&Arc::new(AtomicU64::new(0)), "second");
+        assert!(
+            says(&mut panel, "first") && !says(&mut panel, "second"),
+            "a frame with nothing new must draw the copy it has"
+        );
+
+        failing(&own, "third");
+        assert!(
+            says(&mut panel, "third"),
+            "a write the panel can see is drawn"
+        );
+
+        assert!(says(&mut panel, "28°C"));
+        panel.imperial = true;
+        assert!(
+            says(&mut panel, "82°F"),
+            "`u` must restate the copy, not wait for a fetch"
         );
     }
 

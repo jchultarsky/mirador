@@ -218,8 +218,8 @@ impl Partial {
         }
         Some(Story {
             source: String::new(),
-            title: clip(title, MAX_TITLE),
-            link: clip(self.link.trim(), MAX_LINK),
+            title: clip(title, MAX_TITLE).to_string(),
+            link: clip(self.link.trim(), MAX_LINK).to_string(),
             published: parse_date(self.date.trim()),
         })
     }
@@ -248,11 +248,17 @@ pub const MAX_SOURCE: usize = 80;
 /// Cutting on a character boundary rather than a byte one, so a clipped headline
 /// is still a string. The panel truncates again for display, in *cells*; this
 /// bound is about what is worth holding at all.
-fn clip(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_string();
+///
+/// One walk, and only as far as the bound: it used to count every character
+/// and then take `limit` of them, so a two-megabyte title was walked whole to
+/// learn what the first 400 characters already said. Borrowed rather than
+/// allocated, since every caller wants an owned copy of a different thing.
+/// `news` bounds a feed's name with it as well, against [`MAX_SOURCE`].
+pub(crate) fn clip(text: &str, limit: usize) -> &str {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => &text[..end],
+        None => text,
     }
-    text.chars().take(limit).collect()
 }
 
 /// The text an entity reference stands for.
@@ -344,6 +350,32 @@ mod tests {
             "the headline still wraps to {} lines a frame",
             wrapped.len()
         );
+    }
+
+    /// The cut falls at exactly `limit` characters, on a character boundary,
+    /// and text inside the bound comes back whole — checked on multi-byte text,
+    /// where counting bytes and counting characters disagree. Borrowed from
+    /// the text every time, never a copy of it.
+    #[test]
+    fn clip_keeps_exactly_the_first_limit_characters() {
+        for (text, limit, kept) in [
+            ("", 0, ""),
+            ("", 3, ""),
+            ("abc", 0, ""),
+            ("abc", 2, "ab"),
+            ("abc", 3, "abc"),
+            ("abc", 4, "abc"),
+            ("日本語", 2, "日本"),
+            ("日本語", 3, "日本語"),
+            ("é🌞x", 2, "é🌞"),
+        ] {
+            let clipped = clip(text, limit);
+            assert_eq!(clipped, kept, "{text:?} at {limit}");
+            assert!(
+                std::ptr::eq(clipped.as_ptr(), text.as_ptr()),
+                "{text:?} at {limit} was copied"
+            );
+        }
     }
 
     /// And an ordinary headline is untouched — a bound that clips real news is
