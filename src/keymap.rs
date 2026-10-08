@@ -1626,6 +1626,15 @@ fn advertises(bindings: &[Binding], key: Key) -> bool {
     })
 }
 
+/// The `[keys]` table in `toml_text`, read as a config reads it. The shell's
+/// tests, the key map's and this module's all build keys from text this way.
+#[cfg(test)]
+pub(crate) fn keys_config(toml_text: &str) -> KeysConfig {
+    let mut tables: BTreeMap<String, KeysConfig> =
+        toml::from_str(toml_text).unwrap_or_else(|e| panic!("{e}"));
+    tables.remove("keys").expect("a [keys] table")
+}
+
 /// Every key in `map` works and is advertised: `press` is handed each key of
 /// each action in turn — build a fresh panel inside it — and must consume it,
 /// and the map's own hints must name it. The panel-side half of what the
@@ -1658,15 +1667,10 @@ pub(crate) fn assert_every_key_works<A: Copy + PartialEq>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     fn key(text: &str) -> Key {
         text.parse().unwrap_or_else(|e| panic!("{text:?}: {e}"))
-    }
-
-    fn keys_config(toml_text: &str) -> KeysConfig {
-        let mut tables: BTreeMap<String, KeysConfig> =
-            toml::from_str(toml_text).unwrap_or_else(|e| panic!("{e}"));
-        tables.remove("keys").expect("a [keys] table")
     }
 
     fn event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -2080,8 +2084,7 @@ mod tests {
 
     #[test]
     fn a_reset_file_reads_back_as_the_default_keymap() {
-        let dir = std::env::temp_dir().join(format!("mirador-reset-keys-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        let dir = TempDir::new("reset-keys");
         let path = dir.join("config.toml");
         std::fs::write(&path, "[keys]\nquit = \"x\"\n").expect("write");
 
@@ -2096,18 +2099,15 @@ mod tests {
             Ok(false),
             "a second reset has nothing to do"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_reload_reports_a_bad_keymap_instead_of_applying_it() {
-        let dir = std::env::temp_dir().join(format!("mirador-read-keys-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        let dir = TempDir::new("read-keys");
         let path = dir.join("config.toml");
         std::fs::write(&path, "[keys]\ntheme = \"q\"\n").expect("write");
         let error = read_keys(&path).expect_err("clash");
         assert!(error.contains("bound to both"), "{error}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2481,78 +2481,14 @@ mod tests {
         assert_eq!(help_scroll_hint(&unbound, false, true), None);
     }
 
-    /// Each of the shell's modes has a table in the shipped config listing
-    /// every action with its default, as `[keys]` and each panel's table do —
-    /// one loop, so a mode added later cannot go undocumented.
+    /// Every table in the shipped config — each mode's and each panel's —
+    /// lists every action with its default, the same promise as `[keys]`.
+    /// One loop over both halves: the two were the same body twice, and the
+    /// day one gained an assertion the other would not have.
     #[test]
-    fn the_shipped_config_documents_every_mode_default_exactly() {
+    fn the_shipped_config_documents_every_mode_and_panel_default_exactly() {
         let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
-        for scope in MODE_SCOPES {
-            let heading = format!("\n[{}.keys]\n", scope.widget);
-            let block = shipped
-                .split_once(&heading)
-                .unwrap_or_else(|| panic!("the shipped config has no {}", heading.trim()))
-                .1;
-            let uncommented = block
-                .lines()
-                .map_while(|line| line.strip_prefix("# "))
-                .filter(|line| !line.starts_with(' ') && line.contains('='))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let written: KeysConfig = toml::from_str(&uncommented).expect("valid TOML");
-            let documented = (scope.listing)(&written).expect("the documented keys are valid");
-            let defaults = (scope.listing)(&KeysConfig::default()).expect("valid");
-            assert_eq!(
-                written.0.len(),
-                defaults.len(),
-                "[{}.keys] lists every action once: {:?}",
-                scope.widget,
-                written.0.keys().collect::<Vec<_>>()
-            );
-            assert_eq!(documented, defaults, "{}", scope.widget);
-        }
-    }
-
-    /// Reload reads `[arrange.keys]`, and the reset comments it out with the
-    /// rest.
-    #[test]
-    fn the_arrange_table_reloads_and_resets_with_the_others() {
-        let dir = std::env::temp_dir().join(format!("mirador-arrange-keys-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let path = dir.join("config.toml");
-        std::fs::write(
-            &path,
-            "[keys]\nquit = \"x\"\n\n[arrange.keys]\nkeep = \"space\"\n",
-        )
-        .expect("write");
-
-        let (tables, _) = read_keys(&path).expect("reads");
-        assert_eq!(
-            arrange_keymap(&tables.scopes["arrange"])
-                .expect("valid")
-                .action(key("space")),
-            Some(ArrangeAction::Keep)
-        );
-        assert_eq!(reset_file(&path), Ok(true));
-        let text = std::fs::read_to_string(&path).expect("read");
-        assert!(
-            text.contains("[arrange.keys]\n# keep = \"space\""),
-            "{text}"
-        );
-        let (tables, _) = read_keys(&path).expect("reads");
-        assert!(
-            tables.scopes["arrange"].0.is_empty() && tables.shell.0.is_empty(),
-            "{tables:?}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Each panel's table in the shipped config lists every action with its
-    /// default — the same promise as `[keys]`, per panel.
-    #[test]
-    fn the_shipped_config_documents_every_panel_default_exactly() {
-        let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
-        for scope in crate::widgets::KEY_SCOPES {
+        for scope in scopes() {
             let heading = format!("\n[{}.keys]\n", scope.widget);
             let block = shipped
                 .split_once(&heading)
@@ -2578,6 +2514,38 @@ mod tests {
             );
             assert_eq!(documented, defaults, "{}", scope.widget);
         }
+    }
+
+    /// Reload reads `[arrange.keys]`, and the reset comments it out with the
+    /// rest.
+    #[test]
+    fn the_arrange_table_reloads_and_resets_with_the_others() {
+        let dir = TempDir::new("arrange-keys");
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[keys]\nquit = \"x\"\n\n[arrange.keys]\nkeep = \"space\"\n",
+        )
+        .expect("write");
+
+        let (tables, _) = read_keys(&path).expect("reads");
+        assert_eq!(
+            arrange_keymap(&tables.scopes["arrange"])
+                .expect("valid")
+                .action(key("space")),
+            Some(ArrangeAction::Keep)
+        );
+        assert_eq!(reset_file(&path), Ok(true));
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            text.contains("[arrange.keys]\n# keep = \"space\""),
+            "{text}"
+        );
+        let (tables, _) = read_keys(&path).expect("reads");
+        assert!(
+            tables.scopes["arrange"].0.is_empty() && tables.shell.0.is_empty(),
+            "{tables:?}"
+        );
     }
 
     /// The reset reaches a panel's table too, and leaves the rest of that
@@ -2611,8 +2579,7 @@ mod tests {
     /// panel setting is not held to the key rules and a key error is.
     #[test]
     fn a_reload_reads_panel_tables_and_reports_them_by_name() {
-        let dir = std::env::temp_dir().join(format!("mirador-panel-keys-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        let dir = TempDir::new("panel-keys");
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
@@ -2626,6 +2593,5 @@ mod tests {
         std::fs::write(&path, "[cpu.keys]\nper_core = \"esc\"\n").expect("write");
         let error = read_keys(&path).expect_err("Esc is never a key");
         assert!(error.contains("[cpu.keys]"), "{error}");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

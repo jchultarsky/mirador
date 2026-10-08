@@ -731,8 +731,6 @@ fn entry_tail(typing: &str, grid: &Grid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
 
     fn new_panel() -> CalculatorPanel {
         CalculatorPanel::new(CalculatorConfig::default())
@@ -753,36 +751,11 @@ mod tests {
     }
 
     fn buffer_of(panel: &mut CalculatorPanel, width: u16, height: u16) -> ratatui::buffer::Buffer {
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        terminal.backend().buffer().clone()
+        crate::widgets::testing::rendered(panel, width, height)
     }
 
     fn draw(panel: &mut CalculatorPanel, width: u16, height: u16) -> String {
-        let buffer = buffer_of(panel, width, height);
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::widgets::testing::rows(&buffer_of(panel, width, height)).join("\n")
     }
 
     /// The entry being typed keeps its tail in view. It was ellipsised from

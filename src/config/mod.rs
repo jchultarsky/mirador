@@ -788,8 +788,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_reset_leaves_the_file_a_linked_config_points_at_alone() {
-        let dir = std::env::temp_dir().join(format!("mirador-reset-link-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = TempDir::new("reset-link");
         std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
         std::fs::create_dir_all(dir.join("cfg")).unwrap();
         std::fs::write(dir.join("dotfiles/mirador.toml"), "# my curated config\n").unwrap();
@@ -816,7 +815,6 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The same, for a link whose file has gone: the repository is there but
@@ -826,9 +824,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_reset_sets_aside_a_linked_config_whose_file_is_missing() {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-reset-dangling-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = TempDir::new("reset-dangling");
         std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
         std::fs::create_dir_all(dir.join("cfg")).unwrap();
         let path = dir.join("cfg/config.toml");
@@ -846,10 +842,10 @@ mod tests {
             Path::new("../dotfiles/mirador.toml")
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// The list a factory reset works from. What is *absent* is the load-bearing
     /// part: mirador reads a calendar and never writes one, so `calendar.ics`
@@ -890,11 +886,8 @@ mod tests {
 
     /// A scratch directory named for the calling test, so the reset tests do
     /// not share files with each other or with a parallel run.
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mirador-reset-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn scratch(name: &str) -> TempDir {
+        TempDir::new(&format!("reset-{name}"))
     }
 
     #[test]
@@ -913,7 +906,6 @@ mod tests {
             "theme = \"nord\"\n# an evening's work\n",
             "the backup must be the config that was replaced, byte for byte"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The failure this guards is the one a stuck user actually walks into:
@@ -941,7 +933,6 @@ mod tests {
             DEFAULT_CONFIG,
             "the second backup is what the first reset wrote"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Asking for a config where there is none is a reason to write one, not to
@@ -953,7 +944,6 @@ mod tests {
 
         assert!(Config::reset(&path).unwrap().is_none());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Whatever it writes has to be a config mirador can actually load —
@@ -968,7 +958,6 @@ mod tests {
 
         let text = std::fs::read_to_string(&path).unwrap();
         toml::from_str::<Config>(&text).expect("a reset config must load");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1441,10 +1430,7 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
             ("weather = { forecast_days = 4 }", LeavesAlone),
             ("weather.forecast_days = 4", LeavesAlone),
         ];
-        let dir =
-            std::env::temp_dir().join(format!("mirador-migration-hint-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("migration-hint");
         for (n, (source, label)) in cases.into_iter().enumerate() {
             let outcome = migration_of(&dir, n, source);
             assert_eq!(
@@ -1468,7 +1454,6 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
                 ),
             }
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// "Other problems" alone would send the reader hunting, so the hint names
@@ -1642,11 +1627,8 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
     /// A fresh directory for one of the tests below to stand in for the
     /// system's temporary directory.
     #[cfg(unix)]
-    fn stand_in_temp(name: &str) -> PathBuf {
-        let temp = std::env::temp_dir().join(format!("mirador-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp);
-        std::fs::create_dir_all(&temp).unwrap();
-        temp
+    fn stand_in_temp(name: &str) -> TempDir {
+        TempDir::new(name)
     }
 
     /// On Linux the temporary directory is usually one `/tmp` for everyone,
@@ -1669,11 +1651,10 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         let made = ours.is_dir() && std::fs::write(ours.join("probe"), "").is_ok();
 
         std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let _ = std::fs::remove_dir_all(&temp);
         assert!(made, "the run directory {} was not made", ours.display());
         // Root can write into the other user's directory, so on a machine
         // where the suite runs as root only this catches a shared parent.
-        assert_eq!(ours.parent(), Some(temp.as_path()), "{}", ours.display());
+        assert_eq!(ours.parent(), Some(&*temp), "{}", ours.display());
     }
 
     /// Runs that are over are swept by name, and the name is what keeps the
@@ -1703,7 +1684,6 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
         Config::test_run_dir(&temp, 3);
         let left = (over.exists(), not_ours.exists(), going.exists());
 
-        let _ = std::fs::remove_dir_all(&temp);
         assert_eq!(left, (false, true, true), "(over, not ours, still going)");
     }
 }

@@ -56,7 +56,7 @@ fn de_opt_color<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Col
 ///
 /// `mid` and `end` are optional: with neither, the ramp is flat; with `end`
 /// only, it is a single linear segment.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GradientStops {
     #[serde(deserialize_with = "de_color")]
@@ -98,7 +98,7 @@ impl GradientStops {
 /// misspelled colour is accepted and silently ignored — and because the
 /// pre-0.1.0 theme keys `rx` and `tx` also parsed clean, the
 /// `--migrate-config` hint that names them could never fire.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     /// Frame of an unfocused panel.
@@ -318,47 +318,6 @@ impl Theme {
     pub fn named(mut self, name: &str) -> Self {
         self.name = Some(name.to_string());
         self
-    }
-
-    /// Every colour, for comparing two themes without their names.
-    ///
-    /// A theme resolved from a file carries its name and the built-in one does
-    /// not, so comparing whole themes would report a difference that is not
-    /// about colour at all.
-    #[cfg(test)]
-    pub fn colours(&self) -> Vec<Color> {
-        let stops = |s: &GradientStops| {
-            vec![
-                s.start,
-                s.mid.unwrap_or(Color::Reset),
-                s.end.unwrap_or(Color::Reset),
-            ]
-        };
-        let mut out = vec![
-            self.border,
-            self.border_focused,
-            self.rule,
-            self.title,
-            self.text,
-            self.muted,
-            self.label,
-            self.accent,
-            self.key,
-            self.success,
-            self.warning,
-            self.error,
-            self.track,
-        ];
-        for gradient in [
-            &self.cpu_gradient,
-            &self.rx_gradient,
-            &self.tx_gradient,
-            &self.gain_gradient,
-            &self.loss_gradient,
-        ] {
-            out.extend(stops(gradient));
-        }
-        out
     }
 
     /// Bake every configured ramp.

@@ -1827,27 +1827,7 @@ mod tests {
 
     /// Draw the panel and return what reached the screen.
     fn draw(panel: &mut NewsPanel, width: u16, height: u16) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
+        let buffer = crate::widgets::testing::rendered(panel, width, height);
         (0..height)
             .map(|y| {
                 (0..width)

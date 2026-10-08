@@ -735,7 +735,7 @@ impl DiskPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chart::screen;
+    use crate::widgets::testing::screen;
 
     fn volume(mount: &str, fs: &str, total: u64, available: u64, read_only: bool) -> Volume {
         Volume {

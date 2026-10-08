@@ -2016,29 +2016,7 @@ mod tests {
 
     /// Every row the whole panel draws, as text.
     fn panel_rows(panel: &mut WeatherPanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buf = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(panel, width, height))
     }
 
     /// Once a reading is on screen a failure used to say only "refresh

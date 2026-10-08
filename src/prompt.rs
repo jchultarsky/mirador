@@ -463,6 +463,7 @@ fn common_prefix(candidates: &[String]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     const PLACES: &[crate::zones::Place] = &[
         crate::zones::Place {
@@ -607,8 +608,7 @@ mod tests {
     /// unexecuted by the suite.
     #[test]
     fn tab_completes_a_path_to_the_shared_prefix_and_marks_directories() {
-        let dir = std::env::temp_dir().join(format!("mirador-complete-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = TempDir::new("complete");
         std::fs::create_dir_all(dir.join("alps")).unwrap();
         std::fs::write(dir.join("alpha.ics"), "").unwrap();
         std::fs::write(dir.join("alphabet.ics"), "").unwrap();
@@ -641,7 +641,6 @@ mod tests {
             format!("{base}zzz"),
             "nothing matching changes nothing"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -747,10 +746,7 @@ mod tests {
         terminal
             .draw(|f| p.render(f, f.area(), &Theme::default()))
             .expect("draw");
-        let buffer = terminal.backend().buffer();
-        let rows: Vec<String> = (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect();
+        let rows = crate::widgets::testing::rows(terminal.backend().buffer());
         let bottom = rows
             .iter()
             .rposition(|row| row.contains('╰'))

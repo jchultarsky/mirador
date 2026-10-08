@@ -355,10 +355,7 @@ fn reader_loop(
             let _ = supervisor.send(SupervisorCommand::Abort);
             break;
         }
-        while matches!(bytes.last(), Some(b'\n' | b'\r')) {
-            bytes.pop();
-        }
-        let message: PluginMessage = match serde_json::from_slice(&bytes) {
+        let message = match decode_line(&bytes) {
             Ok(message) => message,
             Err(error) => {
                 shared
@@ -374,6 +371,17 @@ fn reader_loop(
             break;
         }
     }
+}
+
+/// One line of plugin output as a message: the line ending stripped — a
+/// `\r\n` from a plugin written on Windows as much as a `\n` — and what is
+/// left decoded.
+pub(super) fn decode_line(line: &[u8]) -> serde_json::Result<PluginMessage> {
+    let mut end = line.len();
+    while end > 0 && matches!(line[end - 1], b'\n' | b'\r') {
+        end -= 1;
+    }
+    serde_json::from_slice(&line[..end])
 }
 
 pub(super) fn read_limited_line(
@@ -1023,19 +1031,6 @@ mod tests {
         )
     }
 
-    fn span(text: impl Into<String>) -> WireSpan {
-        WireSpan {
-            text: text.into(),
-            fg: None,
-            bg: None,
-            bold: false,
-            dim: false,
-            italic: false,
-            underlined: false,
-            reversed: false,
-        }
-    }
-
     #[test]
     #[ignore = "helper process for portable plugin lifecycle tests"]
     fn child_waits_for_the_parent_to_terminate_it() {
@@ -1218,7 +1213,7 @@ mod tests {
             title: None,
             counter: None,
             lines: vec![WireLine {
-                spans: vec![span("saving")],
+                spans: vec![WireSpan::plain("saving")],
             }],
             bindings: Vec::new(),
             input: InputPolicy::default(),
@@ -1339,14 +1334,16 @@ mod tests {
     #[test]
     fn frames_cannot_smuggle_terminal_controls_or_retain_unbounded_text() {
         let controls = [WireLine {
-            spans: vec![span("safe\u{1b}[2Jnot safe")],
+            spans: vec![WireSpan::plain("safe\u{1b}[2Jnot safe")],
         }];
         let error =
             validate_frame(None, None, &controls, &[], &InputPolicy::default()).unwrap_err();
         assert!(error.contains("control character"), "{error}");
 
         let oversized = [WireLine {
-            spans: vec![span("x".repeat(MAX_RETAINED_FRAME_TEXT_BYTES + 1))],
+            spans: vec![WireSpan::plain(
+                "x".repeat(MAX_RETAINED_FRAME_TEXT_BYTES + 1),
+            )],
         }];
         let error =
             validate_frame(None, None, &oversized, &[], &InputPolicy::default()).unwrap_err();

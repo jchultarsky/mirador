@@ -1596,6 +1596,7 @@ use crate::grid::truncate;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     #[test]
     fn field_order_cycles_both_ways() {
@@ -1648,27 +1649,16 @@ mod tests {
     // Panel behaviour, driven through the same key events the terminal sends.
     // ---------------------------------------------------------------------
 
-    /// A scratch directory removed when the guard drops.
-    struct TempDir(std::path::PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     /// A panel backed by a fresh, empty task file.
     fn panel(name: &str) -> (TodoPanel, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-todo-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("todo-{name}"));
         let path = dir.join("todos.toml");
         // An empty file rather than no file: the panel seeds examples when the
         // file is absent, and these tests are about the panel, not the seed.
         // Writing it first exercises the same branch a second run takes.
         std::fs::write(&path, "").unwrap();
         let panel = TodoPanel::new(TodoConfig::default(), path).unwrap();
-        (panel, TempDir(dir))
+        (panel, dir)
     }
 
     /// `[todo].horizon_days` shipped in the first commit, documented in every
@@ -1676,10 +1666,7 @@ mod tests {
     /// read by nothing: a reader who set it to a week still saw the whole year.
     #[test]
     fn a_horizon_hides_only_the_tasks_due_beyond_it() {
-        let dir = std::env::temp_dir().join(format!("mirador-todo-{}-horizon", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("todo-horizon");
         let path = dir.join("todos.toml");
         std::fs::write(&path, "").unwrap();
         let config = TodoConfig {
@@ -1850,10 +1837,7 @@ mod tests {
     /// the list.
     #[test]
     fn the_open_count_is_shown_once_and_by_the_border() {
-        let dir = std::env::temp_dir().join(format!("mirador-todo-{}-count", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("todo-count");
         // Seeded rather than empty: the examples are what a first run shows,
         // and one of them is overdue, so the summary has something to lead with
         // besides the count under test.
@@ -1900,33 +1884,7 @@ mod tests {
 
     /// The panel as drawn at `width`x`height`, joined into one string.
     fn screen_of(panel: &mut TodoPanel, width: u16, height: u16) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    crate::panel::RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(panel, width, height))
             .join("\n")
     }
 

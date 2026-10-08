@@ -382,30 +382,16 @@ fn user_themes(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use std::path::PathBuf;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::from(code)
     }
 
-    /// A directory of its own per test. Sharing one is how the zone tests came
-    /// to read each other's files on Windows.
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     fn themes_dir(name: &str) -> TempDir {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-picker-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test directory");
-        TempDir(dir)
+        TempDir::new(&format!("picker-{name}"))
     }
 
     fn write(dir: &Path, name: &str) {
@@ -464,22 +450,18 @@ mod tests {
     fn the_theme_under_the_cursor_is_drawn_at_every_height() {
         let dir = themes_dir("heights");
         for i in 0..10 {
-            write(&dir.0, &format!("mine-{i:02}"));
+            write(&dir, &format!("mine-{i:02}"));
         }
         let draw = |picker: &ThemePicker, height: u16| -> String {
             let mut terminal = Terminal::new(TestBackend::new(60, height)).expect("terminal");
             terminal
                 .draw(|f| picker.render(f, f.area(), &Theme::default()))
                 .expect("draw");
-            let buffer = terminal.backend().buffer().clone();
-            (0..height)
-                .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
+            crate::widgets::testing::rows(terminal.backend().buffer()).join("\n")
         };
 
         for height in 3..=30u16 {
-            let mut picker = ThemePicker::new(None, Some(&dir.0));
+            let mut picker = ThemePicker::new(None, Some(&*dir));
             let count = picker.names().len();
             assert!(count > ROWS, "needs more themes than the window holds");
             let visit = |picker: &ThemePicker| {
@@ -514,7 +496,7 @@ mod tests {
         // the cursor on the first row and the old top drawn under it. A
         // window snapped to pages keeps the end on screen too, which is why
         // the second half is here: it puts the cursor fifth of six.
-        let mut short = ThemePicker::new(None, Some(&dir.0));
+        let mut short = ThemePicker::new(None, Some(&*dir));
         let names = short.names().to_vec();
         let last = names.len() - 1;
         short.handle_key(key(KeyCode::End));
@@ -545,8 +527,8 @@ mod tests {
     #[test]
     fn a_user_theme_shadowing_a_bundled_name_is_listed_once() {
         let dir = themes_dir("shadow");
-        write(&dir.0, "nord");
-        let picker = ThemePicker::new(None, Some(&dir.0));
+        write(&dir, "nord");
+        let picker = ThemePicker::new(None, Some(&*dir));
         let nords = picker.names().iter().filter(|n| *n == "nord").count();
         assert_eq!(nords, 1, "the file on disk is the one that would load");
     }
@@ -556,9 +538,9 @@ mod tests {
     #[test]
     fn a_file_the_resolver_could_never_load_is_not_offered() {
         let dir = themes_dir("unlistable");
-        write(&dir.0, "has space");
-        write(&dir.0, "fine-one");
-        let picker = ThemePicker::new(None, Some(&dir.0));
+        write(&dir, "has space");
+        write(&dir, "fine-one");
+        let picker = ThemePicker::new(None, Some(&*dir));
         assert!(picker.names().iter().any(|n| n == "fine-one"));
         assert!(
             !picker.names().iter().any(|n| n.contains(' ')),
@@ -635,13 +617,13 @@ mod tests {
     fn it_draws_without_panicking_at_every_size_down_to_one_cell() {
         let dir = themes_dir("tiny");
         for i in 0..30 {
-            write(&dir.0, &format!("mine-{i:02}"));
+            write(&dir, &format!("mine-{i:02}"));
         }
 
         for (w, h) in [(80u16, 24u16), (30, 10), (10, 5), (2, 2), (1, 1)] {
-            for themes in [None, Some(&dir.0)] {
+            for themes in [None, Some(&*dir)] {
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
-                let mut picker = ThemePicker::new(None, themes.map(std::path::PathBuf::as_path));
+                let mut picker = ThemePicker::new(None, themes);
                 // Draw at the top, part-way down, and at the end, so the
                 // scrolled window is exercised as well as the initial one.
                 for _ in 0..3 {
@@ -668,9 +650,9 @@ mod tests {
     fn drawing_reserves_room_for_the_window_not_for_the_whole_list() {
         let dir = themes_dir("many");
         for i in 0..400 {
-            write(&dir.0, &format!("mine-{i:03}"));
+            write(&dir, &format!("mine-{i:03}"));
         }
-        let mut picker = ThemePicker::new(None, Some(&dir.0));
+        let mut picker = ThemePicker::new(None, Some(&*dir));
         assert!(picker.names().len() > 400, "there is a big list behind it");
 
         // At the top, part-way down, and at the end.

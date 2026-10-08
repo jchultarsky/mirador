@@ -393,9 +393,7 @@ mod tests {
     }
 
     fn keymap(toml_text: &str) -> Keymap {
-        let mut tables: std::collections::BTreeMap<String, crate::keymap::KeysConfig> =
-            toml::from_str(toml_text).expect("valid TOML");
-        Keymap::new(&tables.remove("keys").unwrap_or_default()).expect("valid keymap")
+        Keymap::new(&crate::keymap::keys_config(toml_text)).expect("valid keymap")
     }
 
     /// Every panel's keys as the dialog lists them, from a config's text.
@@ -425,10 +423,7 @@ mod tests {
                 );
             })
             .expect("draw");
-        let buffer = terminal.backend().buffer();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(terminal.backend().buffer())
     }
 
     #[test]

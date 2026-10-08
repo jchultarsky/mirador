@@ -250,16 +250,14 @@ pub fn clear(path: &Path) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// #153: resetting the config alone left this file in place, and it
     /// outranks the config — so the preferences were applied straight back
     /// over the freshly restored file and the dashboard looked untouched.
     #[test]
     fn clearing_moves_the_file_aside_rather_than_destroying_it() {
-        let dir = std::env::temp_dir().join(format!("mirador-clear-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("clear");
 
         let path = default_path(&dir);
         let state = UiState {
@@ -296,10 +294,7 @@ mod tests {
     /// records anything.
     #[test]
     fn clearing_nothing_is_not_a_failure() {
-        let dir = std::env::temp_dir().join(format!("mirador-clear-none-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("clear-none");
 
         assert!(
             clear(&default_path(&dir)).expect("no error").is_none(),
@@ -311,10 +306,7 @@ mod tests {
     /// config resets do not clobber the first backup.
     #[test]
     fn a_second_clear_does_not_overwrite_the_first_copy() {
-        let dir = std::env::temp_dir().join(format!("mirador-clear-two-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("clear-two");
 
         let path = default_path(&dir);
         UiState {
@@ -342,19 +334,9 @@ mod tests {
         );
     }
 
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     fn dir(name: &str) -> (PathBuf, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-state-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        (dir.join("state.toml"), TempDir(dir))
+        let dir = TempDir::new(&format!("state-{name}"));
+        (dir.join("state.toml"), dir)
     }
 
     #[test]
@@ -479,6 +461,9 @@ mod tests {
         assert!(nested.exists());
     }
 
+    /// It checked for `state.toml.tmp`, a name `write_atomic` stopped using
+    /// when its temporaries became unique per write — so it passed whatever
+    /// was left behind. It reads the folder now.
     #[test]
     fn a_save_leaves_no_temp_file_behind() {
         let (path, _g) = dir("tmp");
@@ -488,7 +473,8 @@ mod tests {
         }
         .save(&path)
         .unwrap();
-        assert!(!path.with_extension("toml.tmp").exists());
+        let left = crate::store::testing::leftovers(path.parent().expect("a folder"));
+        assert!(left.is_empty(), "left behind: {left:?}");
     }
 
     /// A config with known preference values to diff against.

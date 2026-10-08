@@ -810,7 +810,19 @@ units = "imperial"
             .find("# Wide enough for two months side by side.")
             .expect("the comment survives");
         assert!(
-            comment < calendar && clocks < comment.max(calendar) + out.len(),
+            comment < calendar,
+            "the comment should precede calendar:\n{out}"
+        );
+        // By line, not by offset: the second half of this used to read
+        // `clocks < comment.max(calendar) + out.len()`, which no offset into
+        // `out` can fail, so a comment stranded at the head of the row passed.
+        let lines: Vec<&str> = out.lines().collect();
+        let at = lines
+            .iter()
+            .position(|line| line.contains("# Wide enough for two months side by side."))
+            .expect("the comment survives");
+        assert!(
+            lines[at + 1].contains(r#""calendar""#),
             "the comment should sit directly above calendar:\n{out}"
         );
         assert_eq!(shape(&layout_of(&out)), shape(&desired));

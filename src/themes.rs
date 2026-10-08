@@ -358,14 +358,7 @@ fn substitute(table: &mut toml::Table, palette: &BTreeMap<String, toml::Value>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::store::testing::TempDir;
 
     /// A theme file is read on **every cursor move in the `t` picker**, which
     /// re-resolves from disk to preview. Before the cap an 8MB file took 233ms
@@ -422,11 +415,8 @@ mod tests {
     }
 
     fn themes_dir(name: &str) -> (PathBuf, TempDir) {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-themes-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test directory");
-        (dir.clone(), TempDir(dir))
+        let dir = TempDir::new(&format!("themes-{name}"));
+        (dir.to_path_buf(), dir)
     }
 
     fn write(dir: &Path, name: &str, body: &str) {
@@ -499,9 +489,15 @@ mod tests {
     fn the_bundled_default_theme_matches_the_rust_default() {
         let from_file = resolve("default", None).expect("resolves");
         let built_in = Theme::default();
+        // Whole themes, less the name a file carries and the built-in one
+        // does not. This compared a hand-written list of colours, so a field
+        // added to `Theme` and left off the list was one this could not see.
         assert_eq!(
-            from_file.colours(),
-            built_in.colours(),
+            Theme {
+                name: None,
+                ..from_file
+            },
+            built_in,
             "assets/themes/default.toml has drifted from Theme::default()"
         );
     }

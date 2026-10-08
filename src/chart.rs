@@ -394,42 +394,6 @@ pub fn draw_notice<S: AsRef<str>>(
     }
 }
 
-/// What a panel draws at `width` by `height`, one string a row with the
-/// trailing blanks trimmed, drawn in the default theme with the panel
-/// focused. The monitor panels' tests read their faces through this.
-#[cfg(test)]
-pub(crate) fn screen(panel: &mut dyn crate::panel::Panel, width: u16, height: u16) -> Vec<String> {
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    let config = crate::config::Config::default();
-    let gradients = config.theme.gradients();
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal
-        .draw(|frame| {
-            panel.render(
-                frame,
-                frame.area(),
-                crate::panel::RenderContext {
-                    theme: &config.theme,
-                    gradients: &gradients,
-                    focused: true,
-                    watch: &crate::watch::WatchLog::default(),
-                },
-            );
-        })
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
-        .collect()
-}
-
 /// A flat meter: `percent` of `width` cells filled in one colour, the rest in
 /// the track colour. The pomodoro's progress bar and the battery's charge bar
 /// are both this; the graded version, coloured by level, is [`meter_spans`].

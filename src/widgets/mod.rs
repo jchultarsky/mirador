@@ -240,9 +240,80 @@ fn refuse_a_fetch_thread(name: &str) -> Result<()> {
     )
 }
 
+/// Reading a panel back off the screen, for every test that does. There
+/// was a copy of this in each widget's tests and five more in the shell's,
+/// each spelling the `RenderContext` out again, so a field added to it had a
+/// dozen places to go.
+#[cfg(test)]
+pub(crate) mod testing {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+
+    use crate::panel::{Panel, RenderContext};
+    use crate::theme::Theme;
+
+    /// A buffer as text, one string a row with every cell's symbol in order
+    /// and the trailing blanks kept, so a column can be read by position.
+    pub(crate) fn rows(buffer: &Buffer) -> Vec<String> {
+        let area = buffer.area;
+        (area.top()..area.bottom())
+            .map(|y| {
+                (area.left()..area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// What `panel` draws into a `width` by `height` screen in `theme`, with
+    /// an empty watch log behind it.
+    pub(crate) fn render_in(
+        panel: &mut dyn Panel,
+        width: u16,
+        height: u16,
+        theme: &Theme,
+        focused: bool,
+    ) -> Buffer {
+        let gradients = theme.gradients();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("a test backend");
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme,
+                        gradients: &gradients,
+                        focused,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .expect("draws");
+        terminal.backend().buffer().clone()
+    }
+
+    /// What `panel` draws focused, in the default theme.
+    pub(crate) fn rendered(panel: &mut dyn Panel, width: u16, height: u16) -> Buffer {
+        render_in(panel, width, height, &Theme::default(), true)
+    }
+
+    /// What a panel draws at `width` by `height`, one string a row with the
+    /// trailing blanks trimmed, drawn in the default theme with the panel
+    /// focused. The monitor panels' tests read their faces through this.
+    pub(crate) fn screen(panel: &mut dyn Panel, width: u16, height: u16) -> Vec<String> {
+        rows(&rendered(panel, width, height))
+            .into_iter()
+            .map(|row| row.trim_end().to_string())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     #[test]
     fn every_advertised_widget_is_recognised() {
@@ -316,9 +387,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join(format!("mirador-render-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("render");
 
         let mut config = Config::default();
         config.todo.file = Some(dir.join("todos.toml"));
@@ -364,8 +433,6 @@ mod tests {
                     .unwrap_or_else(|e| panic!("`{name}` failed to draw at {width}x{height}: {e}"));
             }
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The same check for the whole dashboard, so the grid maths is covered too.
@@ -378,9 +445,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join(format!("mirador-full-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("full");
 
         let config = Config::default();
         let panels = offline_panels(&dir, &config);
@@ -392,8 +457,6 @@ mod tests {
                 .draw(|frame| app.render_for_test(frame))
                 .unwrap_or_else(|e| panic!("dashboard failed to draw at {width}x{height}: {e}"));
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A calendar with events tomorrow and three headlines, written and built
@@ -572,9 +635,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join(format!("mirador-clip-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("clip");
         let config = Config::default();
         let gradients = config.theme.gradients();
         let height = 14u16;
@@ -665,7 +726,6 @@ mod tests {
                 prev = cur;
             }
         }
-        let _ = std::fs::remove_dir_all(&dir);
 
         assert!(
             findings.is_empty(),
@@ -685,9 +745,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join(format!("mirador-sweep-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("sweep");
 
         let config = Config::default();
         let gradients = config.theme.gradients();
@@ -712,21 +770,14 @@ mod tests {
                         );
                     })
                     .unwrap();
-                let buf = terminal.backend().buffer().clone();
                 println!("\n=== {name} @ {width} ===");
-                for y in 0..buf.area.height {
-                    let mut line = String::new();
-                    for x in 0..buf.area.width {
-                        line.push_str(buf[(x, y)].symbol());
-                    }
+                for line in testing::rows(terminal.backend().buffer()) {
                     if !line.trim().is_empty() {
                         println!("|{line}|");
                     }
                 }
             }
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Not a test: renders what a brand-new user sees, with nothing on disk,
@@ -743,9 +794,7 @@ mod tests {
         use ratatui::backend::TestBackend;
 
         // An empty directory is the whole point: the stores seed themselves.
-        let dir = std::env::temp_dir().join("mirador-dump-first-run");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("dump-first-run");
 
         let config = Config::default();
         let mut panels = offline_panels(&dir, &config);
@@ -765,18 +814,11 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
         terminal.draw(|f| app.render_for_test(f)).unwrap();
-        let buf = terminal.backend().buffer().clone();
         println!("\n+{}+", "-".repeat(100));
-        for y in 0..buf.area.height {
-            let mut line = String::new();
-            for x in 0..buf.area.width {
-                line.push_str(buf[(x, y)].symbol());
-            }
+        for line in testing::rows(terminal.backend().buffer()) {
             println!("|{line}|");
         }
         println!("+{}+", "-".repeat(100));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Not a test: renders the dashboard to text so it can be eyeballed.
@@ -787,9 +829,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join("mirador-dump");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("dump");
         let todo_path = dir.join("todos.toml");
         std::fs::write(
             &todo_path,
@@ -836,13 +876,8 @@ created = "2026-07-25"
 
         let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
         terminal.draw(|f| app.render_for_test(f)).unwrap();
-        let buf = terminal.backend().buffer().clone();
         println!("\n+{}+", "-".repeat(100));
-        for y in 0..buf.area.height {
-            let mut line = String::new();
-            for x in 0..buf.area.width {
-                line.push_str(buf[(x, y)].symbol());
-            }
+        for line in testing::rows(terminal.backend().buffer()) {
             println!("|{line}|");
         }
         println!("+{}+", "-".repeat(100));

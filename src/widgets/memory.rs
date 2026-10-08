@@ -309,7 +309,7 @@ impl Panel for MemoryPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chart::screen;
+    use crate::widgets::testing::screen;
 
     #[test]
     fn gibibytes_are_stated_to_one_decimal() {
@@ -374,6 +374,8 @@ mod tests {
         );
     }
 
+    /// Drives `sample`, the path a reading takes. It called `push_bounded`
+    /// itself, so the panel could have dropped the capacity altogether.
     #[test]
     fn the_history_is_bounded_by_what_the_panel_can_draw() {
         let mut panel = MemoryPanel::with_reading(
@@ -385,9 +387,18 @@ mod tests {
             2,
         );
         panel.graph_cells = 0;
-        for i in 0..50 {
-            crate::samples::push_bounded(&mut panel.history, i, crate::samples::capacity(4, 0));
+        // Figures no reading can produce, so the oldest can be told apart.
+        panel.history.extend(1000..1003);
+        for _ in 0..3 {
+            panel.last_sample = None;
+            assert!(panel.sample(), "a sample is due");
+        }
+        assert_eq!(panel.history.front(), Some(&1002), "the oldest go first");
+        for _ in 0..50 {
+            panel.last_sample = None;
+            panel.sample();
         }
         assert!(panel.history.len() <= 8, "bounded: {}", panel.history.len());
+        assert_eq!(panel.history.len(), 4, "the configured four, at no width");
     }
 }

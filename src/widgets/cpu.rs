@@ -366,6 +366,11 @@ mod tests {
             .unwrap_or(0)
     }
 
+    /// This used to pop and push `history` by hand, so the bounding it is
+    /// named for was written inside the test and the panel's own `sample`
+    /// could keep every reading for ever without it noticing. It drives
+    /// `sample` now. The seed is five figures no reading can produce — the
+    /// panel clamps to 0–100 — so the oldest can be told from its successors.
     #[test]
     fn history_is_bounded_by_the_configured_capacity() {
         let config = CpuConfig {
@@ -373,13 +378,17 @@ mod tests {
             ..Default::default()
         };
         let mut panel = CpuPanel::new(config);
-        for i in 0..50 {
-            if panel.history.len() >= 5 {
-                panel.history.pop_front();
-            }
-            panel.history.push_back(i);
+        panel.history.extend(1000..1005);
+        for _ in 0..3 {
+            panel.last_sample = None;
+            assert!(panel.sample(), "a sample is due");
         }
         assert_eq!(panel.history.len(), 5);
-        assert_eq!(panel.history.front(), Some(&45));
+        assert_eq!(panel.history.front(), Some(&1003), "the oldest go first");
+        for _ in 0..50 {
+            panel.last_sample = None;
+            panel.sample();
+        }
+        assert_eq!(panel.history.len(), 5);
     }
 }

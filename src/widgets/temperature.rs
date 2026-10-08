@@ -530,7 +530,7 @@ impl Panel for TemperaturePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chart::screen;
+    use crate::widgets::testing::screen;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn apple() -> Vec<(String, Option<f32>, Option<f32>)> {
@@ -786,10 +786,7 @@ mod tests {
                     TemperaturePanel::draw_empty_with(frame, frame.area(), &config.theme, "");
                 })
                 .unwrap();
-            let buffer = terminal.backend().buffer();
-            let rows: Vec<String> = (0..6)
-                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-                .collect();
+            let rows = crate::widgets::testing::rows(terminal.backend().buffer());
             let headline = rows
                 .iter()
                 .map(|row| row.trim())

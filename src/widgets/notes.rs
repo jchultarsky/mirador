@@ -1352,53 +1352,22 @@ impl Panel for NotesPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempDir(std::path::PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::store::testing::TempDir;
 
     fn panel(name: &str) -> (NotesPanel, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-notes-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("notes-{name}"));
         let path = dir.join("notes.toml");
         // An empty file rather than no file: the panel seeds an example note
         // when the file is absent, and these tests are about the panel, not
         // the seed. This is the branch every run after the first one takes.
         std::fs::write(&path, "").unwrap();
         let p = NotesPanel::new(NotesConfig::default(), path).unwrap();
-        (p, TempDir(dir))
+        (p, dir)
     }
 
     /// The panel as drawn, one row per line.
     fn rows_of(p: &mut NotesPanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                p.render(
-                    frame,
-                    frame.area(),
-                    crate::panel::RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(p, width, height))
     }
 
     /// `render_form` was never executed by a test. The caret is the whole
@@ -1455,34 +1424,7 @@ mod tests {
     /// Add a note through the form: `a`, title, Tab, body, Ctrl+S.
     /// Draw the panel and return what reached the screen.
     fn draw(p: &mut NotesPanel, width: u16, height: u16) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                p.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol().to_string())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        rows_of(p, width, height).join("\n")
     }
 
     fn add_note(p: &mut NotesPanel, title: &str, body: &str) {
@@ -1564,7 +1506,7 @@ mod tests {
         assert!(matches!(p.mode, Mode::List), "the form must close on save");
         assert_eq!(p.view.len(), 1);
 
-        let reloaded = NotesPanel::new(NotesConfig::default(), guard.0.join("notes.toml")).unwrap();
+        let reloaded = NotesPanel::new(NotesConfig::default(), guard.join("notes.toml")).unwrap();
         assert_eq!(reloaded.store.notes().len(), 1);
         let note = &reloaded.store.notes()[0];
         assert_eq!(note.title, "Shopping");

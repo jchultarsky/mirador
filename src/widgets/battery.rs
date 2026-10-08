@@ -561,7 +561,7 @@ fn detail_parts(reading: Reading, muted: Style) -> Vec<Vec<Span<'static>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chart::screen;
+    use crate::widgets::testing::screen;
 
     fn reading(charge_pct: u16, flow: Flow, remaining: Option<u64>) -> Reading {
         Reading {
