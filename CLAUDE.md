@@ -1358,6 +1358,14 @@ change the user had watched happen.
 deliberate: each picker change is one keystroke to undo, an arrangement is not.
 The mode's legend names both keys, so there is nothing to guess.
 
+**Ctrl+C in arrange mode keeps the arrangement**, as Keep would; only Esc
+discards one. The owner decided it on 2026-10-07, when review of the P1 fixes
+noticed nothing said either way: Ctrl+C is the way out that always works
+(invariant 2), and leaving should not throw away work that is on screen. A
+resize made inside the mode is held back from the settle timer until the mode
+ends, so Esc can still undo it.
+`ctrl_c_in_arrange_mode_keeps_the_arrangement` pins it.
+
 ## The road to 1.0.0
 
 1.0 is not "everything is built" — that was true at 0.14.0. It is a promise, and
