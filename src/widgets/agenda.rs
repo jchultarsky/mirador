@@ -274,6 +274,8 @@ pub struct AgendaPanel {
     /// calendar of three hundred daily meetings. A recurring rule expands, so
     /// the list is far longer than the file suggests.
     shown: State,
+    /// The clock at the last tick, so the next can tell what it has passed.
+    checked: Option<Zoned>,
 }
 
 impl Drop for AgendaPanel {
@@ -340,6 +342,7 @@ impl AgendaPanel {
             known_from: None,
             pending: Vec::new(),
             shown: State::default(),
+            checked: None,
         }
     }
 
@@ -487,6 +490,88 @@ impl AgendaPanel {
     fn scroll_up(&mut self, rows: usize) {
         self.offset = self.offset.saturating_sub(rows);
     }
+
+    /// [`Panel::tick`] at `now`, so a test can say when it is.
+    ///
+    /// Two things change what the panel draws. A read landing, counted by
+    /// the generation — and the day rolling over arrives that way too, since
+    /// the reader works out today on every pass and the headings follow the
+    /// day it read for, not the clock. And the clock passing a moment that
+    /// moves the `▸` marker or the status bar's countdown, both worked out at
+    /// draw time: an event starting or ending, or a minute of the countdown
+    /// going by. The second used to go unreported, so on a dashboard with
+    /// nothing else redrawing a meeting started unmarked until the next read
+    /// (invariant 13).
+    fn tick_at(&mut self, clock: &Zoned) -> bool {
+        // Every shown event is weighed at the last tick and at this one, so
+        // nothing between the two can be missed however far apart they fall.
+        // A walk over the cached copy with nothing allocated, every twenty
+        // seconds: the cost is in proportion to the calendar, but it is a
+        // comparison per event, not a clone.
+        let passed = self.checked.as_ref().is_some_and(|then| {
+            self.shown
+                .events
+                .iter()
+                .any(|event| standing(event, then) != standing(event, clock))
+        });
+        self.checked = Some(clock.clone());
+
+        let now = self.generation.load(Ordering::Acquire);
+        let moved = now != self.seen;
+        self.seen = now;
+        if moved {
+            // One copy, at the one moment the data can have changed.
+            let before = self.shown.built_for;
+            self.shown = self.snapshot();
+            // A new day is a new agenda. A scroll left over from yesterday
+            // would hide the top of today's — the events happening now — on a
+            // dashboard left open overnight.
+            if self.shown.built_for != before {
+                self.offset = 0;
+            }
+            self.note_new_entries();
+            // The generation only moves when a read lands, so this is where a
+            // reload finishes. Taking the message down here rather than on the
+            // next keypress matters because a dashboard is read without being
+            // touched: left up, an idle panel claims to be mid-operation, which
+            // reads as a hang rather than as a stale label.
+            //
+            // Only its own message. A path put up by `o` has to survive the
+            // next background read.
+            if self.status.as_deref() == Some(RELOADING) {
+                self.status = None;
+            }
+        }
+        moved || passed
+    }
+}
+
+/// How long until `event` starts, while that is soon enough for the status
+/// bar to say so — or `None` for an all-day event, one already under way, and
+/// one further off than [`IMMINENT`].
+///
+/// The one place the alert's window is decided, so `alert` and `tick` cannot
+/// disagree about when it opens.
+fn countdown(event: &ical::Event, now: &Zoned) -> Option<std::time::Duration> {
+    if event.all_day {
+        return None;
+    }
+    std::time::Duration::try_from(event.start.duration_since(now))
+        .ok()
+        .filter(|until| *until <= IMMINENT)
+}
+
+/// What the clock decides about `event` at `now`: whether it carries the `▸`
+/// marker, and the whole minutes the status bar would count down to it.
+///
+/// Two instants with the same standing draw the event the same way, so a
+/// tick need only redraw when some event's standing has changed since the
+/// last one.
+fn standing(event: &ical::Event, now: &Zoned) -> (bool, Option<u64>) {
+    (
+        event.contains(now),
+        countdown(event, now).map(|until| until.as_secs() / 60),
+    )
 }
 
 enum Row<'a> {
@@ -676,39 +761,7 @@ impl Panel for AgendaPanel {
     }
 
     fn tick(&mut self) -> bool {
-        // Only a read landing is reported, and the generation counts those.
-        // The day rolling over arrives the same way: the reader works out
-        // today on every pass, so a new day reaches the panel with the first
-        // read after midnight. An event starting or ending is not reported at
-        // all — the `▸` marker is worked out when the panel is drawn, so it
-        // moves at the next redraw something else asks for, or the next read.
-        let now = self.generation.load(Ordering::Acquire);
-        let moved = now != self.seen;
-        self.seen = now;
-        if moved {
-            // One copy, at the one moment the data can have changed.
-            let before = self.shown.built_for;
-            self.shown = self.snapshot();
-            // A new day is a new agenda. A scroll left over from yesterday
-            // would hide the top of today's — the events happening now — on a
-            // dashboard left open overnight.
-            if self.shown.built_for != before {
-                self.offset = 0;
-            }
-            self.note_new_entries();
-            // The generation only moves when a read lands, so this is where a
-            // reload finishes. Taking the message down here rather than on the
-            // next keypress matters because a dashboard is read without being
-            // touched: left up, an idle panel claims to be mid-operation, which
-            // reads as a hang rather than as a stale label.
-            //
-            // Only its own message. A path put up by `o` has to survive the
-            // next background read.
-            if self.status.as_deref() == Some(RELOADING) {
-                self.status = None;
-            }
-        }
-        moved
+        self.tick_at(&Zoned::now())
     }
 
     fn alert(&self) -> Option<crate::panel::Alert> {
@@ -738,12 +791,7 @@ impl Panel for AgendaPanel {
         let (until, event) = guard
             .events
             .iter()
-            .filter(|event| !event.all_day)
-            .filter_map(|event| {
-                let until = event.start.duration_since(&now);
-                let until = std::time::Duration::try_from(until).ok()?;
-                (until <= IMMINENT).then_some((until, event))
-            })
+            .filter_map(|event| countdown(event, &now).map(|until| (until, event)))
             .min_by_key(|(until, _)| *until)?;
 
         let minutes = until.as_secs() / 60;
@@ -1680,6 +1728,59 @@ mod tests {
             panel.status, None,
             "a reload that has landed must stop saying it is reloading"
         );
+    }
+
+    /// A panel whose reader thread has finished, so nothing lands while a
+    /// test winds the clock. The reader is stopped and waited out — it holds
+    /// a share of the generation until it returns — and any read it landed
+    /// on the way out is taken in before the test begins.
+    fn still_panel() -> AgendaPanel {
+        let mut panel = idle_panel();
+        panel.stop.store(true, Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&panel.generation) > 1 {
+            assert!(Instant::now() < deadline, "the reader thread did not stop");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panel.tick();
+        panel
+    }
+
+    /// Invariant 13. The `▸` marker and the status bar's `in 3m` are worked
+    /// out when the panel is drawn, and `tick` reported only a read landing,
+    /// so on a dashboard with nothing else redrawing — no clock placed — a
+    /// meeting started without its marker and the alert counted down behind
+    /// the clock until the next read: up to an hour late at
+    /// `refresh_secs = 3600`. The default layout hid it, because the clock
+    /// redraws every minute and takes the agenda with it.
+    #[test]
+    fn an_event_starting_or_ending_asks_for_a_redraw_without_a_read() {
+        let mut panel = still_panel();
+        let day = date(2026, 8, 1);
+        panel.shown.events = vec![event(day, 9, "standup", false)];
+        panel.shown.error = None;
+        let at = |hour: i8, minute: i8, second: i8| {
+            day.at(hour, minute, second, 0).to_zoned(tz()).unwrap()
+        };
+
+        let steps = [
+            (at(8, 40, 0), false, "where the test starts"),
+            (at(8, 45, 0), false, "twenty minutes out, nothing is drawn"),
+            (at(8, 50, 0), true, "ten minutes out the alert appears"),
+            (at(8, 50, 30), true, "and counts down a minute"),
+            (at(8, 50, 40), false, "but not between minutes"),
+            (
+                at(9, 0, 1),
+                true,
+                "it starts: the marker comes, the alert goes",
+            ),
+            (at(9, 30, 0), false, "under way, nothing moves"),
+            (at(10, 0, 0), true, "it ends: the marker goes"),
+            (at(10, 30, 0), false, "over, nothing moves"),
+        ];
+        for (now, expected, why) in steps {
+            assert_eq!(panel.tick_at(&now), expected, "{why}, at {now}");
+        }
     }
 
     /// The other half, and the reason `tick` matches on the message rather than
