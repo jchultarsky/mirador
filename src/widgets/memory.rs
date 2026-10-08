@@ -20,7 +20,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
-use crate::chart::{BrailleGraph, meter_spans};
+use crate::chart::{BrailleGraph, meter_spans, percent};
 use crate::config::MemoryConfig;
 use crate::frame::Binding;
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
@@ -56,17 +56,8 @@ impl Reading {
     /// memory at all — a sandbox, a container with the file unmounted — reads
     /// as `0` rather than dividing by zero.
     fn used_pct(self) -> u64 {
-        percent(self.used, self.total)
+        u64::from(percent(self.used, self.total))
     }
-}
-
-/// `part` as a whole percentage of `whole`, saturating at 100 and reading `0`
-/// for a whole of zero.
-fn percent(part: u64, whole: u64) -> u64 {
-    if whole == 0 {
-        return 0;
-    }
-    ((u128::from(part.min(whole)) * 100) / u128::from(whole)) as u64
 }
 
 /// Bytes as gibibytes to one decimal, which is how memory is sold and how
@@ -268,8 +259,7 @@ impl Panel for MemoryPanel {
         self.graph_cells = rows[1].width as usize;
 
         if rows[1].height > 0 {
-            let data: Vec<u64> = self.history.iter().copied().collect();
-            BrailleGraph::new(&data, 100, gradient)
+            BrailleGraph::of_history(&self.history, 100, gradient)
                 .track_style(track)
                 .render(rows[1], frame.buffer_mut());
         }
@@ -300,7 +290,7 @@ impl Panel for MemoryPanel {
             );
             let y = rows[2].y + 1;
             for (index, (glyph, style)) in
-                meter_spans(swap_pct, 100, rows[2].width, gradient, track)
+                meter_spans(u64::from(swap_pct), 100, rows[2].width, gradient, track)
                     .iter()
                     .enumerate()
             {
@@ -319,24 +309,7 @@ impl Panel for MemoryPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_percentage_saturates_and_never_divides_by_zero() {
-        assert_eq!(percent(0, 0), 0, "no memory at all reads as nothing used");
-        assert_eq!(percent(5, 0), 0);
-        assert_eq!(percent(1, 4), 25);
-        assert_eq!(percent(4, 4), 100);
-        assert_eq!(
-            percent(9, 4),
-            100,
-            "used past total saturates rather than overflowing"
-        );
-        assert_eq!(
-            percent(u64::MAX, u64::MAX),
-            100,
-            "the widest inputs multiply without overflow"
-        );
-    }
+    use crate::chart::screen;
 
     #[test]
     fn gibibytes_are_stated_to_one_decimal() {
@@ -352,32 +325,11 @@ mod tests {
     /// a narrow instrument row actually hands it.
     #[test]
     fn the_readout_drops_whole_values_and_never_a_fragment() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
         let mut panel =
             MemoryPanel::with_reading(MemoryConfig::default(), 6_657_199_308, 17_179_869_184);
 
         for width in 1..=40u16 {
-            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
-            terminal
-                .draw(|frame| {
-                    panel.render(
-                        frame,
-                        frame.area(),
-                        RenderContext {
-                            theme: &config.theme,
-                            gradients: &gradients,
-                            focused: true,
-                            watch: &crate::watch::WatchLog::default(),
-                        },
-                    );
-                })
-                .unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            let readout: String = (0..width).map(|x| buffer[(x, 0)].symbol()).collect();
-            let readout = readout.trim_end();
+            let readout = screen(&mut panel, width, 6).swap_remove(0);
             // `assemble` abridges a first part that cannot fit at all with
             // `…`, which is the marked cut invariant 19 asks for; everything
             // else is whole values or nothing. What must never appear is an

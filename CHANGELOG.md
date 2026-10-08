@@ -91,6 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than about 27 columns, `what needs doing` was cut by the terminal to a
   whole-looking `what needs d`. The placeholders now end in `…` where they
   do not fit.
+- **The disk panel's read and write rates are in the units of its
+  capacity.** The readout under each device borrowed the network panel's
+  figures, which count a kilobyte as 1,024 bytes, beside free space and size
+  counted in thousands, the way a disk is sold — so one device showed two
+  meanings of `MB`, and a disk moving a hundred million bytes a second read
+  `95.4 MB/s`. The rates are decimal now and written as the capacity is:
+  `100 MB/s`, `327 kB/s`, and `0 kB/s` for an idle disk.
+- **A temperature panel with no sensors marks the cut in its headline.**
+  Narrower than `No temperature sensors`, it showed as much of the words as
+  fitted — `No temperatu` — with nothing to say the rest had gone. It ends
+  in `…` now, as the disk and battery panels' empty states already did.
 
 ## [1.20.0] - 2026-10-07
 

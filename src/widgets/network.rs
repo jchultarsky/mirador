@@ -285,17 +285,18 @@ impl Panel for NetworkPanel {
         // Recorded so the next tick sizes the buffers to the panel.
         self.graph_cells = rows[1].width as usize;
 
-        let rx: Vec<u64> = self.rx_history.iter().copied().collect();
-        let tx: Vec<u64> = self.tx_history.iter().copied().collect();
-        for (index, (data, gradient)) in [(&rx, &ctx.gradients.rx), (&tx, &ctx.gradients.tx)]
-            .into_iter()
-            .enumerate()
+        for (index, (data, gradient)) in [
+            (&self.rx_history, &ctx.gradients.rx),
+            (&self.tx_history, &ctx.gradients.tx),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let row = rows[index + 1];
             if row.height == 0 {
                 continue;
             }
-            BrailleGraph::new(data, scale, gradient)
+            BrailleGraph::of_history(data, scale, gradient)
                 .track_style(track)
                 .render(row, frame.buffer_mut());
         }
