@@ -25,24 +25,17 @@
 //! price.
 
 use std::path::{Path, PathBuf};
-#[cfg(not(test))]
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// How long any single request may take.
-///
-/// `cfg(not(test))` alongside the only function that uses it: under `cfg(test)`
-/// `http_get` refuses before building an agent, so keeping these would be dead
-/// code the lint would rightly complain about.
-#[cfg(not(test))]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Yahoo rejects requests without a browser user agent with HTTP 429, whatever
 /// the request rate. This is not an attempt to hide what mirador is — the
 /// endpoint simply refuses anything that does not look like a browser.
-#[cfg(not(test))]
 const BROWSER_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
                           AppleWebKit/537.36 (KHTML, like Gecko) \
                           Chrome/126.0.0.0 Safari/537.36";
@@ -274,31 +267,16 @@ impl QuoteSource for YahooChart {
 
 /// A blocking GET with a timeout, presenting a browser user agent.
 ///
-/// **Refuses outright under `cfg(test)` (#147).** The rule is that no test
-/// opens a socket, and it was believed to hold because `parse_chart` is tested
-/// against captured JSON — but a panel spawns a fetch thread when it is
-/// *constructed*, and `Layout::default()` places the stocks panel, so building
-/// a dashboard in a test was enough. A Windows runner got a real HTTP 404 back
-/// for a made-up symbol and rendered it.
-///
-/// This used to call itself the only function in the crate that opens a
-/// socket, and it never was: the weather and news panels and the update check
-/// call [`crate::fetch::get`] themselves, and the first two went on reaching
-/// the network from tests long after this guard was written. `fetch::get` now
-/// refuses every request under `cfg(test)`, which is the guard that holds
-/// however a panel is built; this one is older and narrower, and its test
-/// still proves it because the two refusals are worded differently.
-///
-/// Injecting a `QuoteSource` fixes the tests that build a panel directly, and
-/// is the better design; this covers the ones that reach it through
-/// `widgets::build`, where there is no seam to pass a source through. Nothing
-/// is lost: no test asserts on a live response, because none could.
-#[cfg(test)]
-fn http_get(_url: &str) -> Result<String> {
-    anyhow::bail!("network access is refused in tests")
-}
-
-#[cfg(not(test))]
+/// **Makes no request under `cfg(test)`**, because [`crate::fetch::get`]
+/// refuses every one there. The rule is that no test opens a socket (#147),
+/// and building a dashboard in a test was once enough to break it: a panel
+/// spawns its fetch thread when it is *constructed*, and `Layout::default()`
+/// places the stocks panel, so a Windows runner got a real HTTP 404 back for
+/// a made-up symbol and rendered it. This function refused for itself from
+/// then on, while the weather and news panels and the update check went on
+/// reaching the network through `fetch::get`; the guard lives there now,
+/// where every request goes through, and a second copy here said nothing
+/// the first does not.
 fn http_get(url: &str) -> Result<String> {
     crate::fetch::get(url, HTTP_TIMEOUT, Some(BROWSER_UA)).map_err(explain)
 }
@@ -507,16 +485,20 @@ mod tests {
     /// It used to rest on `parse_chart` being split from the request — true,
     /// and not enough: constructing a stocks panel spawns a fetch thread, and
     /// `Layout::default()` places that panel, so building a dashboard in a test
-    /// was sufficient to call Yahoo. `http_get` refuses under `cfg(test)` now.
-    /// Delete that branch and this goes red rather than going quiet.
+    /// was sufficient to call Yahoo. The guard is [`crate::fetch::get`]'s,
+    /// which refuses under `cfg(test)` every request the program makes; this
+    /// holds the quote source to it from the outside. Delete the `cfg!(test)`
+    /// branch there and this goes red rather than going quiet — on a real
+    /// request to Yahoo, which either answers, so there is no error to expect,
+    /// or fails with something other than the guard's own words.
     #[test]
     fn the_network_is_refused_while_testing() {
         let err = YahooChart
             .fetch("AAPL")
             .expect_err("a live fetch must not be possible from a test");
         assert!(
-            err.to_string().contains("refused in tests"),
-            "the refusal must come from the cfg(test) guard, not from the wire: {err}"
+            err.to_string().contains("under cfg(test)"),
+            "the refusal must come from fetch::get's cfg(test) guard, not from the wire: {err}"
         );
     }
 
