@@ -2394,9 +2394,34 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.22.0` is released**, as a GitHub release with binaries for macOS
+- **`1.22.1` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a minor release cut on 2026-10-08
+  and published on crates.io. It is a patch release cut on 2026-10-08
+  carrying one change (#307): at most one `tick` waits in an external
+  panel's input queue. The owner decided it after 1.22.0, which had
+  shipped only the shutdown half of the same finding. A plugin that
+  stopped reading used to fill its pipe — 4,096 ticks on macOS — and
+  then the whole 256-place queue it shares with keys, after which the
+  panel said `plugin input queue is full` about input nobody had typed
+  and dropped every key that was. The wire format is unchanged; what a
+  slow plugin receives is not, and `docs/plugin-protocol.md` says so,
+  along with when ticks really come (at most once per `refresh_ms`, and no
+  more often than the dashboard's own loop unless the panel is focused and
+  capturing input) and that a tick is a cue to redraw, not a clock. A
+  patch rather than a minor at the owner's call: no key, setting or file
+  changed.
+
+  **The writer clears the pending flag before it writes a tick, not
+  after**, and that order is the whole design: cleared after, a tick
+  raised during a long blocking write is folded into one already gone,
+  and a plugin that keeps up loses ticks. Review tried to lose a tick for
+  good — a full queue, a held write, a restart, a crash, shutdown — and
+  could not; one review ran a real pipe with a stalled child and fitted
+  255 keys behind the waiting tick, against none on 1.22.0. It also found
+  that the protocol document's old promise of ticks "at the negotiated
+  refresh cadence" held only for a focused panel capturing input.
+
+- **`1.22.0`** was a minor release cut on 2026-10-08
   carrying the P3 backlog from the 2026-10-06 code review and the 28
   findings that review never gave a priority (#305), as eight commits
   rebase-merged: the key map wide enough to explain every key whole, empty
