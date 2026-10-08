@@ -912,6 +912,7 @@ dependencies = [
  "starship-battery",
  "sysinfo",
  "toml",
+ "unicode-segmentation",
  "unicode-width",
  "ureq",
 ]

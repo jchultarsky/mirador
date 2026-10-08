@@ -48,6 +48,13 @@ pub enum NotesAction {
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
 
+#[cfg(test)]
+thread_local! {
+    /// Rows `note_line` has built on this thread, which is what
+    /// `only_the_notes_on_screen_are_built_into_rows` weighs.
+    static NOTE_LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Every key the list responds to, under `[notes.keys]`.
 ///
 /// One declaration feeds the border hint, the status bar and the help
@@ -705,6 +712,8 @@ impl NotesPanel {
 
     /// One row of the list.
     fn note_line(&self, note: &Note, theme: &Theme, grid: &Grid) -> Line<'static> {
+        #[cfg(test)]
+        NOTE_LINES.with(|built| built.set(built.get() + 1));
         let date = note
             .shown_date()
             .strftime(&self.config.date_format)
@@ -721,6 +730,64 @@ impl NotesPanel {
             Span::styled(note.title.clone(), Style::default().fg(theme.text)),
             Span::styled(date, Style::default().fg(theme.muted)),
         ])
+    }
+
+    /// The column header and the rows of the list that fit `list_area`.
+    fn render_list(&mut self, frame: &mut Frame, list_area: Rect, theme: &Theme, focused: bool) {
+        let marker = 2u16;
+        let grid = Grid::new(COLUMNS, list_area.width.saturating_sub(marker));
+        let header_area = Rect::new(
+            list_area.x + marker,
+            list_area.y,
+            list_area.width.saturating_sub(marker),
+            1,
+        );
+        frame.render_widget(Paragraph::new(grid.header(theme)), header_area);
+
+        let rows_area = Rect {
+            y: list_area.y + 1,
+            height: list_area.height - 1,
+            ..list_area
+        };
+        self.list_area = Some(rows_area);
+
+        // Only the rows the pane can show are built, as in `todo.rs`.
+        // Every note in the view used to become a `ListItem`, through an
+        // index of the whole store, for a `List` that drew the dozen that
+        // fit. The window is the one `List` would have scrolled to.
+        let (shown, selected) = crate::selection::window(
+            self.list_state.selected(),
+            self.list_state.offset(),
+            self.view.len(),
+            usize::from(rows_area.height),
+        );
+        let items: Vec<ListItem> =
+            crate::selection::in_order(self.store.notes(), &self.view[shown.clone()], |note| {
+                note.id
+            })
+            .into_iter()
+            .map(|note| ListItem::new(self.note_line(note, theme, &grid)))
+            .collect();
+
+        let list = List::new(items)
+            .highlight_symbol(if focused { "▸ " } else { "  " })
+            .highlight_style(if focused {
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.muted)
+            });
+        // A list with no room draws nothing and, as `List` itself does,
+        // leaves the scroll where it was.
+        if !rows_area.is_empty() {
+            let mut drawn = ListState::default().with_selected(selected.map(|at| at - shown.start));
+            frame.render_stateful_widget(list, rows_area, &mut drawn);
+            // Kept as `List` would have kept it, so the next frame scrolls
+            // from here and a click maps through the rows on screen.
+            self.list_state.select(selected);
+            *self.list_state.offset_mut() = shown.start;
+        }
     }
 
     /// The detail pane: the selected note's title, date and body.
@@ -1293,46 +1360,7 @@ impl Panel for NotesPanel {
         };
 
         if !self.view.is_empty() && list_area.height > 1 {
-            let marker = 2u16;
-            let grid = Grid::new(COLUMNS, list_area.width.saturating_sub(marker));
-            let header_area = Rect::new(
-                list_area.x + marker,
-                list_area.y,
-                list_area.width.saturating_sub(marker),
-                1,
-            );
-            frame.render_widget(Paragraph::new(grid.header(theme)), header_area);
-
-            // `NoteStore::get` is a linear scan; see the same fix in `todo.rs`.
-            let by_id: std::collections::HashMap<u64, &Note> =
-                self.store.notes().iter().map(|n| (n.id, n)).collect();
-            let visible: Vec<&Note> = self
-                .view
-                .iter()
-                .filter_map(|id| by_id.get(id).copied())
-                .collect();
-            let items: Vec<ListItem> = visible
-                .iter()
-                .map(|note| ListItem::new(self.note_line(note, theme, &grid)))
-                .collect();
-
-            let rows_area = Rect {
-                y: list_area.y + 1,
-                height: list_area.height - 1,
-                ..list_area
-            };
-            self.list_area = Some(rows_area);
-
-            let list = List::new(items)
-                .highlight_symbol(if ctx.focused { "▸ " } else { "  " })
-                .highlight_style(if ctx.focused {
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(theme.muted)
-                });
-            frame.render_stateful_widget(list, rows_area, &mut self.list_state);
+            self.render_list(frame, list_area, theme, ctx.focused);
         }
 
         self.detail_area = Some(detail_area);
@@ -1353,6 +1381,84 @@ impl Panel for NotesPanel {
 mod tests {
     use super::*;
     use crate::store::testing::TempDir;
+
+    /// Every note with a row built for it, in this thread: the one count that
+    /// shows whether a frame's work scales with the screen or with the store.
+    #[test]
+    fn only_the_notes_on_screen_are_built_into_rows() {
+        let (mut p, _guard) = panel("built");
+        for i in 0..60 {
+            add_note(&mut p, &format!("Note {i:02}"), "");
+        }
+        for height in [8u16, 16, 40] {
+            draw(&mut p, 40, height);
+            let before = NOTE_LINES.with(std::cell::Cell::get);
+            draw(&mut p, 40, height);
+            let built = NOTE_LINES.with(std::cell::Cell::get) - before;
+            let rows = usize::from(p.list_area.expect("a list").height);
+            assert!(rows < 60, "the screen is shorter than the store");
+            assert!(
+                built <= rows,
+                "{built} rows built for {rows} on screen at height {height}"
+            );
+        }
+    }
+
+    /// Building only the rows on screen means `List` is handed a window and
+    /// never sees the scroll, so the panel keeps it. Walk a list three
+    /// screens long down and back: the marked row is always the selected
+    /// note, and a click always lands on the note under it — a scroll left
+    /// at the top maps a click on the last screen to the first. Which note
+    /// is under the row is read off the screen *before* the click: drawn
+    /// after it, the frame scrolls to whatever was selected, and any note at
+    /// all would look like the one clicked.
+    #[test]
+    fn a_long_list_scrolls_and_clicks_as_it_always_did() {
+        let (mut p, _guard) = panel("window");
+        for i in 0..30 {
+            add_note(&mut p, &format!("Note {i:02}"), "");
+        }
+        press(&mut p, KeyCode::Char('g'));
+
+        let selected_title = |p: &NotesPanel| {
+            let id = p.selected_id().expect("a selection");
+            p.store.get(id).expect("the note").title.clone()
+        };
+        let keys = std::iter::repeat_n(KeyCode::Char('j'), 29)
+            .chain(std::iter::repeat_n(KeyCode::Char('k'), 29));
+        for (step, code) in keys.enumerate() {
+            press(&mut p, code);
+            let screen = draw(&mut p, 40, 24);
+            let title = selected_title(&p);
+            let marked = screen
+                .lines()
+                .find(|row| row.contains('▸'))
+                .unwrap_or_else(|| panic!("{step}: a row is marked:\n{screen}"));
+            assert!(marked.contains(&title), "{step}: {title}:\n{screen}");
+        }
+
+        press(&mut p, KeyCode::Char('G'));
+        let before = draw(&mut p, 40, 24);
+        let area = p.list_area.expect("the list was drawn");
+        assert!(p.list_state.offset() > 0, "the last screen is scrolled");
+        // Below the top row, so a click that forgets where the list starts on
+        // screen misses as surely as one that forgets the scroll.
+        let row = area.y + 2;
+        let under = before
+            .lines()
+            .nth(usize::from(row))
+            .and_then(|line| line.find("Note ").map(|at| line[at..at + 7].to_owned()))
+            .unwrap_or_else(|| panic!("a note is drawn on row {row}:\n{before}"));
+        assert_ne!(selected_title(&p), under, "the click has somewhere to go");
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: area.x + 4,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        p.handle_mouse(click, area);
+        assert_eq!(selected_title(&p), under, "clicked row {row} of:\n{before}");
+    }
 
     fn panel(name: &str) -> (NotesPanel, TempDir) {
         let dir = TempDir::new(&format!("notes-{name}"));

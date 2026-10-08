@@ -22,7 +22,9 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-use crate::picker::{Step, window};
+use std::cell::Cell;
+
+use crate::picker::{Step, list_rows, window};
 use crate::textfield::TextField;
 use crate::theme::Theme;
 
@@ -61,13 +63,16 @@ pub enum Outcome {
     },
 }
 
-/// Rows of the list shown at once.
+/// Rows of the list shown at once, on a terminal with room for them.
 ///
-/// The list is drawn inside a dialog rather than a panel, so this is a fixed
-/// window rather than something the layout decides — and it has to be a
-/// constant both `handle_key` and `render` can see, because the first has to
-/// know how far it may scroll and the second has to draw the same window.
+/// A ceiling, not the window: the window is however many of these the
+/// terminal leaves the dialog, which only drawing knows. This was once the
+/// window itself, moved in `handle_key`, and on a short terminal the cursor
+/// walked into rows the dialog had no room to draw.
 const LIST_ROWS: usize = 10;
+
+/// The rows drawn under the list: a blank and the help line.
+const TRAILER: usize = 2;
 
 /// An open prompt.
 #[derive(Debug)]
@@ -80,8 +85,13 @@ pub struct Prompt {
     /// Which row of the filtered list is selected, if any.
     selected: usize,
     /// The first row on screen. Without it the cursor walked off the bottom of
-    /// the window and kept going, invisibly.
-    offset: usize,
+    /// the window and kept going, invisibly. Only drawing knows how many rows
+    /// the terminal leaves the list, so it is drawing that moves it, as the
+    /// two pickers' does.
+    offset: Cell<usize>,
+    /// How many rows of the list were drawn last time, which is how far a page
+    /// moves — and when it is none, Enter has no city on screen to choose.
+    page: Cell<usize>,
     /// The rows matching what has been typed, recomputed only when the text
     /// changes.
     ///
@@ -113,7 +123,8 @@ impl Prompt {
             error: None,
             completion,
             selected: 0,
-            offset: 0,
+            offset: Cell::new(0),
+            page: Cell::new(LIST_ROWS),
             listed: Vec::new(),
         };
         prompt.refilter();
@@ -168,16 +179,22 @@ impl Prompt {
         self.error = None;
 
         let len = self.listed.len();
+        let page = self.page.get().max(1);
         let step = match key.code {
             KeyCode::Esc => return Outcome::Cancelled,
             KeyCode::Down => Step::Down(1),
             KeyCode::Up => Step::Up(1),
-            KeyCode::PageDown => Step::Down(LIST_ROWS),
-            KeyCode::PageUp => Step::Up(LIST_ROWS),
+            KeyCode::PageDown => Step::Down(page),
+            KeyCode::PageUp => Step::Up(page),
             KeyCode::Home if len > 0 => Step::First,
             KeyCode::End if len > 0 => Step::Last,
             KeyCode::Enter => {
                 return match self.listed.get(self.selected) {
+                    // The terminal left the list no row, so the city under
+                    // the cursor is not on screen, and Enter does not choose
+                    // what nobody can see. It waits for a taller terminal;
+                    // Esc still leaves.
+                    Some(_) if self.page.get() == 0 => Outcome::Editing,
                     Some(place) => Outcome::Chose {
                         label: place.city,
                         value: place.tz,
@@ -190,13 +207,9 @@ impl Prompt {
             }
             _ => return self.edit(key),
         };
-        // The window moves only when the selection would otherwise leave it,
-        // so the list stays put while the cursor travels across it and
-        // scrolls by one at the edges. Recomputing it from the selection each
-        // time would be stateless and simpler, and would also jump the whole
-        // list whenever you crossed a page boundary going back up.
+        // The window follows at the next draw, which is the one place that
+        // knows how many rows it has.
         self.selected = step.apply(self.selected, len);
-        self.offset = window(self.selected, self.offset, LIST_ROWS, len);
         Outcome::Editing
     }
 
@@ -227,7 +240,7 @@ impl Prompt {
                 // rows down would otherwise land on something unrelated — or
                 // past the end of what is left.
                 self.selected = 0;
-                self.offset = 0;
+                self.offset.set(0);
                 Outcome::Editing
             }
         }
@@ -314,11 +327,34 @@ impl Prompt {
     /// the agenda meant a long path scrolled inside about forty columns.
     pub fn render(&self, frame: &mut ratatui::Frame, screen: Rect, theme: &Theme) {
         let listed = self.matches();
-        let rows = u16::try_from(listed.len().min(LIST_ROWS)).unwrap_or(0);
+        let wanted = listed.len().min(LIST_ROWS);
 
         let width = screen.width.clamp(20, 64);
-        let height = 3 + rows + crate::frame::FRAME_HEIGHT;
+        let height = u16::try_from(1 + wanted + TRAILER)
+            .unwrap_or(u16::MAX)
+            .saturating_add(crate::frame::FRAME_HEIGHT);
         let popup = crate::frame::centred(screen, width, height);
+
+        // What the terminal leaves under the field. The list gives way first,
+        // down to the row the cursor is on, then the blank above the help,
+        // which is spacing, then the help. The help says how to leave, and
+        // goes before nothing but the field and the city under the cursor:
+        // with the city gone Enter would choose a row nobody can see, so
+        // that row is kept, and Esc works whether its hint is drawn or not.
+        // With no list the blank still goes before the help.
+        let interior = usize::from(popup.height.saturating_sub(crate::frame::FRAME_HEIGHT));
+        let under_field = interior.saturating_sub(1);
+        let (rows, spaced) = if wanted == 0 {
+            (0, under_field >= TRAILER)
+        } else {
+            let (rows, spaced) = list_rows(under_field, TRAILER);
+            (rows.min(wanted), spaced)
+        };
+        let offset = window(self.selected, self.offset.get(), rows, listed.len());
+        self.offset.set(offset);
+        // The rows actually on screen: `list_rows` never offers fewer than
+        // one, and under four rows that one falls outside the dialog.
+        self.page.set(rows.min(under_field));
 
         // Room for the text, inside the border and its padding — of the popup
         // as drawn. `centred` clamps it to the screen, and measured from the
@@ -343,12 +379,7 @@ impl Prompt {
         // list and can be compared against `selected`. Enumerating after
         // skipping restarts the count at zero and puts the highlight on the top
         // visible row whatever is actually selected.
-        for (index, place) in listed
-            .iter()
-            .enumerate()
-            .skip(self.offset)
-            .take(usize::from(rows))
-        {
+        for (index, place) in listed.iter().enumerate().skip(offset).take(rows) {
             let here = index == self.selected;
             lines.push(Line::from(vec![
                 Span::styled(
@@ -371,14 +402,16 @@ impl Prompt {
             ]));
         }
 
-        lines.push(Line::from(""));
+        if spaced {
+            lines.push(Line::from(""));
+        }
         lines.push(match &self.error {
             Some(error) => Line::from(Span::styled(
                 crate::grid::truncate(error, inner),
                 Style::default().fg(theme.error),
             )),
             None => self.help_line(
-                (listed.len() > LIST_ROWS).then(|| format!("{rows} of {}", listed.len())),
+                (listed.len() > rows).then(|| format!("{rows} of {}", listed.len())),
                 inner,
                 Style::default().fg(theme.muted),
             ),
@@ -492,6 +525,110 @@ mod tests {
         prompt.handle_key(KeyEvent::from(code))
     }
 
+    /// The prompt drawn on a `width` by `height` terminal, as text.
+    fn draw(p: &Prompt, width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|f| p.render(f, f.area(), &Theme::default()))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The fix the theme picker and the panel picker had, in the third
+    /// dialog with a list cursor. The zone list kept a fixed ten-row window in
+    /// `handle_key`, inside a dialog fifteen rows tall: on a shorter terminal
+    /// the bottom rows were cut, `Esc cancels` first, while the cursor walked
+    /// on into them, and Enter added a zone nobody could see. Swept over
+    /// every height with the cursor taken to the end and back a row at a
+    /// time, because the window moving down and moving up are different
+    /// arithmetic — and Enter is asked which city it would choose, which
+    /// must be the one drawn beside the marker.
+    ///
+    /// From height 1, because under four rows the terminal leaves no row for
+    /// the list at all, and Enter there added a city nobody could see. It
+    /// waits instead, and Esc still leaves.
+    #[test]
+    fn the_row_under_the_cursor_is_drawn_at_every_height() {
+        let places = crate::zones::PLACES;
+        for height in 1..=30u16 {
+            let mut p = Prompt::new(
+                "ZONE",
+                "Enter adds · Esc cancels",
+                "",
+                Completion::Places(places),
+            );
+            let visit = |p: &mut Prompt| {
+                let screen = draw(p, 64, height);
+                match press(p, KeyCode::Enter) {
+                    Outcome::Chose { label, .. } => assert!(
+                        screen.contains(&format!("▸ {label}")),
+                        "Enter chooses {label} at height {height} and it is not drawn:\n{screen}"
+                    ),
+                    // Nothing chosen is only right where nothing is drawn:
+                    // the frame and the field make four rows with one of list.
+                    Outcome::Editing => assert!(
+                        height < 4 && !screen.contains('▸'),
+                        "Enter chose nothing at height {height}:\n{screen}"
+                    ),
+                    other => panic!("Enter at height {height} gave {other:?}:\n{screen}"),
+                }
+                // The frame, the field, one row of list and the help line
+                // make five rows, and at five or more the way out is drawn:
+                // the list gives way first, then the blank above the help,
+                // then the help, before the city under the cursor.
+                if height >= 5 {
+                    assert!(
+                        screen.contains("Esc cancels"),
+                        "the help went before the list at height {height}:\n{screen}"
+                    );
+                }
+            };
+            press(&mut p, KeyCode::End);
+            visit(&mut p);
+            for _ in 0..places.len() {
+                press(&mut p, KeyCode::Up);
+                visit(&mut p);
+            }
+            // Enter waiting is not a trap: the way out works at every height.
+            assert_eq!(press(&mut p, KeyCode::Esc), Outcome::Cancelled);
+        }
+    }
+
+    /// A page is the rows drawn, the `N` in `N of 143`, and not the ten a tall
+    /// terminal has room for — which on a short one jumped the cursor past
+    /// rows nobody had seen.
+    #[test]
+    fn a_page_moves_by_the_rows_drawn() {
+        let places = crate::zones::PLACES;
+        let mut p = Prompt::new("ZONE", "Esc cancels", "", Completion::Places(places));
+        let screen = draw(&p, 64, 8);
+        let shown: usize = screen
+            .split(&format!(" of {}", places.len()))
+            .next()
+            .and_then(|head| head.split_whitespace().last())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no count:\n{screen}"));
+        assert!(shown < LIST_ROWS, "the terminal is short enough to matter");
+        press(&mut p, KeyCode::PageDown);
+        assert_eq!(p.selected, shown, "down a page from the top");
+        draw(&p, 64, 8);
+        press(&mut p, KeyCode::PageDown);
+        assert_eq!(p.selected, 2 * shown, "and another");
+        draw(&p, 64, 8);
+        press(&mut p, KeyCode::PageUp);
+        assert_eq!(p.selected, shown, "and back up one");
+    }
+
     #[test]
     fn esc_abandons_it() {
         assert_eq!(press(&mut prompt("x"), KeyCode::Esc), Outcome::Cancelled);
@@ -561,30 +698,41 @@ mod tests {
 
         for _ in 0..real.len() {
             press(&mut p, KeyCode::Down);
+            draw(&p, 64, 24);
         }
+        let offset = p.offset.get();
         assert!(
-            p.selected >= p.offset && p.selected < p.offset + LIST_ROWS,
-            "selected {} left the window at {}",
+            p.selected >= offset && p.selected < offset + LIST_ROWS,
+            "selected {} left the window at {offset}",
             p.selected,
-            p.offset
         );
 
-        assert!(p.offset > 0, "the window actually moved");
+        assert!(offset > 0, "the window actually moved");
 
         for _ in 0..real.len() {
             press(&mut p, KeyCode::Up);
+            draw(&p, 64, 24);
         }
         assert_eq!(p.selected, 0, "back to the first");
-        assert_eq!(p.offset, 0, "and the window came back with it");
+        assert_eq!(p.offset.get(), 0, "and the window came back with it");
     }
 
     /// The window only moves when it has to, so the cursor travels across a
     /// stationary list rather than dragging it along one row at a time.
     #[test]
     fn the_window_stays_put_while_the_selection_is_inside_it() {
-        let mut p = prompt("");
+        let mut p = Prompt::new("ZONE", "help", "", Completion::Places(crate::zones::PLACES));
         press(&mut p, KeyCode::Down);
-        assert_eq!(p.offset, 0, "second row is already visible");
+        draw(&p, 64, 24);
+        assert_eq!(p.offset.get(), 0, "second row is already visible");
+
+        // And one row up from the end, the end is still on screen.
+        press(&mut p, KeyCode::End);
+        draw(&p, 64, 24);
+        let bottom = p.offset.get();
+        press(&mut p, KeyCode::Up);
+        draw(&p, 64, 24);
+        assert_eq!(p.offset.get(), bottom, "the window followed the cursor up");
     }
 
     #[test]
@@ -850,12 +998,14 @@ mod tests {
         for _ in 0..15 {
             press(&mut p, KeyCode::Down);
         }
-        let (selected, offset) = (p.selected, p.offset);
+        draw(&p, 64, 24);
+        let (selected, offset) = (p.selected, p.offset.get());
         assert!(selected > 0, "there is a selection to lose");
 
         press(&mut p, KeyCode::Left);
+        draw(&p, 64, 24);
         assert_eq!(p.selected, selected, "Left moved the list");
-        assert_eq!(p.offset, offset, "Left scrolled the list");
+        assert_eq!(p.offset.get(), offset, "Left scrolled the list");
 
         press(&mut p, KeyCode::Right);
         assert_eq!(p.selected, selected, "Right moved the list");
