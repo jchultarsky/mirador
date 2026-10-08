@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A setting given a word it does not take now stops startup and says what
+  to write.** `[todo].sort`, `[notes].preview` and `[calendar].week_starts`
+  each take one of a few words, and a misspelt one — `sort = "dues"`,
+  `preview = "besides"`, or `week_starts = "Monday "` with its trailing
+  space — used to start the dashboard on the default without a word, so the
+  setting looked broken. mirador now refuses the config, names the key and
+  lists the words it takes, as it already did for the two `units` keys. Case
+  still does not matter for these three, so every value a panel actually
+  read still loads; only a word it was ignoring is refused.
+
 ### Fixed
 
 - **A symlinked config or data file stays a symlink.** A save writes a new
@@ -37,6 +49,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file the umask had made readable by every account on the machine. The
   replacement is now created with the original's mode before anything is
   written into it.
+- **`[todo].horizon_days` hides what it says it hides.** It has been in every
+  config since the first release, described as hiding tasks due further out
+  than that many days, and nothing read it: a list set to a week still showed
+  tasks due next year. A task due more than that many days from today is now
+  hidden, and comes back on the day it comes within range. A task with no due
+  date, or one already late, always shows, and `0` still shows everything.
+  Saving a task past the horizon says so, the summary line says how many
+  tasks are further out, and a list the horizon has emptied says so rather
+  than "No tasks yet". A filter searches past the horizon, so a task given a
+  due date further out than meant can still be found, edited and deleted.
+- **`[cpu].warn_pct` and `critical_pct` are documented as not read.** The
+  shipped config set both, promising a readout that turned amber and red at
+  those figures, and nothing ever did: the readout takes its colour from the
+  graph's ramp, so it warms with the load instead. A config that sets them
+  still loads. A new config leaves them out.
 
 ## [1.19.2] - 2026-10-07
 

@@ -384,6 +384,13 @@ theme can take away from you.
 priority, then by due date. `s` cycles to plain `due`, `priority`, `created`
 or `title` when you want something simpler.
 
+`[todo].horizon_days` keeps the list to what is near: a task due more than that
+many days out is hidden until the day it comes within range, and the summary
+line says how many are waiting. A task with no due date, or one already late,
+always shows, and `0`, the default, shows everything. A filter searches past
+the horizon, so a task given a due date further out than you meant can still
+be found, edited and deleted.
+
 ### Notes
 
 Free-form notes in a master-detail layout, the shape a mail client uses.
@@ -1357,10 +1364,11 @@ that quietly comes out as the defaults.
 ### When something is wrong with your config
 
 mirador refuses to start rather than starting wrong. An unknown widget name, a
-malformed colour, or a key it does not recognise is reported with a message
-that says how to fix it — including, for a key that was renamed in an earlier
-version, which key replaced it and that `mirador --migrate-config` will do it
-for you.
+malformed colour, a word a setting does not take, or a key it does not
+recognise is reported with a message that says how to fix it — including, for
+a key that was renamed in an earlier version, which key replaced it and that
+`mirador --migrate-config` will do it for you, and for a misspelt
+`sort = "dues"`, the five words `sort` does take.
 
 A key that is silently ignored is the worst outcome a config can have, because
 it makes a stale config look like stale code.

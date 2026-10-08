@@ -396,6 +396,11 @@ pub struct TodoPanel {
     view: Vec<u64>,
     /// The header and counter tallies, recomputed alongside `view`.
     counts: Counts,
+    /// Tasks the completed toggle would show but the horizon hides, so the
+    /// summary can reconcile the border's count with the rows and an empty
+    /// list can say why it is empty. Always 0 while a filter is active, since
+    /// a filter searches past the horizon.
+    beyond: usize,
     list_state: ListState,
     /// Transient message with a severity flag.
     status: Option<(String, bool)>,
@@ -428,6 +433,7 @@ impl TodoPanel {
             counts: Counts::default(),
             list_state: ListState::default(),
             status: None,
+            beyond: 0,
             today,
             list_area: None,
             pending: Vec::new(),
@@ -438,12 +444,34 @@ impl TodoPanel {
 
     /// Recompute the ordered id list, keeping the selection on the same task
     /// where possible so that toggling a filter does not move the cursor.
+    ///
+    /// An active filter searches past the horizon. It is how a task is looked
+    /// up by name, so a task saved with a due date further out than meant has
+    /// to be findable, and then editable and deletable, before the day it
+    /// would come into range on its own.
     fn refresh_view(&mut self) {
         let previously_selected = self.selected_id();
-        self.view = self
-            .store
-            .view(self.sort, self.show_completed, &self.filter, self.today);
+        let horizon = if self.filter.is_empty() {
+            self.config.horizon_days
+        } else {
+            0
+        };
+        self.view = self.store.view(
+            self.sort,
+            self.show_completed,
+            &self.filter,
+            horizon,
+            self.today,
+        );
         self.counts = Counts::of(self.store.tasks(), self.today);
+        self.beyond = if horizon == 0 {
+            0
+        } else {
+            self.store
+                .view(self.sort, self.show_completed, &self.filter, 0, self.today)
+                .len()
+                .saturating_sub(self.view.len())
+        };
 
         let index = previously_selected
             .and_then(|id| self.view.iter().position(|v| *v == id))
@@ -502,6 +530,13 @@ impl TodoPanel {
         }
 
         let due = parse_due(form.due.value(), self.today).map_err(|e| e.to_string())?;
+        // A task saved past the horizon leaves the unfiltered list at once;
+        // saying so is the difference between "it is hidden" and "it was lost".
+        let hidden = if crate::task::beyond_horizon(due, self.today, self.config.horizon_days) {
+            format!(", due beyond the {}-day horizon", self.config.horizon_days)
+        } else {
+            String::new()
+        };
 
         let notes = {
             let n = form.notes.trimmed();
@@ -536,7 +571,7 @@ impl TodoPanel {
             updated.priority = priority;
             updated.tags = tags;
             self.store.update(updated);
-            self.set_status("task updated");
+            self.set_status(format!("task updated{hidden}"));
         } else {
             let mut task = Task::new(0, title, self.today);
             task.notes = notes;
@@ -544,7 +579,7 @@ impl TodoPanel {
             task.priority = priority;
             task.tags = tags;
             let new_id = self.store.add(task);
-            self.set_status("task added");
+            self.set_status(format!("task added{hidden}"));
             self.mode = Mode::List;
             self.refresh_view();
             if let Some(pos) = self.view.iter().position(|v| *v == new_id) {
@@ -893,6 +928,15 @@ impl TodoPanel {
         // work is not reaching the disk.
         if self.store.last_error.is_some() {
             items.push((format!("{open} open"), Style::default().fg(theme.muted)));
+        }
+        // The border counts the tasks the horizon hides too, so a thinned list
+        // says how many it is not showing. Not over an emptied one: the list's
+        // own message says it there.
+        if self.beyond > 0 && !self.view.is_empty() {
+            items.push((
+                format!("{} later", self.beyond),
+                Style::default().fg(theme.muted),
+            ));
         }
         items.push((
             format!("by {}", self.sort.label()),
@@ -1250,13 +1294,24 @@ impl Panel for TodoPanel {
         self.list_area = (!self.view.is_empty()).then_some(rows[2]);
 
         if self.view.is_empty() {
-            let message = if self.filter.is_empty() {
-                "No tasks yet. Press `a` to add one."
+            // "No tasks yet" over a list the horizon emptied would be false
+            // while the border still counted them open.
+            let message = if !self.filter.is_empty() {
+                "Nothing matches this filter. Esc to clear.".to_string()
+            } else if self.beyond > 0 {
+                let days = match self.config.horizon_days {
+                    1 => "day".to_string(),
+                    n => format!("{n} days"),
+                };
+                format!("Nothing due in the next {days}; {} later.", self.beyond)
             } else {
-                "Nothing matches this filter. Esc to clear."
+                "No tasks yet. Press `a` to add one.".to_string()
             };
             frame.render_widget(
-                Paragraph::new(Span::styled(message, Style::default().fg(theme.muted))),
+                Paragraph::new(Span::styled(
+                    crate::grid::truncate(&message, usize::from(rows[2].width)),
+                    Style::default().fg(theme.muted),
+                )),
                 rows[2],
             );
         } else {
@@ -1507,6 +1562,175 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         let panel = TodoPanel::new(TodoConfig::default(), path).unwrap();
         (panel, TempDir(dir))
+    }
+
+    /// `[todo].horizon_days` shipped in the first commit, documented in every
+    /// first-run config as "hide tasks due further out than this", and was
+    /// read by nothing: a reader who set it to a week still saw the whole year.
+    #[test]
+    fn a_horizon_hides_only_the_tasks_due_beyond_it() {
+        let dir = std::env::temp_dir().join(format!("mirador-todo-{}-horizon", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = TempDir(dir.clone());
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, "").unwrap();
+        let config = TodoConfig {
+            horizon_days: 7,
+            ..TodoConfig::default()
+        };
+        let mut panel = TodoPanel::new(config, path).unwrap();
+
+        let today = panel.today;
+        let in_days = |n: i32| today.checked_add(jiff::Span::new().days(n)).unwrap();
+        let mut add = |title: &str, due: Option<Date>| {
+            let mut task = Task::new(0, title, today);
+            task.due = due;
+            panel.store.add(task)
+        };
+        let late = add("late", Some(in_days(-3)));
+        let edge = add("a week out", Some(in_days(7)));
+        let past_edge = add("a day further", Some(in_days(8)));
+        let far = add("next month", Some(in_days(30)));
+        let undated = add("whenever", None);
+        panel.refresh_view();
+
+        for id in [late, edge, undated] {
+            assert!(
+                panel.view.contains(&id),
+                "a task that is late, due within the horizon or undated stays: {:?}",
+                panel.store.get(id)
+            );
+        }
+        for id in [past_edge, far] {
+            assert!(
+                !panel.view.contains(&id),
+                "a task due beyond the horizon is hidden: {:?}",
+                panel.store.get(id)
+            );
+        }
+
+        // Measured from the panel's today, which `tick` moves on at midnight,
+        // so a hidden task comes into view on the day it comes into range.
+        panel.today = in_days(23);
+        panel.refresh_view();
+        assert!(
+            panel.view.contains(&far),
+            "the horizon must move with the day"
+        );
+
+        // 0 is the documented "show all", and a horizon past the end of the
+        // calendar shows all too rather than taking the dashboard down: one
+        // that a span can hold and a date cannot, and one a span cannot hold.
+        for horizon in [0, 7_000_000, u32::MAX] {
+            panel.config.horizon_days = horizon;
+            panel.refresh_view();
+            assert_eq!(panel.view.len(), 5, "horizon {horizon} hides nothing");
+        }
+    }
+
+    /// A task saved past the horizon disappears from the list at once, so the
+    /// panel says where it went, and an empty list says the horizon emptied it
+    /// rather than claiming there are no tasks.
+    #[test]
+    fn a_task_beyond_the_horizon_is_accounted_for() {
+        let (mut panel, _guard) = panel("horizon-said");
+        panel.config.horizon_days = 7;
+        panel.refresh_view();
+
+        press(&mut panel, KeyCode::Char('a'));
+        type_str(&mut panel, "Renew the passport");
+        press(&mut panel, KeyCode::Tab);
+        press(&mut panel, KeyCode::Tab);
+        type_str(&mut panel, "+30d");
+        press(&mut panel, KeyCode::Enter);
+
+        let said = panel.status.as_ref().map(|(text, _)| text.clone());
+        assert_eq!(
+            said.as_deref(),
+            Some("task added, due beyond the 7-day horizon")
+        );
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(!screen.contains("No tasks yet"), "{screen}");
+        assert!(screen.contains("1 later"), "{screen}");
+        assert_eq!(
+            screen.matches("later").count(),
+            1,
+            "the empty list says it, so the summary does not say it again: {screen}"
+        );
+
+        // A one-day horizon is "the next day", not "the next 1 days".
+        panel.config.horizon_days = 1;
+        panel.refresh_view();
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(
+            screen.contains("Nothing due in the next day; 1 later."),
+            "{screen}"
+        );
+    }
+
+    /// The filter is how a task is looked up by name, so it looks past the
+    /// horizon. Otherwise a task saved with `+300d` for `+3d` is out of reach
+    /// of `/`, `e` and `d` until the day it comes into range, and "Nothing
+    /// matches this filter" is said over a task that does.
+    #[test]
+    fn a_filter_searches_past_the_horizon() {
+        let (mut panel, _guard) = panel("horizon-filter");
+        panel.config.horizon_days = 7;
+        let mut task = Task::new(0, "Renew the passport", panel.today);
+        task.due = panel.today.checked_add(jiff::Span::new().days(30)).ok();
+        let id = panel.store.add(task);
+        panel.refresh_view();
+        assert!(panel.view.is_empty(), "unfiltered, the horizon hides it");
+
+        press(&mut panel, KeyCode::Char('/'));
+        type_str(&mut panel, "passport");
+        assert_eq!(panel.view, vec![id], "a filter finds it however far out");
+        press(&mut panel, KeyCode::Enter);
+        assert_eq!(panel.selected_id(), Some(id), "so `e` and `d` reach it");
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(screen.contains("Renew the passport"), "{screen}");
+        assert!(
+            !screen.contains("later"),
+            "a filter hides nothing: {screen}"
+        );
+
+        // Both empty states stay true either side of it.
+        panel.filter = "visa".to_string();
+        panel.refresh_view();
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(screen.contains("Nothing matches this filter"), "{screen}");
+        press(&mut panel, KeyCode::Esc);
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(
+            screen.contains("Nothing due in the next 7 days; 1 later."),
+            "{screen}"
+        );
+    }
+
+    /// The border counts every open task, the ones the horizon hides as well,
+    /// so a list it has thinned says how many it is not showing. Otherwise
+    /// `4 open` sits over two rows with nothing to reconcile them.
+    #[test]
+    fn the_summary_says_how_many_the_horizon_hides() {
+        let (mut panel, _guard) = panel("horizon-summary");
+        panel.config.horizon_days = 7;
+        for (title, days) in [
+            ("Pay the rent", 2),
+            ("Call the bank", 5),
+            ("Book the dentist", 30),
+            ("Renew the lease", 40),
+        ] {
+            let mut task = Task::new(0, title, panel.today);
+            task.due = panel.today.checked_add(jiff::Span::new().days(days)).ok();
+            panel.store.add(task);
+        }
+        panel.refresh_view();
+        assert_eq!(panel.view.len(), 2);
+        assert_eq!(panel.counter().as_deref(), Some("4 open"));
+        let screen = screen_of(&mut panel, 60, 12);
+        assert!(screen.contains("2 later"), "{screen}");
+        assert_eq!(screen.matches("later").count(), 1, "{screen}");
     }
 
     /// The border and this line were both saying `4 open`, and the drop order
