@@ -83,10 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole series. Both happen when a quote lands now. A quote also keeps at
   most a thousand intraday prices, averaged down rather than cut: the
   request asks for 78, and nothing stopped an answer carrying two million.
-- **A long task list builds only the rows on screen.** Every task in the
-  list was turned into a row on every frame, through an index of the whole
-  store rebuilt each time, for a panel that drew the twenty that fit.
-  Scrolling, the selection and clicks are as they were.
+- **A long task or note list builds only the rows on screen.** Every task
+  and every note in the list was turned into a row on every frame, through
+  an index of the whole store rebuilt each time, for a panel that drew the
+  twenty that fit. Scrolling, the selection and clicks are as they were.
 - **The task form's placeholders say when they are cut.** In a form narrower
   than about 27 columns, `what needs doing` was cut by the terminal to a
   whole-looking `what needs d`. The placeholders now end in `…` where they
@@ -96,8 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   figures, which count a kilobyte as 1,024 bytes, beside free space and size
   counted in thousands, the way a disk is sold — so one device showed two
   meanings of `MB`, and a disk moving a hundred million bytes a second read
-  `95.4 MB/s`. The rates are decimal now and written as the capacity is:
-  `100 MB/s`, `327 kB/s`, and `0 kB/s` for an idle disk.
+  `95.4 MB/s`. The rates are decimal now, with a decimal place below ten of
+  a unit and whole figures above: `100 MB/s`, `1.4 MB/s`, `327 kB/s`, and
+  `0 kB/s` for an idle disk.
 - **A temperature panel with no sensors marks the cut in its headline.**
   Narrower than `No temperature sensors`, it showed as much of the words as
   fitted — `No temperatu` — with nothing to say the rest had gone. It ends
@@ -110,6 +111,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to find by name. The README says seventeen, and the comment
   lists all seventeen now, in a new config and in `--print-config`; a config
   already on disk keeps the comment it was written with.
+- **Adding a clock on a short terminal adds the city on screen.** The zone
+  list kept a ten-row window in a dialog fifteen rows tall, so on a shorter
+  terminal its foot was cut, `Esc cancels` first, while `↓` walked on into
+  rows nobody could see and Enter added one of them. The list now scrolls
+  within the rows the terminal leaves it, as both pickers' do, a page moves
+  as far as the rows drawn, and the help with the way out gives way to
+  nothing but the field and the city under the cursor. On a terminal too
+  short to draw that city, Enter waits rather than adding it; Esc still
+  cancels.
+- **An empty panel's notice says when its lower lines are cut.** The disk,
+  battery and temperature panels explain an empty face in a line or two,
+  and a panel too short for all of them drew the first with nothing to say
+  the rest was missing. The last line drawn ends in `…` now when a line
+  below it had something to say.
+- **A line cut through emoji is no wider than its room.** An emoji written
+  with its presentation selector, `❤️` or `☀️`, or joined to another, `👩‍💻`,
+  is drawn two cells wide, and the cut that ends a long title or headline in
+  `…` measured it a character at a time, as one. Each such emoji left the
+  line a cell wider than its room, and the terminal cut the excess without
+  a mark. The cut now measures them as they are drawn.
 
 ## [1.20.0] - 2026-10-07
 

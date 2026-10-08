@@ -15,6 +15,7 @@ use std::borrow::Cow;
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
@@ -43,11 +44,11 @@ pub fn truncate(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    if display_width(text) <= width {
+    if walked_width(text) <= width {
         return text.to_string();
     }
 
-    // Take characters while they fit, keeping one cell back for the ellipsis.
+    // Take glyphs while they fit, keeping one cell back for the ellipsis.
     let mut out = text[..prefix_fitting(text, width - 1)].to_string();
     out.push('…');
     out
@@ -59,8 +60,8 @@ pub fn char_width(c: char) -> usize {
 }
 
 /// The byte length of the longest prefix of `text` that fits in `cells`
-/// terminal cells, walked a character at a time and stopping at the first
-/// that does not fit.
+/// terminal cells, walked a glyph at a time (see [`glyphs`]) and stopping at
+/// the first that does not fit.
 ///
 /// **The one cell-budget walk in the module.** [`truncate`], [`break_lines`]
 /// and [`assemble`] each wrote their own, and the third had drifted: it
@@ -70,13 +71,66 @@ pub fn char_width(c: char) -> usize {
 /// none to ratatui, which never draws it.
 fn prefix_fitting(text: &str, cells: usize) -> usize {
     let mut used = 0usize;
-    for (at, c) in text.char_indices() {
-        used += char_width(c);
+    for (at, glyph) in glyphs(text) {
+        used += glyph_width(glyph);
         if used > cells {
             return at;
         }
     }
     text.len()
+}
+
+/// The cells `text` costs measured the way [`prefix_fitting`] walks it, so a
+/// span measured with this and cut with that agree about where it ends.
+///
+/// It is also what ratatui draws, glyph for glyph, which [`display_width`]
+/// is not quite: `unicode-width` measures a string as one run, so it counts
+/// a control character that ratatui drops and joins a malformed sequence
+/// that ratatui draws in two. So every fitting decision in this module —
+/// whether a text fits whole, how wide a word is, what a part costs — is
+/// made with this, and a text that is said to fit is one that does.
+fn walked_width(text: &str) -> usize {
+    glyphs(text).map(|(_, glyph)| glyph_width(glyph)).sum()
+}
+
+/// `text` as the glyphs a terminal draws, each with its byte offset: the
+/// extended grapheme clusters of UAX #29, which is exactly how ratatui's
+/// `Buffer::set_stringn` splits a string before drawing it.
+///
+/// A character at a time is not enough, because ratatui draws a grapheme at
+/// the width of the whole string, and several sequences are wider together
+/// than their characters are apart: `❤` is one cell and the emoji selector
+/// after it none, while `❤\u{fe0f}` is drawn as two. Walked by character, a
+/// cut through a row of hearts came out a cell wider than asked for per
+/// heart.
+///
+/// The segmentation is `unicode-segmentation`'s, the crate ratatui itself
+/// segments with, so the clusters here are ratatui's by construction rather
+/// than by a transcription of its rules. The first version joined by hand —
+/// anything zero-width, a skin tone, whatever followed a joiner — and that
+/// over-joined malformed input: the standard joins across a ZWJ only after a
+/// pictograph, so `🏽\u{200d}👩` is two glyphs to ratatui, four cells, and
+/// one two-cell run to the hand-rolled walk, which then cut a third-party
+/// headline two cells wider than its room.
+fn glyphs(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.grapheme_indices(true)
+}
+
+/// The cells one glyph from [`glyphs`] takes, measured as
+/// `Buffer::set_stringn` measures it: none for a glyph holding a control
+/// character, which ratatui drops without drawing; otherwise its width as a
+/// string, plus a cell for each halfwidth voiced sound mark, which
+/// `unicode-width` calls zero-width and ratatui — like the terminals it
+/// cites — draws in a cell of its own.
+fn glyph_width(glyph: &str) -> usize {
+    if glyph.contains(char::is_control) {
+        return 0;
+    }
+    display_width(glyph)
+        + glyph
+            .chars()
+            .filter(|c| matches!(c, '\u{ff9e}' | '\u{ff9f}'))
+            .count()
 }
 
 /// Break `text` into rows of at most `width` cells, handing each to `emit`.
@@ -110,7 +164,7 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
         let mut emitted_here = false;
 
         for word in line.split_inclusive(' ') {
-            let w = display_width(word);
+            let w = walked_width(word);
             if used > 0 && used + w > width {
                 emit(&line[start..cursor]);
                 (any, emitted_here) = (true, true);
@@ -132,16 +186,20 @@ fn break_lines<'a>(text: &'a str, width: usize, mut emit: impl FnMut(&'a str)) {
                 //
                 // The row then exceeds `width` by a cell, which is the honest
                 // outcome. A terminal cannot draw half a wide glyph either.
+                //
+                // A glyph rather than a character, so a heart and its emoji
+                // selector stay on one row rather than the selector being
+                // carried, alone and invisible, to the start of the next.
                 if cut == start {
-                    match line[start..cursor].chars().next() {
-                        Some(c) => cut += c.len_utf8(),
+                    match glyphs(&line[start..cursor]).next() {
+                        Some((_, glyph)) => cut += glyph.len(),
                         None => break,
                     }
                 }
                 emit(&line[start..cut]);
                 (any, emitted_here) = (true, true);
                 start = cut;
-                used = display_width(&line[start..cursor]);
+                used = walked_width(&line[start..cursor]);
             }
         }
 
@@ -209,7 +267,7 @@ pub fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
             .and_then(|spans| spans.first())
             .map_or(line.style, |span| span.style);
         let spans = spans.unwrap_or_else(|| vec![Span::styled(row.to_string(), style)]);
-        let rendered_width: usize = spans.iter().map(|span| display_width(&span.content)).sum();
+        let rendered_width: usize = spans.iter().map(|span| walked_width(&span.content)).sum();
         if rendered_width > width {
             output.push(Line::from(Span::styled(truncate(row, width), style)));
         } else {
@@ -581,7 +639,7 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
     let mut used = 0usize;
 
     for part in parts {
-        let part_width: usize = part.iter().map(|s| display_width(&s.content)).sum();
+        let part_width: usize = part.iter().map(|s| walked_width(&s.content)).sum();
         if used + part_width > width {
             // Nothing has been placed and this part is too wide for the line:
             // show as much of it as fits, ellipsised, rather than nothing.
@@ -604,10 +662,10 @@ pub fn assemble(parts: Vec<Vec<Span<'static>>>, width: u16) -> Line<'static> {
                     // This span's share is its own width, or whatever is left
                     // of the abridged text — the ellipsis included — if the cut
                     // fell inside or at the end of it. The width is the walk's
-                    // own measure, a character at a time: measured as a string
-                    // it disagrees with the walk over `☀` and its emoji
-                    // selector, and the walk then ran into the next span.
-                    let own: usize = span.content.chars().map(char_width).sum();
+                    // own measure: measured as a plain string it disagrees
+                    // with the walk over a control character, and the walk
+                    // then ran into the next span.
+                    let own = walked_width(&span.content);
                     let rest = abridged.split_off(prefix_fitting(&abridged, own));
                     spans.push(Span::styled(
                         std::mem::replace(&mut abridged, rest),
@@ -668,11 +726,11 @@ fn fit(text: &str, width: u16, align: Align) -> String {
         return String::new();
     }
 
-    let actual = display_width(text);
+    let actual = walked_width(text);
     if actual > width {
         let mut out = truncate(text, width);
         // A double-width character can leave the result a cell short.
-        out.push_str(&" ".repeat(width.saturating_sub(display_width(&out))));
+        out.push_str(&" ".repeat(width.saturating_sub(walked_width(&out))));
         return out;
     }
 
@@ -734,18 +792,20 @@ mod tests {
     ///
     /// The split used to measure a span as a string and then walk the
     /// abridged text a character at a time, and the two measures disagree:
-    /// `☀` with the emoji selector is two cells as a string and one as its
+    /// `☀` with the emoji selector was two cells as a string and one as its
     /// characters, so the walk ran a cell past the span and took the next
-    /// one's first letter into the sun's style. Both sides are the character
-    /// walk's measure now. The control character holds the walk itself to
-    /// [`char_width`]: measured as a one-character string, the way the walk in
-    /// `assemble` used to, it is a cell, where `char_width` — and ratatui,
-    /// which never draws it — make it none.
+    /// one's first letter into the sun's style. Both sides are the walk's
+    /// measure now — and the walk takes the sun and its selector as the one
+    /// two-cell glyph ratatui draws, so it leaves room for one letter, not
+    /// two. The control character holds the walk itself to what ratatui
+    /// draws: measured as a one-character string, the way the walk in
+    /// `assemble` used to, it is a cell, where ratatui, which never draws
+    /// it, makes it none.
     #[test]
     fn an_abridged_part_gives_each_span_its_own_text() {
         use ratatui::style::{Color, Style};
         let (lead_style, rest_style) = (Style::new().fg(Color::Red), Style::new().fg(Color::Blue));
-        for lead in ["\u{2600}\u{fe0f}", "a\u{7}"] {
+        for (lead, rest) in [("\u{2600}\u{fe0f}", "b\u{2026}"), ("a\u{7}", "bc\u{2026}")] {
             let line = assemble(
                 vec![vec![
                     Span::styled(lead, lead_style),
@@ -758,11 +818,16 @@ mod tests {
                 .iter()
                 .map(|span| (span.content.as_ref(), span.style))
                 .collect();
-            assert_eq!(
-                spans,
-                [(lead, lead_style), ("bc\u{2026}", rest_style)],
-                "{lead:?}"
-            );
+            assert_eq!(spans, [(lead, lead_style), (rest, rest_style)], "{lead:?}");
+            // And never wider than asked for. The bell is a cell to
+            // `display_width` and none to ratatui, which never draws it, so
+            // the line is measured as it will be drawn: without it.
+            let drawn: String = spans
+                .iter()
+                .flat_map(|(text, _)| text.chars())
+                .filter(|c| !c.is_control())
+                .collect();
+            assert!(display_width(&drawn) <= 4, "{drawn:?} is wider than 4");
         }
     }
 
@@ -1157,6 +1222,23 @@ mod tests {
         }
     }
 
+    /// A glyph too wide for its row is carried whole, not a character at a
+    /// time. Stepped by character, `❤\u{fe0f}` in a one-cell column left the
+    /// heart on one row and its emoji selector alone on the next — a row
+    /// that draws nothing, and that `wrapped_height` counts, so a panel
+    /// sized by it reserved a blank row per heart. A joined family breaks
+    /// the same way, into its people and its joiners.
+    #[test]
+    fn a_glyph_too_wide_for_its_row_keeps_its_selector_and_joins() {
+        let heart = "\u{2764}\u{fe0f}";
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        for glyph in [heart, family] {
+            let text = glyph.repeat(2);
+            assert_eq!(wrap(&text, 1), [glyph, glyph], "{text:?}");
+            assert_eq!(wrapped_height(&text, 1), 2, "{text:?}");
+        }
+    }
+
     #[test]
     fn styled_wrapping_uses_the_width_ratatui_will_render() {
         let line = Line::from(vec![
@@ -1503,6 +1585,81 @@ mod tests {
         assert_eq!(display_width(&fit("日本語テスト", 3, Align::Left)), 3);
         assert_eq!(fit("abc", 1, Align::Left), "…");
         assert_eq!(fit("abc", 0, Align::Left), "");
+    }
+
+    /// A cut is no wider than asked for when a glyph is a sequence of
+    /// characters. `❤` is one cell and its emoji selector none, so the walk
+    /// counted `❤\u{fe0f}` as one cell where ratatui draws the pair as one
+    /// two-cell grapheme: `❤️❤️❤️…` came back for four cells and took seven.
+    /// Measured by what ratatui draws, not by this module's own measure,
+    /// which is the thing that was wrong; through `truncate`, `fit` and the
+    /// abridged first part of `assemble`, which all cut with the same walk.
+    ///
+    /// The malformed sequences are what a walk joining by hand gets wrong: a
+    /// joiner after a skin tone, a keycap or a flag joins nothing to
+    /// ratatui, which draws `🏽\u{200d}👩` as two glyphs in four cells, while
+    /// the walk took it as one in two and cut a line two cells over. Its
+    /// whole-string measure was wrong the same way, so a text said to fit
+    /// whole did not.
+    #[test]
+    fn a_cut_through_emoji_sequences_is_no_wider_than_asked_for() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        let drawn = |text: &str| -> usize {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 200, 1));
+            usize::from(buffer.set_stringn(0, 0, text, 200, Style::default()).0)
+        };
+        let glyphs = [
+            "\u{2764}\u{fe0f}",           // ❤️, a selector making one cell two
+            "\u{2600}\u{fe0f}",           // ☀️, the weather's own
+            "\u{1f469}\u{200d}\u{1f4bb}", // 👩‍💻, a joined pair
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}", // 👨‍👩‍👧
+            "\u{1f44d}\u{1f3fd}",         // 👍🏽, a skin tone
+            "\u{31}\u{fe0f}\u{20e3}",     // 1️⃣, a keycap
+            "a",
+            "\u{754c}", // 界
+            // Malformed: a joiner after something that is not a pictograph
+            // joins nothing, so ratatui draws the two sides as two glyphs.
+            "\u{1f3fd}\u{200d}\u{1f469}",              // 🏽, ZWJ, 👩
+            "\u{31}\u{fe0f}\u{20e3}\u{200d}\u{1f469}", // 1️⃣, ZWJ, 👩
+            "\u{1f1ef}\u{1f1f5}\u{200d}\u{1f469}",     // 🇯🇵, ZWJ, 👩
+            "a\u{1f3fd}\u{200d}\u{1f469}",             // a, 🏽, ZWJ, 👩
+            // A halfwidth voiced mark: zero cells to `unicode-width`, one to
+            // ratatui, which draws it apart from the kana it extends.
+            "\u{ff76}\u{ff9e}", // ｶﾞ
+        ];
+        let mut texts: Vec<String> = glyphs.iter().map(|g| g.repeat(5)).collect();
+        texts.extend(glyphs.iter().map(|g| format!("ab{g}cd{g}{g}ef")));
+        texts.push(glyphs.concat());
+
+        let mut cut = 0;
+        for text in &texts {
+            for width in 1..=14usize {
+                let truncated = truncate(text, width);
+                assert!(
+                    drawn(&truncated) <= width,
+                    "truncate({text:?}, {width}) = {truncated:?} draws {}",
+                    drawn(&truncated)
+                );
+                let column = u16::try_from(width).expect("small");
+                let fitted = fit(text, column, Align::Left);
+                assert!(
+                    drawn(&fitted) <= width,
+                    "fit({text:?}, {width}) = {fitted:?}"
+                );
+                let line = assemble(vec![vec![Span::raw(text.clone())]], column);
+                let assembled: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                assert!(
+                    drawn(&assembled) <= width,
+                    "assemble({text:?}, {width}) = {assembled:?}"
+                );
+                if truncated != *text {
+                    cut += 1;
+                    assert!(truncated.ends_with('\u{2026}'), "{truncated:?}");
+                }
+            }
+        }
+        assert!(cut > 100, "the sweep cut something: {cut}");
     }
 
     #[test]

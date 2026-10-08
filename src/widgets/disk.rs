@@ -104,11 +104,38 @@ pub(crate) fn human(bytes: u64) -> String {
     }
 }
 
-/// A read or write rate in the same units as the capacity beside it. The
-/// network panel's formatter divides by 1024 under the same letters, so
-/// borrowing it put two meanings of `MB` on one device.
+/// A read or write rate in the same units as the capacity beside it, with a
+/// decimal below ten of a unit: `1.4 MB/s`, `327 kB/s`, and `0 kB/s` for a
+/// disk doing nothing, or too little to show.
+///
+/// Decimal because the network panel's formatter divides by 1024 under the
+/// same letters, and borrowing it put two meanings of `MB` on one device.
+/// Not [`human`], though it shares the units: a capacity moves by the
+/// gigabyte and reads well in whole megabytes, where a rate of 1.4 MB a
+/// second shown as `1 MB/s` has lost a third of itself. Rounded half up in
+/// integers, so neither `{:.0}`'s ties to even nor a cut decides a figure,
+/// and the unit is the first whose rounded figure is under a thousand, so
+/// 999.5 kB is `1.0 MB/s` and never `1000 kB/s`.
 fn rate(bytes_per_sec: u64) -> String {
-    format!("{}/s", human(bytes_per_sec))
+    const UNITS: [(u128, &str); 4] = [
+        (1_000, "kB"),
+        (1_000_000, "MB"),
+        (1_000_000_000, "GB"),
+        (1_000_000_000_000, "TB"),
+    ];
+    let bytes = u128::from(bytes_per_sec);
+    // Whole units and tenths of one, each rounded half up.
+    let whole = |unit: u128| (bytes + unit / 2) / unit;
+    let tenths = |unit: u128| (bytes * 10 + unit / 2) / unit;
+    let (unit, name) = UNITS
+        .into_iter()
+        .find(|&(unit, _)| whole(unit) < 1_000)
+        .unwrap_or(UNITS[3]);
+    match tenths(unit) {
+        0 => format!("0 {name}/s"),
+        t if t < 100 => format!("{}.{} {name}/s", t / 10, t % 10),
+        _ => format!("{} {name}/s", whole(unit)),
+    }
 }
 
 /// File systems that are never a disk filling up: a snap's squashfs image is
@@ -784,6 +811,43 @@ mod tests {
         assert_eq!(human(0), "0 kB");
     }
 
+    /// A rate keeps a decimal below ten of its unit, where the capacity
+    /// formatter it borrowed gave whole megabytes up to ten gigabytes: a
+    /// disk reading 1.4 MB a second said `1 MB/s`, and the trickle every
+    /// disk carries read as nothing. Halves round up rather than to even,
+    /// which `{:.0}` does — 12.5 MB a second said `12 MB/s` — and kilobytes
+    /// are rounded, not cut, so 999 bytes a second is not `0 kB/s`. A figure
+    /// that rounds up to the next unit is written in it: `1.0 MB/s`, never
+    /// `1000 kB/s`.
+    #[test]
+    fn a_rate_keeps_a_decimal_below_ten_of_its_unit() {
+        for (bytes, expected) in [
+            (0, "0 kB/s"),
+            (40, "0 kB/s"),
+            (50, "0.1 kB/s"),
+            (999, "1.0 kB/s"),
+            (1_999, "2.0 kB/s"),
+            (4_096, "4.1 kB/s"),
+            (9_949, "9.9 kB/s"),
+            (9_950, "10 kB/s"),
+            (327_000, "327 kB/s"),
+            (327_680, "328 kB/s"),
+            (999_499, "999 kB/s"),
+            (999_500, "1.0 MB/s"),
+            (1_400_000, "1.4 MB/s"),
+            (1_450_000, "1.5 MB/s"),
+            (2_500_000, "2.5 MB/s"),
+            (12_500_000, "13 MB/s"),
+            (52_428_800, "52 MB/s"),
+            (100_000_000, "100 MB/s"),
+            (999_600_000, "1.0 GB/s"),
+            (3_000_000_000, "3.0 GB/s"),
+            (u64::MAX, "18446744 TB/s"),
+        ] {
+            assert_eq!(rate(bytes), expected, "{bytes} bytes a second");
+        }
+    }
+
     #[test]
     fn a_percentage_saturates_and_never_divides_by_zero() {
         assert_eq!(percent(0, 0), 0);
@@ -1045,7 +1109,7 @@ mod tests {
             "{rows:?}"
         );
         assert!(rows[1].starts_with('■'), "{rows:?}");
-        assert_eq!(rows[2], "↓ 0 kB/s   ↑ 327 kB/s", "{rows:?}");
+        assert_eq!(rows[2], "↓ 0 kB/s   ↑ 328 kB/s", "{rows:?}");
         assert!(
             rows[3].starts_with('⣀') && rows[4].starts_with('⣀'),
             "two graphs: {rows:?}"
@@ -1081,7 +1145,7 @@ mod tests {
             rows[0], "/   60% USED   400 GB free   of 1.0 TB",
             "{rows:?}"
         );
-        assert_eq!(rows[2], "↓ 100 MB/s   ↑ 4 kB/s", "{rows:?}");
+        assert_eq!(rows[2], "↓ 100 MB/s   ↑ 4.1 kB/s", "{rows:?}");
     }
 
     /// A panel wider than `history` covers grows the histories to fill it

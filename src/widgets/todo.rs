@@ -1356,13 +1356,16 @@ impl Panel for TodoPanel {
             // there were open tasks rather than rows on screen. The window
             // is the one `List` would have scrolled to; it is worked out
             // first, and the list is handed only what is in it.
-            let (shown, selected) = window(
+            let (shown, selected) = crate::selection::window(
                 self.list_state.selected(),
                 self.list_state.offset(),
                 self.view.len(),
                 usize::from(rows[2].height),
             );
-            let visible = tasks_in_order(self.store.tasks(), &self.view[shown.clone()]);
+            let visible =
+                crate::selection::in_order(self.store.tasks(), &self.view[shown.clone()], |task| {
+                    task.id
+                });
 
             // The list is indented by the selection marker, so the grid gets
             // what is left and the header is indented to match.
@@ -1515,54 +1518,6 @@ fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
         }
     }
     lines.join("\n")
-}
-
-/// The rows of a list `len` long that a `List` `height` rows high shows from
-/// a scroll at `offset`, and the selection clamped into the list.
-///
-/// This is `List`'s own arithmetic for items one row high with no scroll
-/// padding, which is every task row: the scroll stays put while the
-/// selection is in view, moves just far enough to bring it back when it is
-/// not, and is never pulled back to fill the rows below a short tail. It is
-/// copied rather than called because `List` works it out only once it holds
-/// every item, and building every item is the cost this avoids.
-/// `the_window_is_the_one_list_would_have_scrolled_to` holds the copy to the
-/// original.
-fn window(
-    selected: Option<usize>,
-    offset: usize,
-    len: usize,
-    height: usize,
-) -> (std::ops::Range<usize>, Option<usize>) {
-    let last = len.saturating_sub(1);
-    let selected = selected.map(|at| at.min(last));
-    let offset = offset.min(last);
-    let first = match selected {
-        Some(at) if at < offset => at,
-        Some(at) if at >= offset + height => at + 1 - height,
-        _ => offset,
-    };
-    (first..len.min(first + height), selected)
-}
-
-/// The tasks with these ids, in this order, found in one pass over the store.
-///
-/// `TaskStore::get` is a linear scan, so a lookup per row costs a pass each.
-/// The view used to be mapped through an index of the whole store built on
-/// every frame, which is an allocation in proportion to a store that never
-/// drops a completed task. This allocates in proportion to `ids`, which is
-/// a screen of rows. Ids are unique — the store renumbers a repeated one as
-/// it reads the file — so each is found once.
-fn tasks_in_order<'a>(tasks: &'a [Task], ids: &[u64]) -> Vec<&'a Task> {
-    let mut wanted: Vec<(u64, usize)> = ids.iter().copied().zip(0..).collect();
-    wanted.sort_unstable();
-    let mut found: Vec<Option<&Task>> = vec![None; ids.len()];
-    for task in tasks {
-        if let Ok(at) = wanted.binary_search_by_key(&task.id, |&(id, _)| id) {
-            found[wanted[at].1] = Some(task);
-        }
-    }
-    found.into_iter().flatten().collect()
 }
 
 /// Placeholder text for an empty, unfocused field.
@@ -2582,47 +2537,6 @@ mod tests {
             KeyOutcome::Ignored,
             "Tab must reach the app so focus can move"
         );
-    }
-
-    /// The list builds only the rows it can show, so the window has to be
-    /// worked out before `List` sees any of them — which means copying the
-    /// arithmetic `List` uses. Every length, height, scroll and selection
-    /// small enough to enumerate, against `List` itself: the scroll it
-    /// leaves, the selection it settles on, and the rows it draws.
-    #[test]
-    fn the_window_is_the_one_list_would_have_scrolled_to() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        for len in 1..=8usize {
-            for height in 1..=5u16 {
-                for offset in 0..=10 {
-                    for selected in std::iter::once(None).chain((0..=9).map(Some)) {
-                        let list = List::new((0..len).map(|i| ListItem::new(i.to_string())));
-                        let mut state = ListState::default()
-                            .with_offset(offset)
-                            .with_selected(selected);
-                        let mut terminal = Terminal::new(TestBackend::new(4, height)).unwrap();
-                        terminal
-                            .draw(|frame| {
-                                frame.render_stateful_widget(list, frame.area(), &mut state);
-                            })
-                            .unwrap();
-                        let buffer = terminal.backend().buffer();
-                        let drawn: Vec<usize> = (0..height)
-                            .filter_map(|y| buffer[(0, y)].symbol().parse().ok())
-                            .collect();
-
-                        let case =
-                            format!("{len} long, {height} high, from {offset} with {selected:?}");
-                        let (shown, chosen) = window(selected, offset, len, usize::from(height));
-                        assert_eq!(shown.start, state.offset(), "the scroll: {case}");
-                        assert_eq!(chosen, state.selected(), "the selection: {case}");
-                        assert_eq!(drawn, shown.collect::<Vec<_>>(), "the rows: {case}");
-                    }
-                }
-            }
-        }
     }
 
     /// Building only the rows on screen means `List` is handed a window and

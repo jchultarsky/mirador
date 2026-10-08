@@ -368,7 +368,13 @@ pub fn percent(part: u64, whole: u64) -> u16 {
 /// draw — no disks, no battery, no sensors. Each line is ellipsised to the
 /// width, so a narrow panel shows a marked cut rather than the terminal's
 /// silent one (invariant 19), and an empty line keeps its row without
-/// drawing anything. Lines past the bottom of the area are not drawn.
+/// drawing anything.
+///
+/// Lines past the bottom of the area are not drawn, and that is a cut too:
+/// when one of them had something to say, the last row drawn ends in `…`,
+/// alone if that row is a blank. It used to stop at the edge with no mark,
+/// so a panel two rows short showed its first line as if it were the whole
+/// notice.
 pub fn draw_notice<S: AsRef<str>>(
     frame: &mut Frame,
     area: Rect,
@@ -377,18 +383,27 @@ pub fn draw_notice<S: AsRef<str>>(
 ) {
     let count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
     let top = area.y + area.height.saturating_sub(count) / 2;
+    let shown = usize::from(area.bottom() - top);
+    let dropped = lines
+        .iter()
+        .skip(shown)
+        .any(|line| !line.as_ref().is_empty());
     let style = Style::default().fg(theme.muted);
-    for (y, text) in (top..area.bottom()).zip(lines) {
+    for (row, (y, text)) in (top..area.bottom()).zip(lines).enumerate() {
         let text = text.as_ref();
-        if text.is_empty() {
+        let width = usize::from(area.width);
+        let text = if dropped && row + 1 == shown {
+            // `truncate` marks only a line too wide for its row; this one
+            // is marked for the rows under it, so the `…` goes on whether
+            // the line itself fits or not.
+            crate::grid::truncate(&format!("{text}\u{2026}"), width)
+        } else if text.is_empty() {
             continue;
-        }
+        } else {
+            crate::grid::truncate(text, width)
+        };
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                crate::grid::truncate(text, usize::from(area.width)),
-                style,
-            ))
-            .centered(),
+            Paragraph::new(Span::styled(text, style)).centered(),
             Rect::new(area.x, y, area.width, 1),
         );
     }
@@ -913,5 +928,63 @@ mod tests {
                 "`{name}` draws an idle and a saturated cpu in one colour"
             );
         }
+    }
+
+    /// A notice taller than its area loses rows off the bottom, and the
+    /// last row drawn says so with `…` — the rows below it are as much a cut
+    /// as a line too wide for its row (invariant 19). A notice that fits, or
+    /// whose dropped rows are only spacing, carries no mark. Swept over
+    /// every height and a range of widths with a blank between the lines,
+    /// because the row the cut lands on can be that blank.
+    #[test]
+    fn a_notice_cut_at_the_bottom_ends_in_an_ellipsis() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = crate::theme::Theme::default();
+        let notices: [&[&str]; 3] = [
+            &["No disks", "", "nothing mounted is readable"],
+            &["No battery", "this machine reports none"],
+            &["Reading disks", ""],
+        ];
+        let mut cut = 0;
+        for lines in notices {
+            for height in 1..=5u16 {
+                for width in 4..=40u16 {
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| draw_notice(frame, frame.area(), &theme, lines))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let rows: Vec<String> = (0..height)
+                        .map(|y| {
+                            (0..width)
+                                .map(|x| buffer[(x, y)].symbol())
+                                .collect::<String>()
+                                .trim()
+                                .to_string()
+                        })
+                        .collect();
+                    let dropped = lines
+                        .iter()
+                        .skip(usize::from(height))
+                        .any(|line| !line.is_empty());
+                    let marked = rows.iter().rev().find(|row| !row.is_empty());
+                    let case = format!("{lines:?} at {width}x{height}: {rows:?}");
+                    if dropped {
+                        cut += 1;
+                        assert!(
+                            marked.is_some_and(|row| row.ends_with('\u{2026}')),
+                            "rows were dropped without a mark: {case}"
+                        );
+                    } else if lines.iter().all(|line| line.len() < usize::from(width)) {
+                        assert!(
+                            rows.iter().all(|row| !row.contains('\u{2026}')),
+                            "a notice that fits is marked as cut: {case}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(cut > 0, "the sweep reached a height that drops a row");
     }
 }
