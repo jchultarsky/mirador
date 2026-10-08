@@ -149,6 +149,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   title and location are drawn on every frame, and line folding let either
   run to the whole 10MB the agenda reads; both are now kept to 400
   characters, far more than the panel shows.
+- **The watch log no longer reports tomorrow's meetings as new every
+  midnight.** The agenda reads a window of days starting today, so each
+  midnight brings in a day the previous read never looked at, and every
+  event on it, including the next instance of every repeating meeting, was
+  logged as having "appeared in your calendar". Only an event inside the
+  previous window is reported now: one past its end was out of view, not
+  missing.
+- **The agenda's `o` shows the whole path.** The calendar's path was drawn
+  as one line and the terminal cut it at the panel's edge, so the default
+  macOS path lost its filename at every width the panel takes, with no `…`
+  to say so. It wraps now, and a panel too short for all of it ends the
+  last row it has in `…`.
+- **The meeting under way keeps its location.** The `▸` beside it was
+  counted as four cells, its size in bytes, rather than two, so that row
+  cut its summary two cells early and dropped a location the rows around
+  it kept.
+- **The world clocks write `zones.toml` on the first run.** The list from
+  `[clocks].zones` was meant to be saved on the first run, but it was only
+  saved after a clock was changed from the panel. Until then the file did
+  not exist, `o` named a missing file, and the config was read again at
+  every launch, though the shipped config says it is read once. After the
+  first change, edits to the config stopped working with nothing to say
+  why. The list is now saved when the panel first starts, as the stock
+  watchlist is. If you have been editing `[clocks].zones` in your config,
+  this release copies it into `zones.toml` on first start, and from then
+  on you edit `zones.toml` or use the panel.
+- **A clock table taller than its panel scrolls with the cursor.** Clocks
+  past the bottom of the panel were cut off with nothing to mark them, and
+  the cursor could move onto one that was not drawn, where `d` would remove
+  a clock you could not see. The table now shows the part that holds the
+  selected clock. A message such as `o`'s path has a row of its own,
+  taken from spare room where there is any, instead of covering the last
+  clock, and `the big clock stays` now appears when there is no table
+  under the clock to show it with.
 
 ## [1.19.2] - 2026-10-07
 
