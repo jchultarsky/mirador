@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A symlinked config or data file stays a symlink.** A save writes a new
+  file and renames it into place, and a rename replaces whatever has the
+  name — so a `config.toml` linked into a dotfiles repository, or a task list
+  linked into a synced folder, was turned into a plain file by the first
+  change, and the copy the link pointed at silently stopped receiving
+  anything after it. Saves now go to the file at the end of the link, and a
+  link to a file that does not exist yet creates that file — but not the
+  folder it would be in, which is reported instead, so a link into a sync
+  folder not yet set up never gets a default file put where the real one is
+  about to arrive. A loop of links is refused with an error rather than
+  replaced. A config linked into a read-only place, as Nix home-manager does,
+  is no longer replaced by a plain file either, so a layout change there now
+  reports that it could not be saved, reason first. `--reset-config` moves a
+  linked config aside as the link itself and writes the defaults to a new
+  file, so the file the link points at is left as it was. Both resets set a
+  link aside even when its file is missing, and a backup that is such a link
+  is never taken for a free name, so a later reset does not write through it.
+- **A failed save no longer leaves a temporary file behind.** Each save is
+  written to a temporary under a name of its own first, and when the write or
+  the rename failed it stayed there. A failed save is tried again at the next
+  change, so a full disk, or a task list held open by another program on
+  Windows, gathered one more `.tmp` file beside your data for every attempt.
+- **A file you restricted is never written anywhere wider.** The mode of a
+  `chmod 600` task list was copied onto the replacement only after the whole
+  list had been written into it and flushed, so for that moment it sat in a
+  file the umask had made readable by every account on the machine. The
+  replacement is now created with the original's mode before anything is
+  written into it.
+
 ## [1.19.2] - 2026-10-07
 
 ### Fixed
