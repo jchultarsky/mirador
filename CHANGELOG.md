@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-10-08
+
 ### Added
 
 - **A note's body takes the line keys every one-line field has.** `Ctrl+E`
@@ -2816,7 +2818,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.21.0...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.22.0...HEAD
+[1.22.0]: https://github.com/jchultarsky/mirador/compare/v1.21.0...v1.22.0
 [1.21.0]: https://github.com/jchultarsky/mirador/compare/v1.20.0...v1.21.0
 [1.20.0]: https://github.com/jchultarsky/mirador/compare/v1.19.2...v1.20.0
 [1.19.2]: https://github.com/jchultarsky/mirador/compare/v1.19.1...v1.19.2
