@@ -407,36 +407,9 @@ mod tests {
 
     /// Render the empty panel and read the words back off the screen.
     fn empty_panel_text(config: &crate::config::Config) -> String {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let gradients = config.theme.gradients();
         let mut panel = WatchLogPanel::new();
-        let (w, h) = (60u16, 14u16);
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: false,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..h)
-            .map(|y| {
-                (0..w)
-                    .filter_map(|x| buffer.cell((x, y)).map(|c| c.symbol().to_string()))
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let buffer = crate::widgets::testing::render_in(&mut panel, 60, 14, &config.theme, false);
+        crate::widgets::testing::rows(&buffer).join("\n")
     }
 
     /// The empty panel must not claim anything about whether a calendar is set,

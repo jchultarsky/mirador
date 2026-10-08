@@ -464,11 +464,7 @@ mod tests {
             terminal
                 .draw(|frame| picker.render(frame, frame.area(), &theme, |n| n == "clocks", error))
                 .unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            (0..h)
-                .map(|y| (0..w).map(|x| buffer[(x, y)].symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
+            crate::widgets::testing::rows(terminal.backend().buffer()).join("\n")
         };
         let picker = Picker::new(vec!["clocks".into(), "weather".into(), "cpu".into()]);
 
@@ -517,11 +513,7 @@ mod tests {
             terminal
                 .draw(|frame| picker.render(frame, frame.area(), &theme, |_| false, None))
                 .unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            (0..height)
-                .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
-                .collect::<Vec<_>>()
-                .join("\n")
+            crate::widgets::testing::rows(terminal.backend().buffer()).join("\n")
         };
 
         for height in 3..=30u16 {

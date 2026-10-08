@@ -380,8 +380,73 @@ pub fn line_ending(source: &str) -> &'static str {
     }
 }
 
+/// Scaffolding the whole crate's tests share.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A scratch directory of a test's own, created empty and removed when
+    /// it drops — on a failed assertion too, which is what the hand-rolled
+    /// `remove_dir_all` at the foot of a test never managed.
+    ///
+    /// The name carries the process id *and* a counter, so two tests are
+    /// never handed the same directory: not two binaries in one `cargo test`,
+    /// not two threads in one binary, not two calls with the same tag. Sharing
+    /// one is how the zone tests came to read each other's files on Windows.
+    /// The tag is only there to say whose directory it is when one is found.
+    pub(crate) struct TempDir(PathBuf);
+
+    impl TempDir {
+        pub(crate) fn new(tag: &str) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("mirador-{tag}-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl AsRef<Path> for TempDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The temporaries [`write_atomic`](super::write_atomic) left in `dir`.
+    ///
+    /// Read off the directory rather than worked out from the target's name:
+    /// the name has changed once (from a plain `.tmp` to one unique per
+    /// write), and a test checking the old name went on passing against a
+    /// path that was never created.
+    pub(crate) fn leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "tmp"))
+            .map(|path| path.display().to_string())
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::testing::{TempDir, leftovers};
     use super::*;
 
     /// A factory reset has to leave these files gone from where mirador looks,
@@ -390,9 +455,7 @@ mod tests {
     /// unforgivable thing this program could do.
     #[test]
     fn moving_aside_leaves_nothing_behind_and_loses_nothing() {
-        let dir = std::env::temp_dir().join(format!("mirador-aside-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let dir = TempDir::new("aside");
 
         let path = dir.join("todos.toml");
         std::fs::write(&path, "title = \"do not lose me\"").expect("writes");
@@ -412,16 +475,12 @@ mod tests {
             move_aside(&path).expect("no error").is_none(),
             "moving an absent file is a normal outcome, not a failure"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Reset twice and the first rescue must survive the second.
     #[test]
     fn a_second_move_does_not_overwrite_the_first_backup() {
-        let dir = std::env::temp_dir().join(format!("mirador-aside2-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let dir = TempDir::new("aside2");
 
         let path = dir.join("notes.toml");
         std::fs::write(&path, "first").expect("writes");
@@ -435,36 +494,6 @@ mod tests {
             "first",
             "the first backup must not have been clobbered"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    struct TempDir(std::path::PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("mirador-store-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-        fn join(&self, name: &str) -> std::path::PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mirador-store-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test directory");
-        dir
     }
 
     /// Two mirador windows is an ordinary way to use a dashboard — one per
@@ -475,7 +504,7 @@ mod tests {
     /// saved" for no reason at all.
     #[test]
     fn concurrent_writers_do_not_take_each_others_saves_away() {
-        let dir = scratch("concurrent");
+        let dir = TempDir::new("concurrent");
         let path = dir.join("todos.toml");
         let (a, b) = ("A".repeat(20_000), "B".repeat(20_000));
 
@@ -505,8 +534,6 @@ mod tests {
             );
         }
         assert_eq!(failures, 0, "{failures} of 800 concurrent saves failed");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A rename puts a *new* file in place, created per the umask. Somebody who
@@ -516,7 +543,7 @@ mod tests {
     #[test]
     fn a_restricted_file_stays_restricted_after_a_save() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = scratch("perms");
+        let dir = TempDir::new("perms");
         let path = dir.join("todos.toml");
 
         std::fs::write(&path, "before").expect("write");
@@ -525,8 +552,6 @@ mod tests {
         write_atomic(&path, "after").expect("saves");
         let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "the file was widened to {mode:o}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -550,22 +575,13 @@ mod tests {
         );
     }
 
-    /// Every temporary still sitting in `dir`.
-    fn leftovers(dir: &Path) -> Vec<String> {
-        std::fs::read_dir(dir)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|path| path.extension().is_some_and(|ext| ext == "tmp"))
-            .map(|path| path.display().to_string())
-            .collect()
-    }
-
+    /// A write leaves the file it wrote and nothing else.
     #[test]
     fn no_temp_file_is_left_behind() {
         let dir = TempDir::new("tidy");
         let path = dir.join("notes.toml");
         write_atomic(&path, "x").unwrap();
-        let left = leftovers(&dir.0);
+        let left = leftovers(&dir);
         assert!(left.is_empty(), "left behind: {left:?}");
     }
 
@@ -626,7 +642,7 @@ mod tests {
         // tried again on the next keystroke under a fresh name, so a leftover
         // here is one more file beside the user's data for every key pressed
         // while the fault lasts.
-        let left = leftovers(&dir.0);
+        let left = leftovers(&dir);
         assert!(left.is_empty(), "a failed save left behind: {left:?}");
     }
 
@@ -702,7 +718,7 @@ mod tests {
             "the error must name the path: {err:#}"
         );
         assert!(is_link(&a) && is_link(&b), "a link was replaced");
-        let left = leftovers(&dir.0);
+        let left = leftovers(&dir);
         assert!(left.is_empty(), "left behind: {left:?}");
     }
 

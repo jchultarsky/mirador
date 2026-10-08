@@ -2330,6 +2330,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::config::{Layout as LayoutConfig, LayoutPanel, LayoutRow};
+    use crate::store::testing::TempDir;
 
     /// A config whose layout is only panels that need no I/O.
     fn config_with(widgets: &[&str]) -> Config {
@@ -2390,10 +2391,7 @@ mod tests {
         terminal
             .draw(|frame| app.render_status_bar(frame, Rect::new(0, 0, width, 1)))
             .expect("draws");
-        let buffer = terminal.backend().buffer();
-        (0..width)
-            .map(|x| buffer[(x, 0)].symbol())
-            .collect::<String>()
+        crate::widgets::testing::rows(terminal.backend().buffer()).concat()
     }
 
     fn widths(app: &App) -> Vec<u16> {
@@ -3032,9 +3030,6 @@ mod tests {
     /// the status bar and in the help. What is gone is being told you *should*.
     #[test]
     fn a_layout_missing_widgets_is_not_advertised_anywhere() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
         // One panel out of fourteen, so thirteen are unused — the loudest possible
         // case for the hint that used to be here.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
@@ -3042,17 +3037,7 @@ mod tests {
             if help {
                 app.handle_key(KeyEvent::from(KeyCode::Char('?')));
             }
-            let mut terminal = Terminal::new(TestBackend::new(200, 40)).unwrap();
-            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-            let buffer = terminal.backend().buffer().clone();
-            (0..40)
-                .map(|y| {
-                    (0..200)
-                        .map(|x| buffer[(x, y)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            drawn(app, 200, 40).join("\n")
         };
 
         let dashboard = screen(&mut app, false);
@@ -3081,21 +3066,9 @@ mod tests {
     /// a constant that happened to equal 9.
     #[test]
     fn the_help_overlay_sizes_its_key_column_to_the_keys_it_shows() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
-        terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let rows: Vec<String> = (0..40)
-            .map(|y| {
-                (0..120)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect();
+        let rows = drawn(&mut app, 120, 40);
 
         let widest = app
             .keymap
@@ -3128,10 +3101,8 @@ mod tests {
 
     /// Two list panels with their files in a scratch directory, so nothing a
     /// test does can reach the user's own tasks or notes.
-    fn two_lists(name: &str) -> (Config, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("mirador-app-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn two_lists(name: &str) -> (Config, TempDir) {
+        let dir = TempDir::new(&format!("app-{name}"));
         let mut config = config_with(&["notes", "todo"]);
         config.notes.file = Some(dir.join("notes.toml"));
         config.todo.file = Some(dir.join("todos.toml"));
@@ -3144,10 +3115,7 @@ mod tests {
         use ratatui::backend::TestBackend;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(terminal.backend().buffer())
     }
 
     /// The screen row carrying the selection marker inside `area`, if any.
@@ -3278,9 +3246,7 @@ mod tests {
     /// the plumbing that calls it.
     #[test]
     fn a_preference_moved_off_the_config_is_written_and_moved_back_is_retracted() {
-        let dir = std::env::temp_dir().join(format!("mirador-prefs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("prefs");
         let path = dir.join("state.toml");
         let config = config_with(&["clocks"]);
         let baseline = crate::state::UiState::from_config(&config);
@@ -3302,7 +3268,6 @@ mod tests {
             !written.contains("clocks_show_seconds"),
             "toggled back to the config's value, the entry is gone: {written:?}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The picker's edit reaches the config file as a textual edit that keeps
@@ -3311,9 +3276,7 @@ mod tests {
     /// calling `layout_edit` directly.
     #[test]
     fn a_picker_change_is_written_to_the_config_and_an_uneditable_file_is_reported() {
-        let dir = std::env::temp_dir().join(format!("mirador-layout-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("layout");
 
         // One panel per line, the way the shipped config is written: the
         // editor rebuilds a row from captured panel *lines*, and a comment
@@ -3369,7 +3332,6 @@ mod tests {
             sections,
             "and left untouched"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3504,19 +3466,11 @@ mod tests {
 
     #[test]
     fn the_hint_gives_way_to_the_global_keys_on_a_narrow_terminal() {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
             "9.9.9".to_string(),
         ))));
-        let row_text = |app: &mut App, width: u16| -> String {
-            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
-            terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-            let buf = terminal.backend().buffer().clone();
-            (0..width).map(|x| buf[(x, 5)].symbol()).collect()
-        };
+        let row_text = |app: &mut App, width: u16| -> String { drawn(app, width, 6)[5].clone() };
 
         // Wide enough for the global keys *and* the notice.
         let wide = row_text(&mut app, 200);
@@ -4041,10 +3995,8 @@ mod tests {
 
     /// `config` with `[keys]` set from `toml_text`.
     fn with_keys(config: Config, toml_text: &str) -> Config {
-        let mut tables: std::collections::BTreeMap<String, crate::keymap::KeysConfig> =
-            toml::from_str(toml_text).expect("valid TOML");
         Config {
-            keys: tables.remove("keys").expect("a [keys] table"),
+            keys: crate::keymap::keys_config(toml_text),
             ..config
         }
     }
@@ -4120,28 +4072,21 @@ mod tests {
     }
 
     /// A config file of its own, removed when the test ends.
-    struct KeysFile(std::path::PathBuf);
+    struct KeysFile {
+        path: std::path::PathBuf,
+        _dir: TempDir,
+    }
 
     impl KeysFile {
         fn new(name: &str, text: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("mirador-keymap-{}-{name}", std::process::id()));
-            std::fs::create_dir_all(&dir).expect("dir");
+            let dir = TempDir::new(&format!("keymap-{name}"));
             let path = dir.join("config.toml");
             std::fs::write(&path, text).expect("write");
-            Self(path)
+            Self { path, _dir: dir }
         }
 
         fn text(&self) -> String {
-            std::fs::read_to_string(&self.0).expect("read")
-        }
-    }
-
-    impl Drop for KeysFile {
-        fn drop(&mut self) {
-            if let Some(dir) = self.0.parent() {
-                let _ = std::fs::remove_dir_all(dir);
-            }
+            std::fs::read_to_string(&self.path).expect("read")
         }
     }
 
@@ -4197,7 +4142,7 @@ mod tests {
     fn reload_applies_a_good_edit_and_refuses_a_bad_one() {
         let file = KeysFile::new("reload", "[keys]\nquit = \"x\"\n");
         let mut app = App::new(config_with(&["clocks"])).unwrap();
-        app.write_layout_to(file.0.clone());
+        app.write_layout_to(file.path.clone());
         open_key_map(&mut app);
 
         app.handle_key(KeyEvent::from(KeyCode::Char('r')));
@@ -4207,7 +4152,7 @@ mod tests {
             "the edit is live"
         );
 
-        std::fs::write(&file.0, "[keys]\ntheme = \"q\"\n").expect("write");
+        std::fs::write(&file.path, "[keys]\ntheme = \"q\"\n").expect("write");
         app.handle_key(KeyEvent::from(KeyCode::Char('r')));
         assert_eq!(
             app.keymap.action(KeyEvent::from(KeyCode::Char('x'))),
@@ -4227,7 +4172,7 @@ mod tests {
             "[cpu]\nhistory = 5\n\n[cpu.keys]\nper_core = \"p\"\n",
         );
         let mut app = App::new(config_with(&["cpu"])).unwrap();
-        app.write_layout_to(file.0.clone());
+        app.write_layout_to(file.path.clone());
         let press = |app: &mut App, c| {
             app.slots[0]
                 .panel
@@ -4284,7 +4229,7 @@ mod tests {
         let file = KeysFile::new("reset", "[general]\nmouse = true\n\n[keys]\nquit = \"x\"\n");
         let config = with_keys(config_with(&["clocks"]), "[keys]\nquit = \"x\"");
         let mut app = App::new(config).unwrap();
-        app.write_layout_to(file.0.clone());
+        app.write_layout_to(file.path.clone());
         open_key_map(&mut app);
 
         app.handle_key(KeyEvent::from(KeyCode::Char('d')));
@@ -4346,7 +4291,7 @@ mod tests {
     fn reload_gives_arrange_mode_its_new_keys() {
         let file = KeysFile::new("arrange", "[arrange.keys]\nkeep = \"space\"\n");
         let mut app = App::new(resizable()).expect("builds");
-        app.write_layout_to(file.0.clone());
+        app.write_layout_to(file.path.clone());
         open_key_map(&mut app);
         app.handle_key(KeyEvent::from(KeyCode::Char('r')));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
@@ -4368,7 +4313,7 @@ mod tests {
              [help_overlay.keys]\ndown = \"s\"\n",
         );
         let mut app = App::new(config_with(&["clocks"])).expect("builds");
-        app.write_layout_to(file.0.clone());
+        app.write_layout_to(file.path.clone());
         open_key_map(&mut app);
         app.handle_key(KeyEvent::from(KeyCode::Char('r')));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
@@ -4392,6 +4337,63 @@ mod tests {
             Some(crate::keymap::HelpAction::Down),
             "and the help overlay's"
         );
+    }
+
+    /// The keys the shell holds live for the mode `[<mode>.keys]` configures,
+    /// as the key map would list them. A mode with no arm here is one whose
+    /// table nothing reads, and says so.
+    fn live_mode_keys(app: &App, mode: &str) -> Vec<(&'static str, Vec<crate::keymap::Key>)> {
+        let listing = match mode {
+            "arrange" => app.arrange_keys.listing(),
+            "panel_picker" => app.panel_picker_keys.listing(),
+            "theme_picker" => app.theme_picker_keys.listing(),
+            "help_overlay" => app.help_keys.listing(),
+            other => panic!("[{other}.keys] is a mode the shell holds no live keys for"),
+        };
+        listing
+            .into_iter()
+            .map(|listed| (listed.name, listed.keys))
+            .collect()
+    }
+
+    /// Every table in `MODE_SCOPES` reaches a field the shell reads keys
+    /// from. The tests above each name the modes they knew of; this one asks
+    /// the list, so a mode added to it whose reload lands nowhere — checked,
+    /// listed in the key map, reset, and never in force — fails here.
+    #[test]
+    fn every_mode_table_reloads_into_the_keys_the_shell_reads() {
+        for scope in crate::keymap::MODE_SCOPES {
+            let defaults = (scope.listing)(&crate::keymap::KeysConfig::default()).expect("valid");
+            let moved = defaults.first().expect("a mode has keys").name;
+            let table = format!("{moved} = \"f9\"\n");
+            let file = KeysFile::new(
+                &format!("mode-{}", scope.widget),
+                &format!("[{}.keys]\n{table}", scope.widget),
+            );
+            let mut app = App::new(config_with(&["clocks"])).expect("builds");
+            app.write_layout_to(file.path.clone());
+            assert_ne!(
+                live_mode_keys(&app, scope.widget)[0].1,
+                vec!["f9".parse::<crate::keymap::Key>().expect("a key")],
+                "{}: f9 is not already the default",
+                scope.widget
+            );
+
+            app.reload_keys();
+
+            let written: crate::keymap::KeysConfig = toml::from_str(&table).expect("a table");
+            let expected: Vec<_> = (scope.listing)(&written)
+                .expect("valid")
+                .into_iter()
+                .map(|listed| (listed.name, listed.keys))
+                .collect();
+            assert_eq!(
+                live_mode_keys(&app, scope.widget),
+                expected,
+                "[{}.keys] reloaded into nothing the shell reads",
+                scope.widget
+            );
+        }
     }
 
     /// An open picker is offered every key before resizing is, so a picker
@@ -4441,9 +4443,8 @@ mod tests {
         for key in [KeyCode::Home, KeyCode::Down, KeyCode::End] {
             app.handle_key(KeyEvent::from(key));
             terminal.draw(|frame| app.render_for_test(frame)).unwrap();
-            let buffer = terminal.backend().buffer();
-            let footer = (0..24)
-                .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            let footer = crate::widgets::testing::rows(terminal.backend().buffer())
+                .into_iter()
                 .find(|row| row.contains("key map"))
                 .expect("the footer row");
             let text = footer.split('│').nth(1).expect("inside the overlay").trim();
@@ -4479,9 +4480,8 @@ mod tests {
             "the test needs an overlay that scrolls"
         );
 
-        let buffer = terminal.backend().buffer();
-        let footer = (0..24)
-            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+        let footer = crate::widgets::testing::rows(terminal.backend().buffer())
+            .into_iter()
             .find(|row| row.contains("key map"))
             .expect("the footer row");
         let text = footer.split('│').nth(1).expect("inside the overlay").trim();
@@ -4862,9 +4862,7 @@ mod tests {
     /// opened a new task, a space marked one done and `dy` deleted it.
     #[test]
     fn a_paste_stops_at_the_newline_that_closes_a_one_line_form() {
-        let dir = std::env::temp_dir().join(format!("mirador-paste-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("paste");
         let file = dir.join("todos.toml");
         // Empty rather than absent, so the store does not seed examples.
         std::fs::write(&file, "").unwrap();
@@ -4891,7 +4889,6 @@ mod tests {
             !app.focus_captures_input(),
             "and the list is back, not a second form"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A paste is text, and a delete confirmation takes no text. The shell
@@ -4926,9 +4923,7 @@ mod tests {
             app.handle_key(key(KeyCode::Enter));
         }
 
-        let dir = std::env::temp_dir().join(format!("mirador-confirm-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("confirm");
 
         // Empty rather than absent, so neither store seeds its examples.
         let tasks = dir.join("todos.toml");
@@ -4972,8 +4967,6 @@ mod tests {
                 .symbols()
                 .len()
         });
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Previewing is not choosing. Every arrow key in the theme picker used to
@@ -4981,9 +4974,7 @@ mod tests {
     /// killed mid-browse came back in a theme nobody picked.
     #[test]
     fn browsing_themes_writes_nothing_until_one_is_chosen() {
-        let dir = std::env::temp_dir().join(format!("mirador-browse-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("browse");
         let path = dir.join("state.toml");
         let config = config_with(&["clocks"]);
         let baseline = crate::state::UiState::from_config(&config);
@@ -5016,7 +5007,6 @@ mod tests {
             written.contains(&chosen),
             "the theme chosen is the one written: {written}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Arrange mode is a commit point: Keep writes and Esc puts everything
@@ -5024,9 +5014,7 @@ mod tests {
     /// pause before Esc left the file holding widths the screen had undone.
     #[test]
     fn a_resize_inside_arrange_mode_waits_for_the_mode_to_close() {
-        let dir = std::env::temp_dir().join(format!("mirador-settle-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("settle");
         let text = "[layout]\nrows = [\n  { height = 1, panels = [\n    { widget = \"clocks\",   width = 50 },\n    { widget = \"calendar\", width = 50 },\n  ] },\n]\n";
         let path = dir.join("config.toml");
         std::fs::write(&path, text).unwrap();
@@ -5064,7 +5052,6 @@ mod tests {
             text,
             "outside the mode a settled resize is written"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Ctrl+C in arrange mode keeps the arrangement, as Keep would; only Esc
@@ -5072,9 +5059,7 @@ mod tests {
     /// the exit path cannot quietly reverse it.
     #[test]
     fn ctrl_c_in_arrange_mode_keeps_the_arrangement() {
-        let dir = std::env::temp_dir().join(format!("mirador-ctrlc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("ctrlc");
         let text = "[layout]\nrows = [\n  { height = 1, panels = [\n    { widget = \"clocks\",   width = 50 },\n    { widget = \"calendar\", width = 50 },\n  ] },\n]\n";
         let path = dir.join("config.toml");
         std::fs::write(&path, text).unwrap();
@@ -5099,7 +5084,6 @@ mod tests {
             saved, arranged,
             "the arrangement on screen is the one written"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The write on the way out is the last chance to keep a resize made just
@@ -5107,9 +5091,7 @@ mod tests {
     /// handed back for `main` to print once the terminal is restored.
     #[test]
     fn a_layout_that_cannot_be_written_on_the_way_out_is_handed_back() {
-        let dir = std::env::temp_dir().join(format!("mirador-exit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("exit");
         // Loads, but `layout_edit` only rewrites the `rows = [ … ]` form.
         let sections = "[[layout.rows]]\nheight = 1\n[[layout.rows.panels]]\nwidget = \"clocks\"\nwidth = 50\n[[layout.rows.panels]]\nwidget = \"calendar\"\nwidth = 50\n";
         let path = dir.join("config.toml");
@@ -5130,7 +5112,6 @@ mod tests {
             "it says what was lost and why: {report}"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), sections);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Keys go to an open shell dialog and nowhere else, and so does the

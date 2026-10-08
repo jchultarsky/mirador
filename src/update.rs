@@ -253,6 +253,7 @@ pub fn default_path(data_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     #[test]
     fn a_higher_version_in_any_position_is_newer() {
@@ -352,9 +353,9 @@ mod tests {
 
     #[test]
     fn a_cache_survives_a_round_trip() {
-        let dir = std::env::temp_dir().join(format!("mirador-update-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = default_path(&dir);
+        // A folder that does not exist yet, as on a first run.
+        let dir = TempDir::new("update");
+        let path = default_path(&dir.join("config"));
 
         let written = Cache {
             latest: Some("9.9.9".into()),
@@ -364,7 +365,5 @@ mod tests {
         let read = read_cache(&path);
         assert_eq!(read.latest.as_deref(), Some("9.9.9"));
         assert!(fresh(&read));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

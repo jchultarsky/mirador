@@ -1183,6 +1183,7 @@ const _: u16 = FRAME_HEIGHT;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// Every key in the map works and is advertised; see
     /// [`crate::keymap::assert_every_key_works`].
@@ -1201,10 +1202,7 @@ mod tests {
     /// by a test.
     #[test]
     fn f_asks_for_a_path_and_a_missing_file_is_refused_where_it_was_typed() {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-agenda-prompt-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("agenda-prompt");
         let ics = dir.join("cal.ics");
         let mut panel = AgendaPanel::new(&AgendaConfig::default(), ics.clone());
         let key = |code| KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
@@ -1234,7 +1232,6 @@ mod tests {
             "and a reload is under way"
         );
         assert_eq!(current_path(&panel.path), ics);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The scroll keys and the wheel have to move what is on screen. Until
@@ -1406,31 +1403,7 @@ mod tests {
 
     /// The panel drawn at `width` by `height`, one string per row.
     fn screen(panel: &mut AgendaPanel, width: u16, height: u16) -> Vec<String> {
-        use crate::panel::RenderContext;
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let theme = crate::theme::Theme::default();
-        let gradients = theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("backend");
-        terminal
-            .draw(|f| {
-                panel.render(
-                    f,
-                    Rect::new(0, 0, width, height),
-                    RenderContext {
-                        theme: &theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .expect("draws");
-        let buffer = terminal.backend().buffer();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(panel, width, height))
     }
 
     fn tz() -> TimeZone {
@@ -1463,9 +1436,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let dir = std::env::temp_dir().join(format!("mirador-agendapath-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let dir = TempDir::new("agendapath");
         let missing = dir.join("no-such-calendar.ics");
 
         let theme = crate::theme::Theme::default();
@@ -1498,14 +1469,7 @@ mod tests {
                 })
                 .expect("draws");
 
-            let buffer = terminal.backend().buffer();
-            let rows: Vec<String> = (0..24)
-                .map(|y| {
-                    (0..width)
-                        .map(|x| buffer[(x, y)].symbol())
-                        .collect::<String>()
-                })
-                .collect();
+            let rows = crate::widgets::testing::rows(terminal.backend().buffer());
             let screen = rows.join("\n");
 
             // Nothing may be drawn wider than the panel.
@@ -1525,8 +1489,6 @@ mod tests {
                 "the path was cut before its filename at width {width}:\n{screen}"
             );
         }
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A calendar is written by somebody else's software and grows without
@@ -1535,9 +1497,7 @@ mod tests {
     /// the size is checked before the read rather than regretted after it.
     #[test]
     fn a_calendar_too_large_to_be_a_calendar_is_refused_before_it_is_read() {
-        let dir = std::env::temp_dir().join(format!("mirador-ics-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test directory");
+        let dir = TempDir::new("ics");
         let path = dir.join("big.ics");
 
         // Sparse where the filesystem allows it, so this costs no real disk.
@@ -1557,8 +1517,6 @@ mod tests {
         let small = dir.join("small.ics");
         std::fs::write(&small, "BEGIN:VCALENDAR\nEND:VCALENDAR\n").expect("write");
         assert!(read_calendar(&small).is_ok());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1888,9 +1846,7 @@ mod tests {
     /// nothing about a running panel.
     #[test]
     fn a_read_says_where_its_window_ends() {
-        let dir = std::env::temp_dir().join(format!("mirador-agenda-until-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("agenda-until");
         let ics = dir.join("cal.ics");
         std::fs::write(&ics, "BEGIN:VCALENDAR\nEND:VCALENDAR\n").unwrap();
         let config = AgendaConfig {
@@ -1909,6 +1865,5 @@ mod tests {
         let tz = TimeZone::system();
         let expected = ical::local_midnight(today + Span::new().days(3), &tz).unwrap();
         assert_eq!(until, expected.timestamp());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

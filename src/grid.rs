@@ -1447,13 +1447,19 @@ mod tests {
         assert!(narrow.has("hour"), "required columns must survive");
     }
 
+    /// Fixed columns can exceed a tiny total, and the row must still not
+    /// overflow the area it is drawn into. This asserted `>= 4`, the
+    /// direction of the overflow it is named against, so a row of twelve —
+    /// what the fixed columns add up to before the clamp — passed it.
     #[test]
-    fn a_grid_with_no_room_still_produces_a_full_width_row() {
-        // Fixed columns can exceed a tiny total; the row must still not
-        // overflow the area it is drawn into by more than its declared width.
+    fn a_grid_with_no_room_is_cut_to_exactly_its_width() {
         let grid = Grid::new(&columns(), 4);
         let row = grid.row(&[Span::raw("14:00")]);
-        assert!(width_of(&row) >= 4);
+        assert_eq!(
+            width_of(&row),
+            4,
+            "a grid narrower than its fixed columns is cut to the width it was given"
+        );
     }
 
     #[test]

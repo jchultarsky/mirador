@@ -821,6 +821,7 @@ impl Zones {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     fn zone(label: &str, timezone: &str) -> ClockZone {
         ClockZone {
@@ -1010,9 +1011,7 @@ timezone = "Asia/Tokyo"
     /// before the save, so the comparison is of what the save wrote.
     #[test]
     fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
-        let dir = std::env::temp_dir().join(format!("mirador-zones-bytes-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("zones-bytes");
         let path = dir.join("zones.toml");
         std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
 
@@ -1023,7 +1022,6 @@ timezone = "Asia/Tokyo"
         zones.save().unwrap();
 
         let written = std::fs::read_to_string(&path);
-        let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(written.unwrap(), WRITTEN_BY_1_20_0);
     }
 

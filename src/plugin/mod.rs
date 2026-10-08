@@ -153,6 +153,39 @@ struct WireSpan {
     reversed: bool,
 }
 
+/// Spans for the tests to build frames from, so a literal names what it
+/// sets rather than spelling out all eight fields to change one.
+#[cfg(test)]
+impl WireSpan {
+    fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            fg: None,
+            bg: None,
+            bold: false,
+            dim: false,
+            italic: false,
+            underlined: false,
+            reversed: false,
+        }
+    }
+
+    fn fg(mut self, colour: &str) -> Self {
+        self.fg = Some(colour.into());
+        self
+    }
+
+    fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+
+    fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WireBinding {
@@ -1073,7 +1106,7 @@ fn wire_color(raw: &str, theme: &crate::theme::Theme) -> Option<Color> {
 mod tests {
     use std::io::{self, BufReader};
 
-    use super::process::{apply_message, read_limited_line};
+    use super::process::{apply_message, decode_line, read_limited_line};
     use super::*;
 
     fn detached_panel(policy: InputPolicy) -> PluginPanel {
@@ -1161,16 +1194,7 @@ mod tests {
             title: None,
             counter: None,
             lines: vec![WireLine {
-                spans: vec![WireSpan {
-                    text: text.into(),
-                    fg: None,
-                    bg: None,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underlined: false,
-                    reversed: false,
-                }],
+                spans: vec![WireSpan::plain(text)],
             }],
             bindings: Vec::new(),
             input: InputPolicy::default(),
@@ -1507,6 +1531,13 @@ mod tests {
     /// One JSON object per line, and the reader strips the line ending before
     /// decoding — including a `\r\n` from a plugin written on Windows. The
     /// documented examples are the lines.
+    ///
+    /// Read and decoded by the reader's own two steps. This used to strip
+    /// the ending with a copy of the reader's loop and decode the result,
+    /// which could not fail twice over: it never called the reader, and JSON
+    /// allows trailing whitespace, so `serde_json` takes a stray `\r` with or
+    /// without the strip. What can break for a Windows plugin is the read —
+    /// a `\r\n` line split at the `\r`, or refused as unterminated.
     #[test]
     fn a_documented_example_decodes_with_either_line_ending() {
         for value in documented_messages() {
@@ -1514,12 +1545,13 @@ mod tests {
                 continue;
             }
             for ending in ["\n", "\r\n"] {
-                let mut bytes = serde_json::to_vec(&value).unwrap();
-                bytes.extend_from_slice(ending.as_bytes());
-                while matches!(bytes.last(), Some(b'\n' | b'\r')) {
-                    bytes.pop();
-                }
-                let decoded: Result<PluginMessage, _> = serde_json::from_slice(&bytes);
+                let mut stream = serde_json::to_vec(&value).unwrap();
+                stream.extend_from_slice(ending.as_bytes());
+                let mut line = Vec::new();
+                read_limited_line(&mut std::io::BufReader::new(&stream[..]), &mut line)
+                    .expect("reads a line");
+                assert_eq!(line, stream, "the whole line, ending and all, is read");
+                let decoded = decode_line(&line);
                 assert!(
                     decoded.is_ok(),
                     "{:?} with {ending:?}: {:?}",
@@ -1556,26 +1588,8 @@ mod tests {
         let theme = crate::theme::Theme::default();
         let source = [WireLine {
             spans: vec![
-                WireSpan {
-                    text: "one ".into(),
-                    fg: Some("theme:accent".into()),
-                    bg: None,
-                    bold: true,
-                    dim: false,
-                    italic: false,
-                    underlined: false,
-                    reversed: false,
-                },
-                WireSpan {
-                    text: "two three".into(),
-                    fg: None,
-                    bg: None,
-                    bold: false,
-                    dim: false,
-                    italic: true,
-                    underlined: false,
-                    reversed: false,
-                },
+                WireSpan::plain("one ").fg("theme:accent").bold(),
+                WireSpan::plain("two three").italic(),
             ],
         }];
         let lines = wrapped_wire_lines(&source, 7, 2, &theme);
@@ -1603,16 +1617,7 @@ mod tests {
     fn a_glyph_wider_than_the_panel_is_replaced_not_spilled() {
         let theme = crate::theme::Theme::default();
         let source = [WireLine {
-            spans: vec![WireSpan {
-                text: "界界".into(),
-                fg: None,
-                bg: None,
-                bold: false,
-                dim: false,
-                italic: false,
-                underlined: false,
-                reversed: false,
-            }],
+            spans: vec![WireSpan::plain("界界")],
         }];
         let lines = wrapped_wire_lines(&source, 1, 2, &theme);
         assert_eq!(lines.len(), 2);
@@ -1632,26 +1637,8 @@ mod tests {
         let theme = crate::theme::Theme::default();
         let source = [WireLine {
             spans: vec![
-                WireSpan {
-                    text: "👩".into(),
-                    fg: Some("theme:accent".into()),
-                    bg: None,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underlined: false,
-                    reversed: false,
-                },
-                WireSpan {
-                    text: "\u{200d}💻".into(),
-                    fg: Some("theme:text".into()),
-                    bg: None,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underlined: false,
-                    reversed: false,
-                },
+                WireSpan::plain("👩").fg("theme:accent"),
+                WireSpan::plain("\u{200d}💻").fg("theme:text"),
             ],
         }];
         let lines = wrapped_wire_lines(&source, 2, 1, &theme);

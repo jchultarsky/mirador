@@ -255,6 +255,7 @@ impl Drop for MovedExecutable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     #[test]
     fn cargo_root_is_the_parent_of_a_bin_directory() {
@@ -281,10 +282,7 @@ mod tests {
 
     #[test]
     fn a_sibling_updater_wins_without_a_cargo_receipt() {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-upgrade-method-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("upgrade-method");
         let current = dir.join(if cfg!(windows) {
             "mirador.exe"
         } else {
@@ -298,29 +296,17 @@ mod tests {
         std::fs::write(&updater, b"updater").unwrap();
 
         assert_eq!(method(&current).unwrap(), Method::Installer(updater));
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(windows)]
     mod windows {
         use super::*;
 
-        struct TempDir(PathBuf);
-
-        impl Drop for TempDir {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-
         fn executable(name: &str) -> (PathBuf, TempDir) {
-            let dir =
-                std::env::temp_dir().join(format!("mirador-upgrade-{}-{name}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new(&format!("upgrade-{name}"));
             let path = dir.join("mirador.exe");
             std::fs::write(&path, b"old").unwrap();
-            (path, TempDir(dir))
+            (path, dir)
         }
 
         #[test]
@@ -339,7 +325,7 @@ mod tests {
         #[test]
         fn a_failed_updater_restores_the_running_executable() {
             let (current, guard) = executable("failed-command");
-            let method = Method::Installer(guard.0.join("missing-updater.exe"));
+            let method = Method::Installer(guard.join("missing-updater.exe"));
 
             let error = run_on_windows(&current, &method).unwrap_err();
             assert!(error.to_string().contains("starting the updater"));

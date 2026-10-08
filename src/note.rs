@@ -252,21 +252,12 @@ fn example_note(today: Date) -> Note {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::store::testing::TempDir;
 
     fn store(name: &str) -> (NoteStore, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-note-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("note-{name}"));
         let store = NoteStore::load(dir.join("notes.toml")).unwrap();
-        (store, TempDir(dir))
+        (store, dir)
     }
 
     fn today() -> Date {
@@ -275,10 +266,7 @@ mod tests {
 
     #[test]
     fn a_first_run_is_seeded_and_an_emptied_file_stays_empty() {
-        let dir = std::env::temp_dir().join(format!("mirador-note-{}-seed", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let _guard = TempDir(dir.clone());
+        let dir = TempDir::new("note-seed");
         let path = dir.join("notes.toml");
 
         let mut s = NoteStore::load_or_seed(&path, jiff::civil::date(2026, 7, 25)).unwrap();
@@ -357,7 +345,7 @@ created = "2026-10-02"
     #[test]
     fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
         let (_, guard) = store("bytes");
-        let path = guard.0.join("notes.toml");
+        let path = guard.join("notes.toml");
         std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
 
         let mut s = NoteStore::load(&path).unwrap();
@@ -447,7 +435,7 @@ created = "2026-10-02"
     #[test]
     fn a_repeated_id_in_the_file_is_renumbered_so_each_key_acts_on_one_note() {
         let (_, guard) = store("dup");
-        let path = guard.0.join("notes.toml");
+        let path = guard.join("notes.toml");
         let block = |title: &str| {
             format!("[[note]]\nid = 2\ntitle = \"{title}\"\ncreated = \"2026-07-25\"\n\n")
         };

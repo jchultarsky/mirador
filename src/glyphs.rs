@@ -206,6 +206,26 @@ pub enum Sky {
     Unknown,
 }
 
+#[cfg(test)]
+impl Sky {
+    /// Every sky, for the sweeps that must see each one: the art and the
+    /// mark's width (invariant 10). They each carried a list of their own,
+    /// and a sky missing from a list is one the sweep never looks at.
+    /// `every_sky_the_weather_can_show_is_swept` holds this one to `sky`.
+    pub const ALL: [Self; 10] = [
+        Self::Clear,
+        Self::PartlyCloudy,
+        Self::Overcast,
+        Self::Fog,
+        Self::Drizzle,
+        Self::Rain,
+        Self::Showers,
+        Self::Snow,
+        Self::Thunder,
+        Self::Unknown,
+    ];
+}
+
 /// Classify a WMO 4677 code, which is what Open-Meteo reports.
 pub fn sky(code: u8) -> Sky {
     match code {
@@ -498,18 +518,7 @@ mod tests {
 
     #[test]
     fn every_sky_has_rectangular_art_of_the_declared_size() {
-        for s in [
-            Sky::Clear,
-            Sky::PartlyCloudy,
-            Sky::Overcast,
-            Sky::Fog,
-            Sky::Drizzle,
-            Sky::Rain,
-            Sky::Showers,
-            Sky::Snow,
-            Sky::Thunder,
-            Sky::Unknown,
-        ] {
+        for s in Sky::ALL {
             let rows = art(s);
             assert_eq!(rows.len(), ART_HEIGHT, "{s:?} has the wrong height");
             for row in rows {
@@ -532,24 +541,28 @@ mod tests {
     #[test]
     fn every_sky_mark_has_a_predictable_display_width() {
         use unicode_width::UnicodeWidthStr;
-        for s in [
-            Sky::Clear,
-            Sky::PartlyCloudy,
-            Sky::Overcast,
-            Sky::Fog,
-            Sky::Drizzle,
-            Sky::Rain,
-            Sky::Showers,
-            Sky::Snow,
-            Sky::Thunder,
-            Sky::Unknown,
-        ] {
+        for s in Sky::ALL {
             let mark = mark(s);
             let width = UnicodeWidthStr::width(mark);
             assert_eq!(
                 width, 2,
                 "{s:?} mark `{mark}` measures {width}; emoji that measure 1 but \
                  draw 2 break every column after them"
+            );
+        }
+    }
+
+    /// `Sky::ALL` is a list, and a list can be left behind: a new sky with
+    /// a mark that measures 1 and draws 2 would ship past the width sweep if
+    /// nobody added it there. Every sky the weather can be is one `sky`
+    /// returns for some code, and a code is a byte, so all of them are asked.
+    #[test]
+    fn every_sky_the_weather_can_show_is_swept() {
+        for code in 0..=u8::MAX {
+            let s = sky(code);
+            assert!(
+                Sky::ALL.contains(&s),
+                "code {code} is {s:?}, which `Sky::ALL` does not list"
             );
         }
     }

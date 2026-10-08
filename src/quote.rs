@@ -479,6 +479,7 @@ fn bucket_means(series: &[f64], n: usize) -> impl Iterator<Item = f64> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// The rule that no test opens a socket, made checkable (#147).
     ///
@@ -810,21 +811,11 @@ mod tests {
 
     // -- watchlist ----------------------------------------------------------
 
-    struct TempDir(PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     fn watchlist(name: &str, seed: &[&str]) -> (Watchlist, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-watch-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("watch-{name}"));
         let seed: Vec<String> = seed.iter().map(|s| (*s).to_string()).collect();
         let list = Watchlist::load(dir.join("watchlist.toml"), &seed).unwrap();
-        (list, TempDir(dir))
+        (list, dir)
     }
 
     #[test]
@@ -836,7 +827,7 @@ mod tests {
         // Reloading with a *different* seed must not resurrect it: once the
         // file exists it is the truth, or removing a symbol would never stick.
         let reloaded =
-            Watchlist::load(guard.0.join("watchlist.toml"), &["TSLA".to_string()]).unwrap();
+            Watchlist::load(guard.join("watchlist.toml"), &["TSLA".to_string()]).unwrap();
         assert_eq!(reloaded.symbols(), ["AAPL", "MSFT"]);
     }
 
@@ -863,7 +854,7 @@ mod tests {
         assert!(list.remove("aapl"), "removal is case-insensitive too");
         list.save().unwrap();
 
-        let reloaded = Watchlist::load(guard.0.join("watchlist.toml"), &[]).unwrap();
+        let reloaded = Watchlist::load(guard.join("watchlist.toml"), &[]).unwrap();
         assert_eq!(reloaded.symbols(), ["MSFT"]);
     }
 
@@ -885,7 +876,7 @@ symbols = [
     #[test]
     fn a_file_from_1_20_0_is_written_back_byte_for_byte() {
         let (_, guard) = watchlist("bytes", &[]);
-        let path = guard.0.join("watchlist.toml");
+        let path = guard.join("watchlist.toml");
         std::fs::write(&path, WRITTEN_BY_1_20_0).unwrap();
 
         let mut list = Watchlist::load(&path, &["TSLA".to_string()]).unwrap();
@@ -902,7 +893,7 @@ symbols = [
         let (mut list, guard) = watchlist("empty", &[]);
         list.save().unwrap();
         assert!(
-            !guard.0.join("watchlist.toml").exists(),
+            !guard.join("watchlist.toml").exists(),
             "nothing to persist yet"
         );
     }

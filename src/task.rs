@@ -650,6 +650,7 @@ fn cmp_due(a: &Task, b: &Task) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// The README shows a `todos.toml` and tells people they can edit it by
     /// hand. A wrong example there is worse than no example, because it fails
@@ -1206,26 +1207,6 @@ created = "2026-10-07"
 
     /// A unique scratch directory, removed when the returned guard drops.
     fn tempdir() -> TempDir {
-        let base = std::env::temp_dir().join(format!(
-            "mirador-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&base).unwrap();
-        TempDir(base)
-    }
-
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn join(&self, name: &str) -> PathBuf {
-            self.0.join(name)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+        TempDir::new("task")
     }
 }

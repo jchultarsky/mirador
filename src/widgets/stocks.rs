@@ -1010,7 +1010,7 @@ impl Panel for StocksPanel {
         //
         // Saturating because the sum is not, and `u16::MAX` was already being
         // reached for on the line above. Nothing bounds a watchlist — it is a
-        // file the reader edits — and 65_534 symbols wrapped this to 3, which
+        // file the reader edits — and 65_534 symbols wrapped this to 1, which
         // is a panel that collapses rather than one that is merely too tall.
         // Same shape as `glyphs::width_of` overflowing at ten thousand
         // characters: unreachable in practice, one line to close.
@@ -1195,15 +1195,8 @@ impl Drop for StocksPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
     use ratatui::crossterm::event::KeyModifiers;
-
-    struct TempDir(std::path::PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     /// A source that answers from memory.
     ///
@@ -1246,10 +1239,7 @@ mod tests {
         name: &str,
         seed: &[&str],
     ) -> (StocksPanel, TempDir, Arc<std::sync::atomic::AtomicUsize>) {
-        let dir =
-            std::env::temp_dir().join(format!("mirador-stocks-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("stocks-{name}"));
         let config = StocksConfig {
             symbols: seed.iter().map(|s| (*s).to_string()).collect(),
             // Still long, so the loop polls once and then sleeps rather than
@@ -1262,7 +1252,7 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let source = Box::new(Offline(Arc::clone(&calls)));
         let p = StocksPanel::with_source(config, watchlist, source);
-        (p, TempDir(dir), calls)
+        (p, dir, calls)
     }
 
     fn press(p: &mut StocksPanel, code: KeyCode) {
@@ -1333,9 +1323,7 @@ mod tests {
 
     #[test]
     fn an_unknown_source_is_refused_with_a_message_naming_the_real_ones() {
-        let dir = std::env::temp_dir().join(format!("mirador-src-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("src");
         let config = StocksConfig {
             source: "finnhub".to_string(),
             ..StocksConfig::default()
@@ -1345,7 +1333,6 @@ mod tests {
             .to_string();
         assert!(err.contains("finnhub"), "got `{err}`");
         assert!(err.contains("yahoo"), "must say what is available: `{err}`");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1363,7 +1350,7 @@ mod tests {
         press(&mut p, KeyCode::Enter);
 
         assert_eq!(p.watchlist.symbols(), ["AAPL"], "normalised to upper case");
-        let reloaded = Watchlist::load(guard.0.join("watchlist.toml"), &[]).unwrap();
+        let reloaded = Watchlist::load(guard.join("watchlist.toml"), &[]).unwrap();
         assert_eq!(reloaded.symbols(), ["AAPL"], "and written to disk");
     }
 
@@ -1393,18 +1380,12 @@ mod tests {
     }
 
     /// The cap is the height at which the panel is *complete* — header, every
-    /// symbol, status line, frame — and not a row more. Pinned by rendering,
-    /// because the arithmetic looks right whatever the numbers are: the
-    /// interior fills at `symbols + 2`, and the frame costs `FRAME_HEIGHT`.
+    /// symbol, frame — and not a row more. Pinned by rendering, because the
+    /// arithmetic looks right whatever the numbers are: the interior fills at
+    /// `symbols + 1`, and the frame costs `FRAME_HEIGHT`. A calm board spends
+    /// no row on a status line; see `max_height`.
     #[test]
     fn the_height_cap_is_exactly_where_the_panel_stops_gaining_anything() {
-        use crate::panel::RenderContext;
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let theme = crate::theme::Theme::default();
-        let gradients = theme.gradients();
-
         for n in [1usize, 3, 7] {
             let seed: Vec<String> = (0..n).map(|i| format!("SYM{i}")).collect();
             let refs: Vec<&str> = seed.iter().map(String::as_str).collect();
@@ -1413,27 +1394,7 @@ mod tests {
 
             // The interior the shell would hand it at the cap.
             let interior = cap - FRAME_HEIGHT;
-            let draw = |p: &mut StocksPanel, h: u16| {
-                let mut t = Terminal::new(TestBackend::new(60, h)).expect("backend");
-                t.draw(|f| {
-                    p.render(
-                        f,
-                        Rect::new(0, 0, 60, h),
-                        RenderContext {
-                            theme: &theme,
-                            gradients: &gradients,
-                            focused: true,
-                            watch: &crate::watch::WatchLog::default(),
-                        },
-                    );
-                })
-                .expect("draws");
-                let buffer = t.backend().buffer();
-                (0..h)
-                    .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
+            let draw = |p: &mut StocksPanel, h: u16| screen(p, 60, h);
 
             // Rows are counted, not matched on text. These panels really do
             // reach the network, so a runner can get far enough to render
@@ -1468,19 +1429,26 @@ mod tests {
 
     /// A watchlist is a file the reader edits and nothing bounds its length,
     /// so the sum has to be saturating. It was not: `65_534` symbols wrapped the
-    /// cap to 3, collapsing the panel instead of making it tall.
+    /// cap to 1, collapsing the panel instead of making it tall.
+    ///
+    /// It used to do the sum itself — `u16::MAX.saturating_add(2)…`, a fact
+    /// about `saturating_add`, with a `+ 2` the panel had stopped using — on
+    /// the theory that a panel this long was too slow to build. It is not: a
+    /// seed of `65_534` symbols builds in a blink, and is a count where a
+    /// wrapping sum gives the wrong answer — any count from 65,533 up does.
     #[test]
     fn an_absurd_watchlist_does_not_wrap_the_height_cap() {
-        let seed: Vec<String> = (0..3).map(|i| format!("SYM{i}")).collect();
+        let seed: Vec<String> = (0..65_534).map(|i| format!("S{i}")).collect();
         let refs: Vec<&str> = seed.iter().map(String::as_str).collect();
-        let (p, _g) = panel("overflow", &refs);
+        let (absurd, _g) = panel("overflow", &refs);
+        assert_eq!(absurd.watchlist.symbols().len(), 65_534);
+        assert_eq!(
+            absurd.max_height(),
+            Some(u16::MAX),
+            "the cap must saturate, not wrap"
+        );
 
-        // The arithmetic, exercised at the boundary the panel cannot be
-        // *built* at cheaply — constructing 65_535 symbols to prove one
-        // addition would trade a real test for a slow one.
-        let rows = u16::MAX;
-        let cap = rows.saturating_add(2).saturating_add(FRAME_HEIGHT);
-        assert_eq!(cap, u16::MAX, "the cap must saturate, not wrap");
+        let (p, _h) = panel("ordinary", &["SYM0", "SYM1", "SYM2"]);
         assert!(
             p.max_height().expect("bounded") > FRAME_HEIGHT,
             "an ordinary watchlist still reports a usable height"
@@ -1634,15 +1602,7 @@ mod tests {
             })
             .expect("draws");
 
-            let buffer = t.backend().buffer();
-            let screen: String = (0..6)
-                .map(|y| {
-                    (0..width)
-                        .map(|x| buffer[(x, y)].symbol())
-                        .collect::<String>()
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            let screen = crate::widgets::testing::rows(t.backend().buffer()).join("\n");
 
             for value in whole {
                 let clipped = &value[..value.len() - 1];
@@ -2051,34 +2011,7 @@ mod tests {
 
     /// The panel drawn at `width`x`height`, one string per row.
     fn screen(p: &mut StocksPanel, width: u16, height: u16) -> String {
-        use crate::panel::RenderContext;
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let theme = Theme::default();
-        let gradients = theme.gradients();
-        let mut t = Terminal::new(TestBackend::new(width, height)).expect("backend");
-        t.draw(|f| {
-            p.render(
-                f,
-                Rect::new(0, 0, width, height),
-                RenderContext {
-                    theme: &theme,
-                    gradients: &gradients,
-                    focused: true,
-                    watch: &crate::watch::WatchLog::default(),
-                },
-            );
-        })
-        .expect("draws");
-        let buffer = t.backend().buffer();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(p, width, height))
             .join("\n")
     }
 

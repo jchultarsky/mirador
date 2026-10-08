@@ -1158,6 +1158,7 @@ impl Panel for ClocksPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// Every key in the map works and is advertised; see
     /// [`crate::keymap::assert_every_key_works`].
@@ -1170,14 +1171,6 @@ mod tests {
     }
     use crate::config::ClockZone;
     use jiff::tz::Offset;
-
-    struct TempDir(std::path::PathBuf);
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     /// Reported as #103: pressing `s` to hide the seconds made the time render
     /// in small text instead of block numerals.
@@ -1531,10 +1524,7 @@ mod tests {
                         );
                     })
                     .unwrap();
-                let buffer = terminal.backend().buffer().clone();
-                let rows: Vec<String> = (0..height)
-                    .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-                    .collect();
+                let rows = crate::widgets::testing::rows(terminal.backend().buffer());
                 // The baseline is the last row that holds a block glyph.
                 let Some(baseline) = rows.iter().rev().find(|r| r.contains('\u{2588}')) else {
                     continue;
@@ -1681,30 +1671,7 @@ mod tests {
 
     /// The rows of `panel` drawn at `width` x `height`, one string per row.
     fn drawn(panel: &mut ClocksPanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect()
+        crate::widgets::testing::rows(&crate::widgets::testing::rendered(panel, width, height))
     }
 
     /// AM/PM is a value like the small seconds: `PM`, never `P`. Swept over
@@ -1789,11 +1756,9 @@ mod tests {
     /// whatever the last one had written and three of them failed with a
     /// timezone none of them had asked for.
     fn panel_from_named(name: &str, config: ClocksConfig) -> (ClocksPanel, TempDir) {
-        let dir = std::env::temp_dir().join(format!("mirador-zones-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("test directory");
+        let dir = TempDir::new(&format!("zones-{name}"));
         let panel = ClocksPanel::new(config, dir.join("zones.toml")).expect("builds from a seed");
-        (panel, TempDir(dir))
+        (panel, dir)
     }
 
     fn zone(label: &str, tz: &str) -> ClockZone {
@@ -1914,7 +1879,7 @@ mod tests {
     #[test]
     fn a_seed_that_cannot_be_written_is_reported_not_fatal() {
         let (_, guard) = panel_from_named("unwritable_seed", ClocksConfig::default());
-        let blocker = guard.0.join("blocker");
+        let blocker = guard.join("blocker");
         std::fs::write(&blocker, "a file where a directory has to be").unwrap();
         let panel = ClocksPanel::new(ClocksConfig::default(), blocker.join("zones.toml"))
             .expect("a failed save does not stop the panel");

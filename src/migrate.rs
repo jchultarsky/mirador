@@ -365,6 +365,7 @@ pub fn migrate_file(path: &Path) -> Result<Report> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::testing::TempDir;
 
     /// Same hazard as `layout_edit`: `str::lines()` strips the `\r`, so a
     /// migration of a Windows config rewrote every line in it.
@@ -569,9 +570,7 @@ refresh_minutes = 30
 
     #[test]
     fn migrating_a_healthy_file_is_a_no_op_and_leaves_no_backup() {
-        let dir = std::env::temp_dir().join(format!("mirador-migrate-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("migrate");
         let path = dir.join("config.toml");
         std::fs::write(&path, crate::config::DEFAULT_CONFIG).unwrap();
 
@@ -579,15 +578,11 @@ refresh_minutes = 30
         assert!(report.is_empty());
         assert!(report.backup.is_none());
         assert!(!path.with_extension("toml.bak").exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn migrating_a_stale_file_backs_it_up_and_rewrites_it() {
-        let dir = std::env::temp_dir().join(format!("mirador-migrate2-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("migrate2");
         let path = dir.join("config.toml");
         std::fs::write(&path, "[weather]\nlocation = \"Oslo\"\nforecast_days = 4\n").unwrap();
 
@@ -607,8 +602,6 @@ refresh_minutes = 30
         assert!(now.contains("forecast_hours"));
         assert!(now.contains("Oslo"), "settings must survive");
         toml::from_str::<crate::config::Config>(&now).expect("the result must load");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A backup already beside the config — the one `--reset-config` leaves,
@@ -616,9 +609,7 @@ refresh_minutes = 30
     /// copied over it under the same fixed name. Numbered like a reset's now.
     #[test]
     fn a_migration_does_not_overwrite_an_earlier_backup() {
-        let dir = std::env::temp_dir().join(format!("mirador-migrate4-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("migrate4");
         let path = dir.join("config.toml");
         let earlier = dir.join("config.toml.bak");
         std::fs::write(&earlier, "# the config a reset set aside\n").unwrap();
@@ -628,7 +619,6 @@ refresh_minutes = 30
         let kept = std::fs::read_to_string(&earlier).unwrap();
         let backup = report.backup.expect("a backup must be written");
         let original = std::fs::read_to_string(&backup).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(
             kept, "# the config a reset set aside\n",
@@ -643,9 +633,7 @@ refresh_minutes = 30
 
     #[test]
     fn an_unrecognisable_failure_leaves_the_file_alone() {
-        let dir = std::env::temp_dir().join(format!("mirador-migrate3-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("migrate3");
         let path = dir.join("config.toml");
         let original = "[weather]\nthis is not toml =\n";
         std::fs::write(&path, original).unwrap();
@@ -657,7 +645,5 @@ refresh_minutes = 30
             "a file we cannot fix must not be touched"
         );
         assert!(!path.with_extension("toml.bak").exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
