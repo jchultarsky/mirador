@@ -181,8 +181,32 @@ fn neighbour_of(index: usize, len: usize) -> Option<usize> {
     }
 }
 
-/// The panels of a layout, with the `(row, column)` each came from.
-type Built = (Vec<Slot>, Vec<(usize, usize)>);
+/// What leads an alert on the status bar.
+const ALERT_MARKER: &str = " ⚠ ";
+
+/// The status bar's alert, fitted to a bar `width` cells wide.
+///
+/// One part for [`crate::grid::assemble`], marker and text together, so the
+/// whole thing is measured in cells and abridged as one value. The text used
+/// to be cut to the room left beside the marker, counted in characters: right
+/// for `⚠`, a cell over for a wide sign such as `🚨`, which the terminal would
+/// have taken off the alert's end with no `…`. And a bar narrower than the
+/// marker drew the marker over nothing, where now it ends in `…` like any
+/// other cut.
+fn alert_line(text: &str, width: u16, theme: &crate::theme::Theme) -> Line<'static> {
+    crate::grid::assemble(
+        vec![vec![
+            Span::styled(
+                ALERT_MARKER,
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(text.to_string(), Style::default().fg(theme.error)),
+        ]],
+        width,
+    )
+}
 
 /// The keys of the shell's four modes, read from the config together, each
 /// named for the `[<mode>.keys]` table it comes from.
@@ -221,6 +245,13 @@ struct Slot {
     /// no longer says what the *current* panels are.
     widget: String,
     panel: Box<dyn Panel>,
+    /// `(row, column)` in `config.layout` of the entry this panel was built
+    /// for, so a resize knows which weights the focused panel is made of and
+    /// `geometry` which box it draws in. Kept on the slot rather than in a
+    /// list beside `slots`, which every builder had to push in step: a widget
+    /// that builds nothing leaves a hole in the layout, and an index into one
+    /// list read against the other then names some other panel.
+    position: (usize, usize),
     /// When this panel last ticked. `None` until it has, which is what makes
     /// the first tick fire immediately.
     ///
@@ -257,11 +288,6 @@ pub struct App {
     help_keys: crate::keymap::PanelKeymap<crate::keymap::HelpAction>,
     gradients: Gradients,
     slots: Vec<Slot>,
-    /// `(row, column)` in `config.layout` for each slot, so a resize knows
-    /// which weights the focused panel is made of. Built alongside `slots`
-    /// rather than recomputed, because a widget that fails to build leaves a
-    /// hole and the two would drift apart.
-    positions: Vec<(usize, usize)>,
     focus: usize,
     show_help: bool,
     /// First visible line of the help overlay.
@@ -360,13 +386,13 @@ impl std::fmt::Debug for App {
 impl App {
     /// Build every panel named in the layout, in row-major order.
     pub fn new(config: Config) -> Result<Self> {
-        let built = Self::build_slots(&config)?;
-        Self::around(config, built)
+        let slots = Self::build_slots(&config)?;
+        Self::around(config, slots)
     }
 
     /// The shell around panels already built: key tables, gradients and a
     /// dashboard in its opening state.
-    fn around(config: Config, (slots, positions): Built) -> Result<Self> {
+    fn around(config: Config, slots: Vec<Slot>) -> Result<Self> {
         let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
             .check()
             .map_err(anyhow::Error::msg)?;
@@ -388,7 +414,6 @@ impl App {
             help_keys,
             gradients,
             slots,
-            positions,
             focus: 0,
             show_help: false,
             help_scroll: 0,
@@ -415,9 +440,8 @@ impl App {
     }
 
     /// Build one panel per entry in the layout, in row-major order.
-    fn build_slots(config: &Config) -> Result<Built> {
+    fn build_slots(config: &Config) -> Result<Vec<Slot>> {
         let mut slots = Vec::new();
-        let mut positions = Vec::new();
         for (row_index, row) in config.layout.rows.iter().enumerate() {
             for (column_index, entry) in row.panels.iter().enumerate() {
                 let panel = crate::widgets::build(&entry.widget, config)
@@ -426,10 +450,10 @@ impl App {
                     slots.push(Slot {
                         widget: entry.widget.clone(),
                         panel,
+                        position: (row_index, column_index),
                         last_tick: None,
                         area: None,
                     });
-                    positions.push((row_index, column_index));
                 }
             }
         }
@@ -438,7 +462,7 @@ impl App {
             !slots.is_empty(),
             "no panels were built; check the `[layout]` table in your config"
         );
-        Ok((slots, positions))
+        Ok(slots)
     }
 
     /// Reconcile the panels with a changed layout, carrying across every panel
@@ -532,7 +556,6 @@ impl App {
         }
 
         let mut slots = Vec::with_capacity(placed);
-        let mut positions = Vec::with_capacity(placed);
         for (row, column, widget) in desired {
             let carried = pool.get_mut(&widget).and_then(VecDeque::pop_front);
             let slot = carried.or_else(|| {
@@ -542,17 +565,20 @@ impl App {
                     .map(|panel| Slot {
                         widget: widget.clone(),
                         panel,
+                        position: (row, column),
                         last_tick: None,
                         area: None,
                     })
             });
             if let Some(mut slot) = slot {
-                // The panel is almost certainly somewhere else on screen now,
-                // and `area` is what mouse events are matched against. Cleared
-                // rather than trusted until the next draw sets it.
+                // A carried panel is almost certainly somewhere else in the
+                // layout now, and on screen. Its place is the entry it was
+                // just matched to; its `area`, which mouse events are matched
+                // against, is cleared rather than trusted until the next draw
+                // sets it.
+                slot.position = (row, column);
                 slot.area = None;
                 slots.push(slot);
-                positions.push((row, column));
             }
         }
 
@@ -569,7 +595,6 @@ impl App {
             .and_then(|widget| slots.iter().position(|slot| slot.widget == widget))
             .unwrap_or_else(|| self.focus.min(slots.len().saturating_sub(1)));
         self.slots = slots;
-        self.positions = positions;
         Ok(())
     }
 
@@ -1046,22 +1071,31 @@ impl App {
             Some(path) => crate::keymap::read_keys(path),
             None => Err("there is no config file to read keys from".into()),
         };
-        let report = match result {
+        let outcome = match result {
             Ok((tables, keymap)) => {
                 tables.apply(&mut self.config);
                 self.keymap = keymap;
                 self.rebind_panels();
-                let text = match self.keys_changed() {
+                Ok(match self.keys_changed() {
                     0 => "Loaded. Every key is its default.".to_string(),
                     1 => "Loaded. One key differs from its default.".to_string(),
                     n => format!("Loaded. {n} keys differ from their defaults."),
-                };
-                (text, false)
+                })
             }
-            Err(error) => (format!("Kept the keys you had. {error}"), true),
+            Err(error) => Err(format!("Kept the keys you had. {error}")),
+        };
+        self.report_to_key_map(outcome);
+    }
+
+    /// Say in the key map how a reload or a reset went: what it did, or why
+    /// it did nothing, shown as a failure.
+    fn report_to_key_map(&mut self, outcome: std::result::Result<String, String>) {
+        let (text, failed) = match outcome {
+            Ok(text) => (text, false),
+            Err(text) => (text, true),
         };
         if let Some(dialog) = self.keymap_dialog.as_mut() {
-            dialog.report(report.0, report.1);
+            dialog.report(text, failed);
         }
     }
 
@@ -1121,7 +1155,7 @@ impl App {
             Some(path) => crate::keymap::reset_file(path),
             None => Err("there is no config file to reset".into()),
         };
-        let report = match result {
+        let outcome = match result {
             Ok(edited) => {
                 self.keymap = crate::keymap::Keymap::default();
                 crate::keymap::KeyTables::default().apply(&mut self.config);
@@ -1132,13 +1166,11 @@ impl App {
                 } else {
                     "The config sets no keys, so every key is its default."
                 };
-                (text.to_string(), false)
+                Ok(text.to_string())
             }
-            Err(error) => (format!("Nothing was changed. {error}"), true),
+            Err(error) => Err(format!("Nothing was changed. {error}")),
         };
-        if let Some(dialog) = self.keymap_dialog.as_mut() {
-            dialog.report(report.0, report.1);
-        }
+        self.report_to_key_map(outcome);
     }
 
     /// Open arrange mode, remembering what to go back to.
@@ -1212,7 +1244,7 @@ impl App {
     /// Move the focused panel one step, putting the layout back if the result
     /// will not build.
     fn move_focused(&mut self, direction: crate::arrange::Direction) {
-        let Some(&(row, column)) = self.positions.get(self.focus) else {
+        let Some((row, column)) = self.focused_position() else {
             return;
         };
         let before = self.config.layout.clone();
@@ -1232,7 +1264,7 @@ impl App {
     /// back if the result will not build — silently, for the reason a panel
     /// move gives.
     fn move_focused_row(&mut self, down: bool) {
-        let Some(&(row, _)) = self.positions.get(self.focus) else {
+        let Some((row, _)) = self.focused_position() else {
             return;
         };
         let before = self.config.layout.clone();
@@ -1544,7 +1576,7 @@ impl App {
 
     /// Widen or narrow the focused panel against its neighbour in the row.
     fn resize_width(&mut self, grow: bool) -> bool {
-        let Some(&(row, column)) = self.positions.get(self.focus) else {
+        let Some((row, column)) = self.focused_position() else {
             return false;
         };
         let Some(entry) = self.config.layout.rows.get_mut(row) else {
@@ -1573,7 +1605,7 @@ impl App {
 
     /// Grow or shrink the focused panel's row against the neighbouring row.
     fn resize_height(&mut self, grow: bool) -> bool {
-        let Some(&(row, _)) = self.positions.get(self.focus) else {
+        let Some((row, _)) = self.focused_position() else {
             return false;
         };
         let rows = &mut self.config.layout.rows;
@@ -1694,9 +1726,9 @@ impl App {
         };
     }
 
-    /// The slot index of the panel at `(row, column)` of the layout.
-    fn slot_at(&self, row: usize, column: usize) -> Option<usize> {
-        self.positions.iter().position(|p| *p == (row, column))
+    /// Where the focused panel sits in `config.layout`, as `(row, column)`.
+    fn focused_position(&self) -> Option<(usize, usize)> {
+        self.slots.get(self.focus).map(|slot| slot.position)
     }
 
     /// Compute one rectangle per panel, in the same row-major order as
@@ -1708,18 +1740,29 @@ impl App {
     fn geometry(&self, area: Rect) -> Vec<Rect> {
         let rows = &self.config.layout.rows;
 
+        // The slot each layout entry built, from one walk of the slots. An
+        // entry that built no panel stays `None`: a hole, which the rows and
+        // columns below leave empty rather than closing up.
+        let mut built: Vec<Vec<Option<usize>>> = rows
+            .iter()
+            .map(|row| vec![None; row.panels.len()])
+            .collect();
+        for (index, slot) in self.slots.iter().enumerate() {
+            let (row, column) = slot.position;
+            if let Some(entry) = built.get_mut(row).and_then(|row| row.get_mut(column)) {
+                *entry = Some(index);
+            }
+        }
+
         let row_weights: Vec<u16> = rows.iter().map(|row| row.height.max(1)).collect();
         // A row is only bounded when every panel in it is: they share the
         // height, so one unbounded panel keeps the whole row unbounded.
-        let row_maxima: Vec<Option<u16>> = rows
+        let row_maxima: Vec<Option<u16>> = built
             .iter()
-            .enumerate()
-            .map(|(row_index, row)| {
+            .map(|row| {
                 let mut tallest = 0u16;
-                for column in 0..row.panels.len() {
-                    let max = self
-                        .slot_at(row_index, column)
-                        .and_then(|slot| self.slots[slot].panel.max_height())?;
+                for slot in row {
+                    let max = slot.and_then(|slot| self.slots[slot].panel.max_height())?;
                     tallest = tallest.max(max);
                 }
                 (tallest > 0).then_some(tallest)
@@ -1728,29 +1771,27 @@ impl App {
 
         let heights = distribute(area.height, &row_weights, &row_maxima);
 
-        // Indexed by slot, not by layout column, and written through `slot_at`.
-        // Pushing one rect per column assumes every layout entry produced a
-        // panel; a single entry that did not shifts every later slot onto the
-        // previous entry's rectangle, which is what `slot.area` hit-tests, so
-        // clicks land on the wrong panel. A slot that gets no rectangle keeps
-        // the zero one and is skipped by the caller's size check.
+        // Indexed by slot, not by layout column. Pushing one rect per column
+        // assumes every layout entry produced a panel; a single entry that did
+        // not shifts every later slot onto the previous entry's rectangle,
+        // which is what `slot.area` hit-tests, so clicks land on the wrong
+        // panel. A slot that gets no rectangle keeps the zero one and is
+        // skipped by the caller's size check.
         let mut rects = vec![Rect::default(); self.slots.len()];
         let mut y = area.y;
-        for (row_index, row) in rows.iter().enumerate() {
+        for (row_index, (row, slots)) in rows.iter().zip(&built).enumerate() {
             let height = heights.get(row_index).copied().unwrap_or(0);
 
             let widths: Vec<u16> = row.panels.iter().map(|p| p.width.max(1)).collect();
-            let maxima: Vec<Option<u16>> = (0..row.panels.len())
-                .map(|column| {
-                    self.slot_at(row_index, column)
-                        .and_then(|slot| self.slots[slot].panel.max_width())
-                })
+            let maxima: Vec<Option<u16>> = slots
+                .iter()
+                .map(|slot| slot.and_then(|slot| self.slots[slot].panel.max_width()))
                 .collect();
             let columns = distribute(area.width, &widths, &maxima);
 
             let mut x = area.x;
-            for (column, width) in columns.into_iter().enumerate() {
-                if let Some(slot) = self.slot_at(row_index, column) {
+            for (slot, width) in slots.iter().zip(columns) {
+                if let Some(slot) = *slot {
                     rects[slot] = Rect::new(x, y, width, height);
                 }
                 x = x.saturating_add(width);
@@ -1779,7 +1820,6 @@ impl App {
     #[cfg(test)]
     pub fn with_panels(config: Config, mut panels: Vec<(&str, Box<dyn Panel>)>) -> Result<Self> {
         let mut slots = Vec::new();
-        let mut positions = Vec::new();
         for (row_index, row) in config.layout.rows.iter().enumerate() {
             for (column_index, entry) in row.panels.iter().enumerate() {
                 let index = panels
@@ -1790,13 +1830,13 @@ impl App {
                 slots.push(Slot {
                     widget: entry.widget.clone(),
                     panel,
+                    position: (row_index, column_index),
                     last_tick: None,
                     area: None,
                 });
-                positions.push((row_index, column_index));
             }
         }
-        Self::around(config, (slots, positions))
+        Self::around(config, slots)
     }
 
     /// Test-only access to the private render pass.
@@ -1817,7 +1857,7 @@ impl App {
         };
 
         let rects = self.geometry(body);
-        let theme = self.config.theme.clone();
+        let theme = &self.config.theme;
         let focus = self.focus;
 
         for (index, slot) in self.slots.iter_mut().enumerate() {
@@ -1841,7 +1881,7 @@ impl App {
                 bindings: slot.panel.bindings(),
                 index: index + 1,
             };
-            let inner = crate::frame::draw(frame, rect, &theme, &spec);
+            let inner = crate::frame::draw(frame, rect, theme, &spec);
 
             if inner.width == 0 || inner.height == 0 {
                 continue;
@@ -1852,7 +1892,7 @@ impl App {
                 frame,
                 inner,
                 RenderContext {
-                    theme: &theme,
+                    theme,
                     gradients: &self.gradients,
                     focused,
                     watch: &self.watch,
@@ -2000,21 +2040,8 @@ impl App {
         // to "read-only file syste…". The keys are behind `?`, and an alert is
         // gone as soon as the thing it names is.
         if let Some(alert) = self.alert() {
-            let marker = " ⚠ ";
-            let room = usize::from(area.width).saturating_sub(marker.chars().count());
             frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        marker,
-                        Style::default()
-                            .fg(theme.error)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        crate::grid::truncate(&alert.text, room),
-                        Style::default().fg(theme.error),
-                    ),
-                ])),
+                Paragraph::new(alert_line(&alert.text, area.width, theme)),
                 area,
             );
             return;
@@ -2157,8 +2184,7 @@ impl App {
     }
 
     fn render_help(&mut self, frame: &mut ratatui::Frame, area: Rect) {
-        let theme = self.config.theme.clone();
-        let theme = &theme;
+        let theme = &self.config.theme;
 
         let panel_title = self.slots.get(self.focus).map(|slot| slot.panel.title());
         let lines = Self::help_lines(
@@ -2663,6 +2689,41 @@ mod tests {
             !bar.to_lowercase().contains("ok") && !bar.to_lowercase().contains("clear"),
             "and no reassurance: {bar}"
         );
+    }
+
+    /// The alert is measured where it is built, because a rendered bar only
+    /// holds what the terminal kept. At every width it fits the bar, and it is
+    /// either the marker and the whole alert or ends in `…` — and a bar too
+    /// narrow for the marker still says it was cut, rather than drawing
+    /// ` ⚠ ` over an alert that is not there.
+    #[test]
+    fn the_alert_line_never_outgrows_the_bar() {
+        let theme = crate::theme::Theme::default();
+        for text in [
+            "The layout could not be saved — read-only file system",
+            "設定を保存できませんでした 🌞 ディスクがいっぱいです",
+        ] {
+            let whole = format!("{ALERT_MARKER}{text}");
+            let mut cut = false;
+            for width in 1..=80u16 {
+                let line: String = alert_line(text, width, &theme)
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                assert!(
+                    crate::grid::display_width(&line) <= usize::from(width),
+                    "{line:?} is wider than {width}"
+                );
+                if let Some(head) = line.strip_suffix('…') {
+                    assert!(whole.starts_with(head), "{width}: {line:?}");
+                    cut = true;
+                } else {
+                    assert_eq!(line, whole, "cut with nothing to say so at {width}");
+                }
+            }
+            assert!(cut, "a sweep that never cut {text:?} tests nothing");
+        }
     }
 
     /// An alert outranks the update notice. That notice is not going to get
@@ -3891,7 +3952,7 @@ mod tests {
 
         let app = App::new(config).unwrap();
         assert_eq!(app.slots.len(), 2, "the unknown widget builds no panel");
-        assert_eq!(app.positions, vec![(0, 1), (0, 2)]);
+        assert_eq!(slot_positions(&app), vec![(0, 1), (0, 2)]);
 
         let rects = app.geometry(Rect::new(0, 0, 80, 24));
         assert_eq!(rects.len(), 2, "one rect per slot, not per layout column");
@@ -3904,6 +3965,58 @@ mod tests {
         );
         assert_eq!(rects[1].x, rects[0].x + rects[0].width);
         assert_eq!(rects[0].width + rects[1].width, 60);
+    }
+
+    /// Where each slot says it sits in `config.layout`, in slot order.
+    fn slot_positions(app: &App) -> Vec<(usize, usize)> {
+        app.slots.iter().map(|slot| slot.position).collect()
+    }
+
+    /// Every slot's `(row, column)` names the layout entry it was built for,
+    /// through every kind of rebuild: a panel moved along its row and into
+    /// the next, a whole row moved, and a panel toggled off and back on in
+    /// the picker. A resize, a move and `geometry` all find a panel's place
+    /// from it, so a slot left holding the place it had before a rebuild
+    /// resizes the wrong weights and draws in another panel's box.
+    #[test]
+    fn every_slot_knows_where_it_sits_after_a_rebuild() {
+        let check = |app: &App, after: &str| {
+            for (slot, (row, column)) in app.slots.iter().zip(slot_positions(app)) {
+                let entry = app
+                    .config
+                    .layout
+                    .rows
+                    .get(row)
+                    .and_then(|r| r.panels.get(column))
+                    .map(|entry| entry.widget.as_str());
+                assert_eq!(
+                    entry,
+                    Some(slot.widget.as_str()),
+                    "after {after}, the `{}` slot says it sits at ({row}, {column})",
+                    slot.widget
+                );
+            }
+        };
+        let mut app = App::new(resizable()).expect("builds");
+        check(&app, "building");
+        let before = widgets_by_row(&app);
+
+        app.focus = 0;
+        app.handle_key(key(KeyCode::Char('m')));
+        app.handle_key(key(KeyCode::Right));
+        check(&app, "a move along the row");
+        app.handle_key(key(KeyCode::Down));
+        check(&app, "a move into the next row");
+        app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        check(&app, "a row move");
+        app.handle_key(key(KeyCode::Enter));
+        assert_ne!(widgets_by_row(&app), before, "the moves moved nothing");
+
+        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char(' ')));
+        check(&app, "a toggle off");
+        app.handle_key(key(KeyCode::Char(' ')));
+        check(&app, "a toggle back on");
     }
 
     #[test]
@@ -4301,6 +4414,74 @@ mod tests {
         assert!(
             app.keymap_dialog.is_some(),
             "and the dialog stays to say so"
+        );
+    }
+
+    /// What the key map last reported, and whether it said so as a failure.
+    fn key_map_notice(app: &App) -> (String, bool) {
+        let (text, failed) = app
+            .keymap_dialog
+            .as_ref()
+            .and_then(crate::keymap_dialog::KeymapDialog::notice)
+            .expect("the key map reported something");
+        (text.to_string(), failed)
+    }
+
+    /// A reload that does not check out is reported in the failure colour,
+    /// and says the keys in force were kept. Nothing read either half of the
+    /// report back, so a flag flipped on this branch would have shown a
+    /// refused keymap as though it had loaded.
+    #[test]
+    fn a_key_reload_that_does_not_check_out_is_reported_as_a_failure() {
+        let file = KeysFile::new("reload-refused", "[keys]\nquit = \"no such key\"\n");
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        app.write_layout_to(file.path.clone());
+        open_key_map(&mut app);
+        app.handle_key(key(KeyCode::Char('r')));
+
+        let (text, failed) = key_map_notice(&app);
+        assert!(failed, "reported as a success: {text}");
+        assert!(text.starts_with("Kept the keys you had. "), "{text}");
+        assert!(app.keymap.is_default(Action::Quit), "and nothing changed");
+    }
+
+    /// The other half: a reload that checks out says what it loaded, and not
+    /// in the failure colour.
+    #[test]
+    fn a_key_reload_that_checks_out_is_reported_as_a_success() {
+        let file = KeysFile::new("reload-taken", "[keys]\nquit = \"x\"\n");
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        app.write_layout_to(file.path.clone());
+        open_key_map(&mut app);
+        app.handle_key(key(KeyCode::Char('r')));
+
+        let (text, failed) = key_map_notice(&app);
+        assert!(!failed, "reported as a failure: {text}");
+        assert_eq!(text, "Loaded. One key differs from its default.");
+    }
+
+    /// A reset with no config file to rewrite says nothing was changed, as a
+    /// failure; one that lands says the keys are back, as a success. The
+    /// same report as a reload's, and as unread until these.
+    #[test]
+    fn a_key_reset_says_whether_it_took() {
+        let mut app = App::new(config_with(&["clocks"])).expect("builds");
+        open_key_map(&mut app);
+        app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Char('y')));
+        let (text, failed) = key_map_notice(&app);
+        assert!(failed, "reported as a success: {text}");
+        assert!(text.starts_with("Nothing was changed. "), "{text}");
+
+        let file = KeysFile::new("reset-taken", "[keys]\nquit = \"x\"\n");
+        app.write_layout_to(file.path.clone());
+        app.handle_key(key(KeyCode::Char('d')));
+        app.handle_key(key(KeyCode::Char('y')));
+        let (text, failed) = key_map_notice(&app);
+        assert!(!failed, "reported as a failure: {text}");
+        assert!(
+            text.starts_with("Every key is back to its default."),
+            "{text}"
         );
     }
 
@@ -4860,7 +5041,6 @@ mod tests {
         // Whatever the toggles did, the dashboard is still coherent and every
         // slot still has a panel behind it.
         assert!(!app.slots.is_empty());
-        assert_eq!(app.slots.len(), app.positions.len());
     }
 
     #[test]

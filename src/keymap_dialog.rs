@@ -163,6 +163,14 @@ impl KeymapDialog {
         });
     }
 
+    /// The last report, as its text and whether it was a failure.
+    #[cfg(test)]
+    pub fn notice(&self) -> Option<(&str, bool)> {
+        self.notice
+            .as_ref()
+            .map(|notice| (notice.text.as_str(), notice.failed))
+    }
+
     /// Whether the dialog is waiting for a yes or no to the reset.
     #[cfg(test)]
     pub fn is_confirming(&self) -> bool {
