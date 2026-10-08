@@ -275,9 +275,13 @@ impl Theme {
     /// Every key a theme file may set.
     ///
     /// Used to catch a TOML mistake that is otherwise silent — see
-    /// [`crate::themes`]. Kept honest by
-    /// `every_named_key_is_one_a_theme_file_can_actually_set`, which parses
-    /// each one on its own; an entry that is not a real field fails there.
+    /// [`crate::themes`]. Kept honest by two tests in that module working
+    /// together, since no test parses the entries one by one:
+    /// `a_standalone_theme_sets_every_key_rather_than_leaning_on_defaults`
+    /// requires `default`, `default-light` and `ansi` to set every entry, and
+    /// `every_bundled_theme_resolves` parses those files under
+    /// `deny_unknown_fields`. An entry that is not a real field therefore fails
+    /// the first, though its message blames a file rather than this list.
     /// A *field* missing from this list only weakens the check, so the cost of
     /// forgetting one is a trap that goes unguarded rather than a wrong theme.
     pub const KEYS: &'static [&'static str] = &[

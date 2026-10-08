@@ -356,7 +356,7 @@ overwritten, so resetting twice still leaves the first one recoverable.
 
 ## The panels
 
-Fourteen widgets, each answering one question. Put the ones you want in the
+Seventeen widgets, each answering one question. Put the ones you want in the
 layout and drop the rest — a widget your layout leaves out is never built, and
 nothing will nag you about it.
 

@@ -902,12 +902,19 @@ fn canonical_key(key: KeyEvent) -> String {
     }
 }
 
-/// Keys whose passive meaning belongs to the dashboard shell.
+/// Keys whose passive meaning belongs to the dashboard shell, as protocol v1
+/// froze them.
 ///
-/// This mirrors `app::dispatch_key` rather than the text printed in a help
-/// overlay. Matching the event code is important: Mirador's existing globals
-/// act on `Alt+q` as well as bare `q`, so a plugin must not be able to claim the
-/// modified spelling and silently get ahead of the shell.
+/// This is the list `docs/plugin-protocol.md` publishes, so it is part of the
+/// wire contract rather than a mirror of `app::dispatch_key` — and since
+/// 1.17.0 the two differ, because the shell reads its keys from `[keys]` and
+/// this does not follow them. Move `quit` to `x` and a focused passive plugin
+/// that declares `x` takes it before the shell sees it, while `q`, which the
+/// shell no longer reads, is still refused.
+///
+/// It matches the event code whatever the modifiers, as the protocol says:
+/// `Alt+q` is refused along with `q`. That once kept pace with a shell that
+/// read `Alt+q` as `q`; the keymap tells the two apart now, so it errs wide.
 fn host_owns_key_while_passive(key: KeyEvent) -> bool {
     if key.modifiers.contains(KeyModifiers::CONTROL)
         && matches!(

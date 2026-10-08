@@ -9,12 +9,14 @@
 //! fallback, which is exactly why such a machine "has working internet"
 //! everywhere except programs that connect in resolver order.
 //!
-//! `ureq` iterates the resolved addresses but moves past one only on
-//! `ConnectionRefused`; an unroutable connect makes it bail with the rest of
-//! the list untried. Until that is fixed upstream, the fallback lives here:
-//! when a request dies unroutable, it is retried pinned to one address family
-//! at a time, which keeps the whole mechanism on `ureq`'s stable config
-//! surface rather than reaching into its semver-exempt `unversioned` module.
+//! `ureq` used to iterate the resolved addresses but move past one only on
+//! `ConnectionRefused`, so an unroutable connect bailed with the rest of the
+//! list untried. That was fixed upstream in ureq 3.4.2 (ureq#1195), which is
+//! this crate's floor, and the fallback stays here anyway: a distribution can
+//! build mirador against whatever `ureq` it carries. When a request dies
+//! unroutable, it is retried pinned to one address family at a time, which
+//! keeps the whole mechanism on `ureq`'s stable config surface rather than
+//! reaching into its semver-exempt `unversioned` module.
 
 use std::fmt::Write as _;
 use std::io;
@@ -31,10 +33,13 @@ const REFUSED: &str = "fetch::get makes no requests under cfg(test)";
 
 /// A blocking GET with a timeout, returning the body as a string.
 ///
-/// The body read is bounded by `ureq`'s 10MB cap, which `feed` and `agenda`
-/// both lean on. `user_agent` of `None` sends `ureq`'s own default; it is
-/// `'static` because it is part of what picks an agent out of [`AGENTS`], and
-/// a string written into the source is what keeps that list from growing.
+/// The body read is bounded by `ureq`'s 10MB cap, which every caller — news,
+/// weather, stocks and the update check — leans on. The agenda reads a local
+/// file instead and caps it itself, at the same figure.
+///
+/// `user_agent` of `None` sends `ureq`'s own default; it is `'static` because
+/// it is part of what picks an agent out of [`AGENTS`], and a string written
+/// into the source is what keeps that list from growing.
 ///
 /// Each retry gets the full `timeout` again, and that is not the hazard it
 /// looks like: the fallback only fires on an *unroutable* connect, and the

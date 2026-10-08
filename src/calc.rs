@@ -237,6 +237,10 @@ impl Parser<'_> {
 /// Rounded to [`SIGNIFICANT_DIGITS`] and stripped of trailing zeros, so
 /// `0.1 + 0.2` reads `0.3` rather than exposing the binary representation.
 /// Whole numbers keep no decimal point.
+///
+/// Always the decimal form, however long. `{}` on an `f64` never reaches for
+/// an exponent — `1e20` prints as twenty-one digits — so shortening a result
+/// that will not fit is [`fit_result`]'s job, not this function's.
 pub fn format_result(value: f64) -> String {
     if value == 0.0 {
         // Covers `-0.0`, which `{}` prints as `-0` — an answer nobody wants to
@@ -253,11 +257,6 @@ pub fn format_result(value: f64) -> String {
     let rounded: f64 = text.parse().unwrap_or(value);
 
     let mut out = format!("{rounded}");
-    if out.contains('e') {
-        // Rust's `{}` only reaches for an exponent at extremes, and where it
-        // does there is no decimal form worth showing instead.
-        return out;
-    }
     if out.contains('.') {
         while out.ends_with('0') {
             out.pop();

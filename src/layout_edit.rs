@@ -374,10 +374,12 @@ struct PanelBlock {
 
 /// Refuse a `[layout]` block this module cannot edit without guessing.
 ///
-/// Both checks are about the text disagreeing with what was parsed from it,
+/// The check is about the text disagreeing with what was parsed from it,
 /// which is the one thing the round-trip check at the end of [`apply`] cannot
 /// catch on its own — it compares layouts, and a layout does not carry the
-/// formatting or the comments that make the edit worth doing.
+/// formatting or the comments that make the edit worth doing. Its sibling, a
+/// widget named twice, lives in [`duplicated_widgets`] and is consulted only
+/// where an entry is reused, so that a plain resize is not refused with it.
 fn check_editable(map: &LayoutMap, current: &Config) -> Result<()> {
     if map.rows.len() != current.layout.rows.len() {
         bail!(
@@ -905,10 +907,6 @@ units = "imperial"
         assert!(after[changed[0]].contains("width = 30"));
     }
 
-    /// A config written on Windows uses CRLF. `str::lines()` strips the `\r`,
-    /// so reassembling with `\n` converted the whole file to LF — moving one
-    /// panel reported every line in the config as changed, which is a
-    /// whole-file diff in git and nothing the user asked for.
     /// Throws a lot of shapes at the real shipped config and asserts the only
     /// two acceptable outcomes: the edit applies and the file still describes
     /// exactly what was asked, or it is refused and the file is untouched.
@@ -1085,32 +1083,22 @@ rows = [
         );
     }
 
-    /// The other axis. `no_mutation_of_the_shipped_config_produces_a_wrong_file`
-    /// varies the *desired layout* against one fixed piece of text; this varies
-    /// the **text**, which is the half a person actually edits by hand.
-    ///
-    /// That distinction is the lesson `ical` taught: Phase 1 tested that parser
-    /// at scale, never varied its alphabet or its shape, and both crashes in it
-    /// were sitting in plain sight the whole time.
-    ///
-    /// Only two outcomes are acceptable — applied and exactly right, or refused
-    /// — and "wrote something plausible" is what this module exists to make
-    /// impossible.
-    /// Three of these are invalid TOML on purpose and never reach `apply` —
-    /// leading zeros in an integer, a table named twice, and a section this
-    /// crate does not know.
+    /// How many of `text_mutations` are invalid TOML on purpose, and so never
+    /// reach `apply`: leading zeros in an integer, a table named twice, and a
+    /// section this crate does not know.
     const UNPARSABLE_MUTATIONS: usize = 3;
 
     /// Mutations of the shipped config *text*, which is the half a person edits.
     ///
-    /// Normalised to LF first, and that is not decoration. This repository has
-    /// no `.gitattributes`, so a Windows checkout writes the file with CRLF —
-    /// and then `"crlf"` below, which replaces every `\n`, produces `\r\r\n`
-    /// and stops being the mutation it is named after. The asymmetry that hides
-    /// this is worth knowing: **rustc normalises CRLF to LF inside string
-    /// literals, and `include_str!` does not**, so `SAMPLE` is LF on every
-    /// platform while this file is whatever git wrote. Windows CI found it; the
-    /// same two mutations pass locally either way.
+    /// Normalised to LF first, and that is not decoration. A CRLF copy of the
+    /// file — a Windows checkout before `.gitattributes` asked for LF, or a
+    /// packager's tree that never went through git — makes `"crlf"` below,
+    /// which replaces every `\n`, produce `\r\r\n` and stop being the mutation
+    /// it is named after. The asymmetry that hides this is worth knowing:
+    /// **rustc normalises CRLF to LF inside string literals, and `include_str!`
+    /// does not**, so `SAMPLE` is LF on every platform while this file is
+    /// whatever was on disk. Windows CI found it; the same two mutations pass
+    /// locally either way.
     fn text_mutations() -> Vec<(&'static str, String)> {
         let shipped = &include_str!("../assets/default_config.toml").replace("\r\n", "\n");
         vec![
@@ -1261,6 +1249,10 @@ rows = [
         );
     }
 
+    /// A config written on Windows uses CRLF. `str::lines()` strips the `\r`,
+    /// so reassembling with `\n` converted the whole file to LF — moving one
+    /// panel reported every line in the config as changed, which is a
+    /// whole-file diff in git and nothing the user asked for.
     #[test]
     fn a_crlf_config_stays_crlf() {
         let crlf = SAMPLE.replace('\n', "\r\n");
@@ -1401,7 +1393,7 @@ rows = [
     /// `CLAUDE.md` has to move with it.
     #[test]
     fn the_comment_count_the_docs_quote_is_the_one_in_the_file() {
-        const CITED: usize = 569;
+        const CITED: usize = 570;
         let actual = crate::config::DEFAULT_CONFIG
             .lines()
             .filter(|line| line.trim_start().starts_with('#'))

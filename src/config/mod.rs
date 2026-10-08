@@ -563,9 +563,6 @@ impl Config {
         Ok(Self::default_data_dir()?.join("zones.toml"))
     }
 
-    /// Where remembered UI preferences live. Not configurable: it is mirador's
-    /// own bookkeeping rather than something you curate, and a config key
-    /// pointing at it would invite exactly the confusion this file avoids.
     /// Where the update check caches its answer, beside the state file.
     pub fn update_cache_path() -> Result<PathBuf> {
         Ok(crate::update::default_path(&Self::default_data_dir()?))
@@ -596,6 +593,9 @@ impl Config {
         ])
     }
 
+    /// Where remembered UI preferences live. Not configurable: it is mirador's
+    /// own bookkeeping rather than something you curate, and a config key
+    /// pointing at it would invite exactly the confusion this file avoids.
     pub fn state_path() -> Result<PathBuf> {
         Ok(crate::state::default_path(&Self::default_data_dir()?))
     }
@@ -980,6 +980,31 @@ mod tests {
             .expect("the bundled default config must always validate");
     }
 
+    /// The shipped config's list of widgets names every one there is.
+    ///
+    /// It is a comment written into every first-run config, so nothing parses
+    /// it, and it stopped at thirteen while four more shipped — three of them
+    /// the excused ones, which a reader can only find by name, since the
+    /// default layout does not place them.
+    #[test]
+    fn the_shipped_config_lists_every_widget() {
+        let list: String = DEFAULT_CONFIG
+            .lines()
+            .skip_while(|line| !line.contains("Available widgets"))
+            .take_while(|line| line.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let named: Vec<&str> = list.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+        let missing: Vec<&&str> = crate::widgets::WIDGET_NAMES
+            .iter()
+            .filter(|widget| !named.contains(widget))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the config's \"Available widgets\" comment leaves out {missing:?}"
+        );
+    }
+
     /// Every commented-out default in the shipped config is a real key.
     ///
     /// `shipped_default_config_parses` proves the *live* keys are real, because
@@ -1113,9 +1138,11 @@ mod tests {
 
     #[test]
     fn the_default_layout_places_every_widget() {
-        // A widget nobody can see is a widget nobody knows exists. The startup
-        // hint names what is missing, but the default should have nothing to
-        // name: shipping a dashboard that hides a third of itself is a poor
+        // A widget nobody can see is a widget nobody knows exists. Nothing
+        // advertises an unplaced widget, so the default has to place every one
+        // it can: shipping a dashboard that hides a third of itself is a poor
+        // first run, and this is exactly how notes and stocks went unseen.
+        //
         // Widgets deliberately left out of the default, each with its reason.
         // The default is a dashboard for any machine; a panel that is empty on
         // most of them would be a poor first run for everyone to save a
@@ -1138,7 +1165,6 @@ mod tests {
                  a gesture the reader makes, not one shipped for everyone",
             ),
         ];
-        // first run, and this is exactly how notes and stocks went unseen.
         let layout = Layout::default();
         let placed: Vec<&str> = layout
             .rows

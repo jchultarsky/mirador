@@ -2,16 +2,16 @@
 //!
 //! The `[theme]` table has always let you set every colour. What it could not
 //! do is let you *keep* more than one set of them, or hand one to somebody
-//! else. A theme is a file now: ten ship inside the binary, and anything in
-//! `<config>/mirador/themes/<name>.toml` is found first, so a bundled theme can
-//! be replaced without editing it in place.
+//! else. A theme is a file now: the ones in [`BUNDLED`] ship inside the
+//! binary, and anything in `<config>/mirador/themes/<name>.toml` is found
+//! first, so a bundled theme can be replaced without editing it in place.
 //!
-//! Six of the ten are ports of palettes from elsewhere — Nord, Gruvbox,
-//! Dracula, Catppuccin Mocha, Tokyo Night, Solarized Dark. Each file cites the
-//! upstream source its hex values came from, and each is a port rather than an
-//! interpretation: someone who picks `nord` wants Nord, not mirador's opinion
-//! of it. Adjust the *mapping* of a palette onto mirador's keys if it reads
-//! badly; do not adjust the palette.
+//! Most of the bundled set are ports of palettes from elsewhere — Nord,
+//! Gruvbox, Catppuccin, Rosé Pine and the rest; the README's table lists them.
+//! Each file cites the upstream source its hex values came from, and each is a
+//! port rather than an interpretation: someone who picks `nord` wants Nord, not
+//! mirador's opinion of it. Adjust the *mapping* of a palette onto mirador's
+//! keys if it reads badly; do not adjust the palette.
 //!
 //! Two things make a theme file short. `inherits` names another theme to start
 //! from, so a variant is the handful of lines that differ rather than a copy of

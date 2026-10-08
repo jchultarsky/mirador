@@ -20,7 +20,25 @@ use crate::grid::{Column, Grid};
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
-/// Keys this panel responds to.
+/// What the clock panel's keys do. The dialog `a` and `e` open keeps its own
+/// keys: it takes typing, and a key moved there could never be typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClocksAction {
+    Seconds,
+    Add,
+    Edit,
+    MoveUp,
+    MoveDown,
+    TwelveHour,
+    Remove,
+    Up,
+    Down,
+    ShowPath,
+}
+
+/// Every key the panel responds to, under `[clocks.keys]`. The border hint, the
+/// status bar and the help overlay are derived from it, so a key the panel
+/// reads is a key it advertises.
 ///
 /// **The order of the primaries decides which survive a narrow panel**, because
 /// [`crate::frame::hint_line`] fills the border in order and stops at the first
@@ -50,25 +68,6 @@ use crate::panel::{KeyOutcome, Panel, RenderContext};
 /// border pays for every cell: at the default width the first four still fit
 /// exactly and both of these drop, `h` appears from a 55-cell budget, and `d`
 /// joins it at 66.
-/// What the clock panel's keys do. The dialog `a` and `e` open keeps its own
-/// keys: it takes typing, and a key moved there could never be typed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClocksAction {
-    Seconds,
-    Add,
-    Edit,
-    MoveUp,
-    MoveDown,
-    TwelveHour,
-    Remove,
-    Up,
-    Down,
-    ShowPath,
-}
-
-/// Every key the panel responds to, under `[clocks.keys]`. The border hint, the
-/// status bar and the help overlay are derived from it, so a key the panel
-/// reads is a key it advertises.
 pub const ACTIONS: &[Meta<ClocksAction>] = &[
     Meta {
         action: ClocksAction::Seconds,

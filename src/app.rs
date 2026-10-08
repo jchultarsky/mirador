@@ -50,6 +50,10 @@ const MIN_WEIGHT: u16 = 1;
 /// Split `total` cells across `weights`, giving no slot more than its maximum
 /// and handing what it declines to the slots that can still use it.
 ///
+/// `maxima` pairs with `weights` index for index, so the two must be the same
+/// length; both callers build them from the same rows, or from the same row's
+/// entries, so they always match.
+///
 /// A clock cannot use a hundred columns; a calendar cannot use more than its
 /// months need. Pure proportional layout gives them the space anyway and they
 /// sit in it, while the task list next door runs out of room. So a panel may
@@ -71,6 +75,7 @@ const MIN_WEIGHT: u16 = 1;
 /// of room. It only appeared once the terminal was wider than the row's maxima
 /// summed, which is why nothing caught it until someone opened a 4K terminal.
 fn distribute(total: u16, weights: &[u16], maxima: &[Option<u16>]) -> Vec<u16> {
+    debug_assert_eq!(weights.len(), maxima.len(), "one maximum per weight");
     let count = weights.len();
     if count == 0 || total == 0 {
         return vec![0; count];
@@ -268,21 +273,13 @@ pub struct App {
     help_overflow: u16,
     help_viewport: u16,
     should_quit: bool,
-    /// Widgets available but not placed by this layout.
-    ///
-    /// A config written by an earlier version silently lacks every widget added
-    /// since — an absent widget is a valid choice, so nothing errors and
-    /// `--migrate-config` has nothing to fix. This is the only way to find out.
-    /// Whether the startup hint is still on screen. Cleared by the first input
-    /// of any kind: a dashboard you leave open all day must not nag, and a
-    /// notice that will not go away is a nag.
     /// A newer version, if the opt-in check found one. Empty otherwise, and
     /// empty always when the check is off — `App` never starts it, so no test
     /// and no `--print-config` run can reach the network.
     update: crate::update::Found,
-    /// Whether the update notice is still on screen. Retired by the first
-    /// keypress, exactly like the widget hint: a dashboard you leave open all
-    /// day must not nag, and a notice that will not go away is a nag.
+    /// Whether the update notice is still on screen. Retired by the first key,
+    /// paste or click: a dashboard you leave open all day must not nag, and a
+    /// notice that will not go away is a nag.
     show_update_hint: bool,
     /// What has happened since mirador started.
     ///
@@ -789,10 +786,6 @@ impl App {
         recorded
     }
 
-    /// Tick any panel whose refresh interval has elapsed.
-    ///
-    /// Returns whether any panel ticked, and so whether the screen may now be
-    /// out of date.
     /// Tick every panel whose interval has elapsed, and report whether any of
     /// them said something a viewer could see had changed.
     ///
@@ -811,9 +804,11 @@ impl App {
                 .last_tick
                 .is_none_or(|last| now.duration_since(last) >= slot.panel.refresh_interval());
             if due {
-                // Not `changed |= slot.panel.tick()`: `|=` short-circuits once
-                // the accumulator is true, and a panel that stops being ticked
-                // stops updating. The operand order is load-bearing.
+                // Not `changed = changed || slot.panel.tick()`: `||`
+                // short-circuits once the accumulator is true, and a panel that
+                // stops being ticked stops updating. The call goes on the left
+                // so the order is visibly load-bearing; `|=` on a `bool` is
+                // eager and would be as safe, which is what `run` relies on.
                 changed = slot.panel.tick() || changed;
                 slot.last_tick = Some(now);
             }
@@ -842,7 +837,7 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        // Any key at all retires the startup hint. It has been read or it has
+        // Any key at all retires the update notice. It has been read or it has
         // been ignored; either way it has had its turn.
         self.show_update_hint = false;
         // A keypress is weaker evidence than a focus event — the moments this
@@ -1619,9 +1614,9 @@ impl App {
             return false;
         }
 
-        // A deliberate click or scroll retires the startup hint, as a key does.
-        // Pointer motion deliberately does not: the mouse crossing the window
-        // on its way somewhere else is not the user reading anything.
+        // A deliberate click or scroll retires the update notice, as a key
+        // does. Pointer motion deliberately does not: the mouse crossing the
+        // window on its way somewhere else is not the user reading anything.
         let had_hint = std::mem::take(&mut self.show_update_hint);
 
         // The help overlay swallows the next input, whatever it is — the same
@@ -1991,12 +1986,11 @@ impl App {
             ]);
         }
 
-        // An alert takes the whole bar rather than sharing it. It outranks both
-        // hints — one is about a new version, the other about widgets you are
-        // not using, and neither gets worse while you read the other — and it
-        // outranks the key list too, because the *reason* is the actionable
-        // part and squeezing it in beside `Tab focus` truncated it to
-        // "read-only file syste…". The keys are behind `?`, and an alert is
+        // An alert takes the whole bar rather than sharing it. It outranks the
+        // update notice, which does not get worse while you read the alert,
+        // and it outranks the key list too, because the *reason* is the
+        // actionable part and squeezing it in beside `Tab focus` truncated it
+        // to "read-only file syste…". The keys are behind `?`, and an alert is
         // gone as soon as the thing it names is.
         if let Some(alert) = self.alert() {
             let marker = " ⚠ ";
@@ -2070,7 +2064,6 @@ impl App {
             .max_by_key(|alert| alert.severity)
     }
 
-    /// The one-line startup notice about widgets this layout does not place.
     /// Watch `found` for a newer version from now on.
     ///
     /// Separate from [`App::new`] for the same reason the state path is: tests
@@ -2173,6 +2166,10 @@ impl App {
         // The footer is rendered separately and pinned to the last row, rather
         // than being the last line of the scrolling text. A hint saying how to
         // close the overlay is no use once it has scrolled out of the overlay.
+        //
+        // The overlay is 46 cells wide, frame included. The key column's
+        // comment in `help_lines` and the doc of the test that sizes it both
+        // quote that figure, so they move with it.
         let width = 46.min(area.width);
         let text_width = width.saturating_sub(crate::frame::FRAME_WIDTH).max(1);
         // Pre-wrap with Mirador's cell-aware rules. The focused panel may be an
@@ -2492,10 +2489,6 @@ mod tests {
         assert_eq!(after.iter().sum::<u16>(), 100, "total still holds");
     }
 
-    /// The mode has to claim the bare arrows before panels do, for the same
-    /// reason the resize keys are claimed: the calendar binds plain arrows and
-    /// does not inspect modifiers, so a left arrow meant to move a panel would
-    /// scroll a month instead.
     /// The mode has to say that there is a row past the last one. Someone read
     /// `↑↓ move rows`, took it to mean "move between the rows that exist", and
     /// asked how to make a new one — which the mode had done all along.
@@ -2687,6 +2680,10 @@ mod tests {
         );
     }
 
+    /// The mode has to claim the bare arrows before panels do, for the same
+    /// reason the resize keys are claimed: the calendar binds plain arrows and
+    /// does not inspect modifiers, so a left arrow meant to move a panel would
+    /// scroll a month instead.
     #[test]
     fn arrange_claims_the_arrows_the_focused_panel_would_otherwise_take() {
         let mut app = App::new(resizable()).expect("builds");
@@ -2996,8 +2993,8 @@ mod tests {
 
     #[test]
     fn the_update_notice_retires_on_the_first_keypress() {
-        // Same rule as the widget hint. A dashboard left open all day must not
-        // keep telling you something you have already read.
+        // A dashboard left open all day must not keep telling you something
+        // you have already read.
         let mut app = App::new(config_with(&["clocks"])).unwrap();
         app.watch_for_updates(std::sync::Arc::new(std::sync::Mutex::new(Some(
             "9.9.9".to_string(),
@@ -3542,6 +3539,17 @@ mod tests {
         assert_eq!(distribute(100, &[25, 75], &[None, None]), vec![25, 75]);
     }
 
+    /// A maximum with no weight beside it was ignored in silence, and a weight
+    /// with no maximum panicked on an index; both are a caller pairing the
+    /// wrong slices, and the assertion says so by name. A debug assertion, so
+    /// the test is a debug build's only.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "one maximum per weight")]
+    fn distribute_refuses_maxima_that_do_not_pair_with_the_weights() {
+        distribute(100, &[50, 50], &[None, None, Some(10)]);
+    }
+
     #[test]
     fn every_cell_is_allocated_however_the_weights_divide() {
         // Truncating division would leave a ragged edge where the frames stop
@@ -3920,17 +3928,62 @@ mod tests {
 
     #[test]
     fn a_due_panel_is_ticked_even_when_an_earlier_one_already_reported_a_change() {
-        // `changed |= panel.tick()` would short-circuit and skip the call, and
-        // a panel that stops being ticked stops updating — a bug that would
-        // show up only when some *other* panel happened to change first.
-        let mut app = App::new(config_with(&["clocks", "todo"])).unwrap();
+        // `changed = changed || panel.tick()` would short-circuit and skip the
+        // call, and a panel that stops being ticked stops updating — a bug
+        // that would show up only when some *other* panel happened to change
+        // first.
+        //
+        // The calls are counted by the panels themselves. This test used to
+        // check `last_tick`, which `tick_panels` sets on the next line whether
+        // or not `tick()` ran, so it passed with the short-circuit put back.
+        struct TickingPanel {
+            ticks: std::rc::Rc<std::cell::Cell<usize>>,
+        }
+
+        impl crate::panel::Panel for TickingPanel {
+            fn title(&self) -> String {
+                "ticking test".into()
+            }
+
+            fn tick(&mut self) -> bool {
+                self.ticks.set(self.ticks.get() + 1);
+                true
+            }
+
+            fn render(
+                &mut self,
+                _frame: &mut ratatui::Frame,
+                _area: Rect,
+                _ctx: crate::panel::RenderContext<'_>,
+            ) {
+            }
+        }
+
+        let first = std::rc::Rc::new(std::cell::Cell::new(0));
+        let second = std::rc::Rc::new(std::cell::Cell::new(0));
+        let panels: Vec<(&str, Box<dyn Panel>)> = vec![
+            (
+                "clocks",
+                Box::new(TickingPanel {
+                    ticks: first.clone(),
+                }),
+            ),
+            (
+                "todo",
+                Box::new(TickingPanel {
+                    ticks: second.clone(),
+                }),
+            ),
+        ];
+        let mut app = App::with_panels(config_with(&["clocks", "todo"]), panels).unwrap();
         for slot in &mut app.slots {
             slot.last_tick = None;
         }
-        app.tick_panels();
-        assert!(
-            app.slots.iter().all(|slot| slot.last_tick.is_some()),
-            "a due panel was skipped"
+        assert!(app.tick_panels(), "both panels reported a change");
+        assert_eq!(
+            (first.get(), second.get()),
+            (1, 1),
+            "each due panel is ticked once, the second even after the first changed"
         );
     }
 

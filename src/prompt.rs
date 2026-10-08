@@ -600,8 +600,6 @@ mod tests {
         assert_eq!(p.selected, 0);
     }
 
-    /// A list is chosen from, not completed into — `Tab` would be a second
-    /// way to do what the arrows already do, and a worse one.
     /// Path completion, against a real directory: Tab extends what was typed
     /// to the longest start every match shares, a directory completes with
     /// its slash so the next Tab goes into it, and no match leaves the text
@@ -677,6 +675,8 @@ mod tests {
         assert_eq!(common_prefix(&s(&["über", "übel"])).as_deref(), Some("übe"));
     }
 
+    /// A list is chosen from, not completed into — `Tab` would be a second
+    /// way to do what the arrows already do, and a worse one.
     #[test]
     fn tab_does_nothing_when_the_prompt_offers_a_list() {
         let mut p = prompt("Lis");

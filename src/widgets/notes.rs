@@ -1119,8 +1119,9 @@ impl Panel for NotesPanel {
     }
 
     fn tick(&mut self) -> bool {
-        // Only the date matters here, and only when it changes: `today` decides
-        // whether a note is labelled "today" or by its date.
+        // Only the date matters here: a note written or edited after midnight
+        // is stamped with the new day. Nothing drawn depends on it, so the one
+        // redraw a rollover asks for is a spare one, once a day.
         let today = jiff::Zoned::now().date();
         let moved = today != self.today;
         self.today = today;

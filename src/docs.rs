@@ -25,10 +25,13 @@ use std::path::{Path, PathBuf};
 
 /// The notes, with line endings normalised.
 ///
-/// `include_str!` does *not* normalise CRLF the way rustc does inside a string
-/// literal, so a Windows checkout hands this file back with `\r\n` and a naive
-/// comparison fails there and nowhere else. That asymmetry has already cost
-/// this repository one confusing CI failure; see the `layout_edit` sweep.
+/// `read_to_string` hands back whatever line endings are on disk. A checkout
+/// made through git is LF everywhere since `.gitattributes` asked for it, but
+/// that binds git and nothing else: a packager's tarball, or a checkout with
+/// its own settings, can still be CRLF, and a naive comparison would then fail
+/// there and nowhere else. The same trap, met through `include_str!`, has
+/// already cost this repository one confusing CI failure; see the
+/// `layout_edit` sweep.
 fn notes() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("CLAUDE.md");
     std::fs::read_to_string(&path)
@@ -42,6 +45,41 @@ fn readme() -> String {
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
         .replace("\r\n", "\n")
+}
+
+/// The number a word in the README spells, `one` to `twenty` or in digits.
+///
+/// Twenty is as far as a count of widgets is going to need: the dashboard has
+/// seventeen, and a sentence that has to spell out twenty-one can grow this.
+fn spelled_number(word: &str) -> Option<usize> {
+    const WORDS: [&str; 20] = [
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
+    ];
+    let word = word.trim_matches(|c: char| !c.is_alphanumeric());
+    WORDS
+        .iter()
+        .position(|spelled| spelled.eq_ignore_ascii_case(word))
+        .map(|index| index + 1)
+        .or_else(|| word.parse().ok())
 }
 
 /// The individual keys a `Binding::key` label or a README key cell names.
@@ -628,6 +666,46 @@ mod tests {
             }
         }
         assert!(faults.is_empty(), "{}", faults.join("\n"));
+    }
+
+    /// The README opens its reference to the panels by saying how many
+    /// widgets there are, and nothing held that number to the code. It said
+    /// "Fourteen" from the day `memory` made fourteen until well after `disk`
+    /// made seventeen — through the same pass that corrected the shipped
+    /// config's list of widgets, which is a count of the same thing.
+    ///
+    /// Only that one opening paragraph is read. A count of *some* widgets
+    /// elsewhere is ordinary prose, and holding every such phrase to the total
+    /// would fail on a correct sentence.
+    #[test]
+    fn the_readme_counts_the_widgets_there_are() {
+        let text = readme();
+        let intro = text
+            .split_once("\n## The panels\n")
+            .map(|(_, rest)| rest.trim_start())
+            .and_then(|rest| rest.split("\n\n").next())
+            .expect("the README has a `## The panels` section");
+        let words: Vec<&str> = intro.split_whitespace().collect();
+        let counts: Vec<usize> = words
+            .windows(2)
+            .filter(|pair| {
+                pair[1]
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .eq_ignore_ascii_case("widgets")
+            })
+            .filter_map(|pair| spelled_number(pair[0]))
+            .collect();
+        assert!(
+            !counts.is_empty(),
+            "the paragraph opening `## The panels` no longer says how many \
+             widgets there are, so this check is holding nothing: {intro:?}"
+        );
+        let total = crate::widgets::WIDGET_NAMES.len();
+        assert!(
+            counts.iter().all(|&count| count == total),
+            "the README's `## The panels` says {counts:?} widgets and \
+             `WIDGET_NAMES` has {total}"
+        );
     }
 
     #[test]

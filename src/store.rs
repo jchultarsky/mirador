@@ -302,10 +302,11 @@ pub fn move_aside(path: &Path) -> Result<Option<std::path::PathBuf>> {
 
 /// Record the outcome of a save where the caller cannot handle a failure.
 ///
-/// The three data stores all keep the reason for the last failed save so their
-/// panel can render it. Swallowing the error is deliberate — a read-only disk
-/// must not take the dashboard down — but swallowing it *silently* is not: an
-/// edit that never reached the disk is exactly what the user needs told.
+/// Every data store — tasks, notes, world clocks, the watchlist — keeps the
+/// reason for its last failed save so its panel can render it. Swallowing the
+/// error is deliberate — a read-only disk must not take the dashboard down —
+/// but swallowing it *silently* is not: an edit that never reached the disk is
+/// exactly what the user needs told.
 pub fn report(result: Result<()>, last_error: &mut Option<String>) {
     *last_error = match result {
         Ok(()) => None,
