@@ -2335,9 +2335,47 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.20.0` is released**, as a GitHub release with binaries for macOS
+- **`1.21.0` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a minor release cut on 2026-10-07
+  and published on crates.io. It is a minor release cut on 2026-10-08
+  carrying the P2 items from the 2026-10-06 code review (#303), as
+  seventeen commits rebase-merged: one copy where the same thing had been
+  written out several times (the TOML stores, the dialogs' frame and
+  cursor, the URL encoder, the layout commit, the lock spelling, the test
+  scaffolding), comments made true, nine tests that could not fail made
+  able to, the owner's decision that Ctrl+C in arrange mode keeps the
+  arrangement, and the defects that work turned up: dialog keys cut
+  mid-word on a narrow terminal, an add-clock prompt whose Enter could
+  add a city drawn nowhere, emoji cuts drawn wider than their room, a
+  notes reader cut with no mark, an agenda that did not redraw when a
+  meeting started, a paste that left the update notice standing, and
+  `[news].refresh_minutes` multiplied unchecked. Minor rather than patch
+  because that setting, and a pomodoro length, above a year now stop
+  startup with a message.
+
+  **The fixes were reviewed twice, and the second review found three
+  tests that could not fail** — one of them a test whose comment the same
+  branch had just sharpened — plus a migration hint that promised an
+  in-place update `--migrate-config` then refused. Two process lessons.
+  The CHANGELOG merge script used to combine the packages only ever
+  *added* entries, so a package that reworded another's entry left both
+  wordings standing; it now replaces a rewritten entry in place, and the
+  check that caught it is that the Unreleased count must equal what the
+  packages net added. And **a refactor of shared test helpers has to
+  grep the `cfg(windows)` code**: the new `TempDir` made its field
+  private, one Windows-only test in `upgrade.rs` still read `.0`, and
+  nothing on a Mac compiles that test — the PR's first CI run went red on
+  Windows alone, as #285 did for a different reason.
+
+  Step 0 was the PR head, whose tree `main` matches byte for byte, as a
+  release build under tmux at 120x40 with a fresh home: first run drew
+  every panel and wrote no `state.toml` after both pickers were opened and
+  closed with Esc, the notes reader ended its cut in `…`, the add-clock
+  prompt kept the city under the cursor at four rows and Enter added
+  nothing at three, the key map's footer read `y reset  Esc keep` during
+  its question, and `q` quit.
+
+- **`1.20.0`** was a minor release cut on 2026-10-07
   carrying the P1 items from the 2026-10-06 code review (#301), as twelve
   commits rebase-merged so each package stays its own commit: saves that
   write through symlinks and start private, `[todo].horizon_days` read at
