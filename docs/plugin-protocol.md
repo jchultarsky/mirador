@@ -93,7 +93,13 @@ Watch Log event or stderr diagnostic.
 Each placement owns one child process. Stdin and stdout carry UTF-8 JSON Lines;
 stderr is a diagnostic stream. On removal or normal application exit, Mirador
 sends `shutdown`, allows 300 ms for cleanup, then terminates a child that
-remains. A well-formed message received after `shutdown` is ignored, so a
+remains. `shutdown` goes ahead of every message Mirador has not yet written,
+except a `hello` still waiting to go, which is sent first; the rest are
+discarded, not sent. What Mirador has already written still arrives first:
+the message being written at the time, and whatever the operating system's
+pipe buffer holds, which can be thousands of small messages. A plugin that has
+fallen behind reads those before `shutdown`; only the host's own queue is
+skipped. A well-formed message received after `shutdown` is ignored, so a
 frame already in flight does not cut the cleanup short; one the host would
 refuse at any time — malformed, over a bound below, or naming another
 protocol — still ends the process at once. The exit path waits — a 750 ms

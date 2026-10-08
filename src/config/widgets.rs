@@ -27,16 +27,17 @@ pub struct ClocksConfig {
     pub date_format: String,
     /// Show each zone's offset relative to the primary clock.
     pub show_offset: bool,
-    /// Include seconds in the large clock. On by default — the block numerals
-    /// are the panel's whole face, and a chronometer that visibly runs is the
-    /// look the design is after; `s` turns them off at a keystroke for anyone
-    /// who finds the tick draws the eye.
+    /// Include seconds in the large clock and the zone table. On by default —
+    /// the block numerals are the panel's whole face, and a chronometer that
+    /// visibly runs is the look the design is after; `s` turns them off at a
+    /// keystroke for anyone who finds the tick draws the eye, and takes them
+    /// out of the table's `time_format` too.
     pub show_seconds: bool,
     /// A 12-hour clock, with AM/PM set small beside the numerals. Off by
     /// default; `h` switches it and the choice is remembered. When on it
     /// governs the whole panel, converting the zone table's `time_format` to
-    /// match (#265). When off, `time_format` is used exactly as written, so a
-    /// config that already asked for `%I:%M:%S %p` keeps its table.
+    /// match (#265). When off, the hours in `time_format` are used as written,
+    /// so a config that already asked for `%I:%M:%S %p` keeps its table.
     pub twelve_hour: bool,
     /// The panel's keys, where the reader has moved them. See
     /// [`crate::keymap::PanelKeymap`].

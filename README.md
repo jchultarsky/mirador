@@ -451,8 +451,12 @@ does, with today marked.
 The clock is 24-hour unless you ask otherwise: `h` switches it to 12-hour and
 back, and the choice is remembered, or set `[clocks].twelve_hour = true`. AM or
 PM sits small at the top right of the numerals, over the seconds, and the table
-follows — its `time_format` is converted to 12-hour, keeping your padding. With
-12-hour off, `time_format` is used exactly as you wrote it.
+follows — its `time_format` is converted to 12-hour, keeping your padding. `s`
+hides the seconds from the table as well as from the big clock: they come out
+of `time_format` with the separator before them, a fraction of a second goes
+with them, and `%T`, `%X` and `%r` become their seconds-less selves. With
+12-hour off and the seconds showing, `time_format` is used exactly as you wrote
+it.
 
 `a` adds a clock and `d` removes the selected one. Adding one opens a list of
 cities; type to narrow it, `↑↓` to choose, `Enter` to add.
@@ -463,7 +467,9 @@ time in `America/Los_Angeles`, Bengaluru in `Asia/Kolkata`, Boston in
 clock. Typing matches the city *or* the identifier, anywhere in either, so
 `seattle`, `los_angeles` and `america/` all find the same zone. The city you
 picked becomes the clock's label, and the identifier is shown beside it so what
-ends up in your config is never a surprise.
+ends up in your config is never a surprise — whole, or on a terminal too narrow
+for the longest in the list, on no row at all, since half an identifier names
+some other zone or none.
 
 Anything not on the list still works: type a zone it does not carry and it is
 taken as written, with `HQ = Europe/Berlin` naming it yourself.

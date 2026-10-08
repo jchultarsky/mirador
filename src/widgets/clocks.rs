@@ -452,53 +452,100 @@ impl ClocksPanel {
 /// along with the separator immediately before it, and everything else is left
 /// alone.
 ///
+/// The format is read through [`specifiers`], the way `strftime` reads it,
+/// not searched for the text `%S`: a flag or a width is still the
+/// seconds (`%-S`, `%02S`, `%:S`), and `%%S` is a percent sign and a letter.
+/// The three whole times that carry seconds become their seconds-less
+/// selves as jiff draws them — `%T` and `%X` are `%H:%M:%S` whatever their
+/// flags say, so they become `%H:%M` with the hour padded as it was, and
+/// `%r` is `%-I:%M:%S %p`. A fraction of a second goes with them — `%f`,
+/// `%N` and `%.3f`, and a `.` or `,` written before one — since a fraction
+/// left behind draws `09:05.123`, a minute with a decimal fraction of one.
+/// `%c` is left alone: it is a whole date, and taking it apart would be
+/// guessing at a layout that is jiff's to choose.
+///
 /// A format with no seconds in it is returned unchanged, which is the right
 /// answer rather than a special case: there is nothing for `s` to hide, and the
 /// table simply looks the same either way.
 fn without_seconds(format: &str) -> String {
-    // Longest first: `%:S` and `%.f` would otherwise be half-matched by `%S`.
-    for token in ["%:S", "%S", "%T"] {
-        if let Some(at) = format.find(token) {
-            let replacement = if token == "%T" { "%H:%M" } else { "" };
-            // Take the separator with it, so `%H:%M:%S` does not leave `%H:%M:`.
-            let mut start = at;
-            if replacement.is_empty()
-                && let Some(before) = format[..at].chars().next_back()
-                && matches!(before, ':' | '.' | '-')
-            {
-                start -= before.len_utf8();
-            }
-            return format!(
-                "{}{replacement}{}",
-                &format[..start],
-                &format[at + token.len()..]
-            );
+    let mut out = String::with_capacity(format.len());
+    let mut copied = 0;
+    for (range, _, conversion) in specifiers(format) {
+        let (replacement, separators): (&str, &[char]) = match conversion {
+            'S' => ("", &[':', '.', '-']),
+            // A fraction of a second, with or without its own dot.
+            'f' | 'N' => ("", &['.', ',']),
+            'T' | 'X' => ("%H:%M", &[]),
+            'r' => ("%-I:%M %p", &[]),
+            _ => continue,
+        };
+        let mut text = &format[copied..range.start];
+        // Take the separator with it, so `%H:%M:%S` does not leave `%H:%M:`.
+        // Only from the text between specifiers: the character before a
+        // specifier may be the end of another one.
+        if let Some(before) = text.chars().next_back()
+            && separators.contains(&before)
+        {
+            text = &text[..text.len() - before.len_utf8()];
         }
+        out.push_str(text);
+        out.push_str(replacement);
+        copied = range.end;
     }
-    format.to_string()
+    out.push_str(&format[copied..]);
+    out
 }
 
-/// One conversion specifier in a `strftime` format: its byte range, flags and
-/// conversion character. `%%` comes back as a specifier whose conversion is
-/// `%`, so a literal percent is never mistaken for the start of the next one.
+/// One conversion specifier in a `strftime` format: its byte range, what
+/// stands between the `%` and the conversion, and the conversion character.
+/// `%%` comes back as a specifier whose conversion is `%`, so a literal
+/// percent is never mistaken for the start of the next one.
+///
+/// What stands between is read as jiff reads it — flags, then a width, then
+/// colons — so `%-S`, `%02S` and `%:S` are all the seconds. Flags only, as
+/// this once read, made `%:S` a conversion called `:` followed by the text
+/// `S`, which jiff does not agree with. Likewise `%.3f`, jiff's fraction with
+/// a leading dot, is one specifier: an `f` with `.3` between.
 fn specifiers(format: &str) -> impl Iterator<Item = (std::ops::Range<usize>, &str, char)> {
     let mut from = 0;
     std::iter::from_fn(move || {
         let at = from + format[from..].find('%')?;
         let spec = &format[at + 1..];
-        let flags_len = spec
+        let flags = spec
             .find(|c: char| !matches!(c, '-' | '_' | '0' | '^' | '#'))
             .unwrap_or(spec.len());
-        let conversion = spec[flags_len..].chars().next();
-        let end = at + 1 + flags_len + conversion.map_or(0, char::len_utf8);
+        let width = flags
+            + spec[flags..]
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(spec.len() - flags);
+        let colons = width
+            + spec[width..]
+                .find(|c: char| c != ':')
+                .unwrap_or(spec.len() - width);
+        // `%.3f` is one directive in jiff — a dot, a precision, then `f` —
+        // and comes back as an `f` with `.3` standing between. A dot not
+        // followed by digits and `f` is not, and jiff draws it as text.
+        let dotted = spec[colons..].strip_prefix('.').and_then(|rest| {
+            let digits = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            rest[digits..]
+                .starts_with('f')
+                .then_some(colons + 1 + digits)
+        });
+        let (between, conversion) = match dotted {
+            Some(between) => (between, Some('f')),
+            None => (colons, spec[colons..].chars().next()),
+        };
+        let end = at + 1 + between + conversion.map_or(0, char::len_utf8);
         from = end;
-        Some((at..end, &spec[..flags_len], conversion.unwrap_or('%')))
+        Some((at..end, &spec[..between], conversion.unwrap_or('%')))
     })
 }
 
 /// Whether a format prints AM or PM, which is what decides the table's columns.
 fn has_meridiem(format: &str) -> bool {
-    specifiers(format).any(|(_, _, conversion)| matches!(conversion, 'p' | 'P'))
+    specifiers(format).any(|(_, _, conversion)| matches!(conversion, 'p' | 'P' | 'r'))
 }
 
 /// `format` as a 12-hour format, for when `[clocks].twelve_hour` or `h` has
@@ -513,7 +560,7 @@ fn has_meridiem(format: &str) -> bool {
 /// `%I:%M %p (%Z)` rather than ending in the meridiem.
 ///
 /// There is deliberately no conversion the other way. With the setting off the
-/// format is used as written, which is what it did before the setting existed
+/// hours are used as written, which is what it did before the setting existed
 /// — so a config that asked for `%I:%M:%S %p` keeps the table it asked for.
 ///
 /// Left alone: a format that is already 12-hour, one with no hour in it, and
@@ -1264,6 +1311,101 @@ mod tests {
         // The separator goes with it, rather than leaving a trailing colon.
         assert!(!without_seconds("%H:%M:%S").ends_with(':'));
         assert!(!without_seconds("%H.%M.%S").ends_with('.'));
+    }
+
+    /// The seconds were found by searching the format for the text
+    /// `%S`, which is not how `strftime` reads it. A flag or a width between
+    /// the `%` and the `S` hid the seconds from the search, so `%H:%M:%-S`
+    /// kept them with `s` off — `16:47:9` under a clock without them, #106
+    /// again — and a literal `%%S` was taken for one, leaving a dangling
+    /// `%` that drew as `16:47 %`. Every case here is checked against what
+    /// jiff actually draws, not only against the format text.
+    #[test]
+    fn hiding_the_seconds_reads_the_format_the_way_strftime_does() {
+        // A flag or a width is still the seconds.
+        assert_eq!(without_seconds("%H:%M:%-S"), "%H:%M");
+        assert_eq!(without_seconds("%H:%M:%_S"), "%H:%M");
+        assert_eq!(without_seconds("%H:%M:%02S"), "%H:%M");
+        // A literal percent is text, and `%%S` is not the seconds.
+        assert_eq!(without_seconds("%H:%M %%S"), "%H:%M %%S");
+
+        let at = jiff::civil::date(2026, 10, 8)
+            .at(9, 5, 7, 123_456_789)
+            .to_zoned(TimeZone::UTC)
+            .expect("a real instant");
+        let drawn = |format: &str| at.strftime(format).to_string();
+        // jiff reads colons before any conversion, so `%:S` is the seconds
+        // and has to stay on the list the search used to carry.
+        assert_eq!(drawn("%H:%M:%:S"), "09:05:07");
+        // And it reads `%.3f` as one directive — the dot, a precision, the
+        // `f` — not as a conversion called `.` followed by the text `3f`.
+        assert_eq!(drawn("%H:%M:%S%.3f"), "09:05:07.123");
+        let one: Vec<_> = specifiers("%.3f").collect();
+        assert_eq!(one, [(0..4, ".3", 'f')], "{one:?}");
+        for (format, expected) in [
+            ("%H:%M:%S", "09:05"),
+            ("%H:%M:%-S", "09:05"),
+            ("%H:%M:%:S", "09:05"),
+            // `%T` is drawn padded whatever its flags say — `%-T` reads
+            // `09:05:07` — so the hour it gives way to stays padded.
+            ("%-T", "09:05"),
+            // The two composites that carry seconds: `%X` is jiff's
+            // `%H:%M:%S` and `%r` its `%-I:%M:%S %p`.
+            ("%X", "09:05"),
+            ("%r", "9:05 AM"),
+            ("%I:%M:%S %p", "09:05 AM"),
+            ("%H:%M %%S", "09:05 %S"),
+            // A fraction of a second is the seconds too. Left behind, it
+            // drew `09:05.123` — a minute and a decimal fraction of one,
+            // under a big clock that had dropped its seconds.
+            ("%H:%M:%S%.3f", "09:05"),
+            ("%H:%M:%S.%N", "09:05"),
+            ("%H:%M:%S,%3f", "09:05"),
+            ("%T%.f", "09:05"),
+        ] {
+            assert_eq!(drawn(&without_seconds(format)), expected, "{format}");
+        }
+        // `%r` says AM or PM, so its table is the meridiem one with `s` on
+        // as well as off. Uncounted, it took the 12-cell time column with
+        // the seconds — `12:05:07 PM +1d` is fifteen, #107's cut — and
+        // switched column sets when `s` turned them off.
+        assert!(has_meridiem("%r"));
+        assert!(has_meridiem(&without_seconds("%r")));
+    }
+
+    /// The same fix wired in, checked the way the #106 test checks it: a panel
+    /// whose `time_format` carries a flagged seconds specifier, drawn with
+    /// `s` on and off.
+    #[test]
+    fn a_flagged_seconds_specifier_leaves_the_zone_table_with_s() {
+        let config = ClocksConfig {
+            time_format: "%H:%M:%-S".into(),
+            ..ClocksConfig::default()
+        };
+        let (mut panel, _guard) = panel_from_named("flagged-seconds", config);
+        assert!(!panel.secondary.is_empty(), "a zone table to look at");
+        let zone_rows_with_seconds = |panel: &mut ClocksPanel| -> Vec<String> {
+            let buffer = crate::widgets::testing::render_in(
+                panel,
+                60,
+                20,
+                &crate::theme::Theme::default(),
+                true,
+            );
+            crate::widgets::testing::rows(&buffer)
+                .into_iter()
+                .filter(|row| row.matches(':').count() >= 2 && !row.contains('\u{2588}'))
+                .collect()
+        };
+
+        panel.show_seconds = true;
+        assert!(
+            !zone_rows_with_seconds(&mut panel).is_empty(),
+            "with seconds on, the zone rows carry them"
+        );
+        panel.show_seconds = false;
+        let still = zone_rows_with_seconds(&mut panel);
+        assert!(still.is_empty(), "{still:#?}");
     }
 
     /// The wiring, not just the helper. Breaking the call site while leaving

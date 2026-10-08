@@ -613,8 +613,35 @@ sixth panel at 120 columns. Four decisions worth keeping. **Its real work is
 `group`**, as the temperature panel's is: `sysinfo` lists volumes and a
 person thinks in devices, so `/` and `/System/Volumes/Data` — one APFS
 container, one pool of free space, reported twice — fold into one row named
-by the shortest mount point, and what folds them is the *shared free space
-to within a percent*, not the capacity, so two identical disks stay two.
+by the shortest mount point, and what folds them is the *shared free space*,
+not the capacity. Two volumes of one size are one device when they share a
+`sysinfo` name and their free space is within a percent of the size, or,
+whatever their names, within a tight line (`fold_tolerance`): a
+ten-thousandth, never under 128 MiB, and the floor never over a percent. It
+was "within a percent" and nothing else until two 2 TB backup disks fifteen
+gigabytes apart came out as one row with the second's free figure. The name
+is what keeps the container whole: `sysinfo` reads `kCFURLVolumeNameKey`,
+which is `Macintosh HD` for both halves on the owner's Mac (`diskutil` calls
+the second `Data`), and their drift is whatever was written between the two
+reads, which is not small. **The first measurement of that drift was wrong by
+an order of magnitude**, and the first version of this rule, a tight line
+alone, was built on it and caught only in review: 48 MB under a `dd` from
+`/dev/urandom`, which runs at about 450 MB/s — the source's speed, not the
+disk's. A 30 GB write from a cached file at the SSD's own speed, 3 to 11 GB/s,
+drifted 260 MB in review and 641 MB on a re-run, 13 of whose 100 reads were
+over this Mac's 200 MB tight line; each such read split the row, dropped the
+read-only `/`, renamed it `/System/Volumes/Data` and threw away the I/O graph
+during the write it exists to show. Measure a write's effect with a load
+nothing but the disk limits. The tight line stays as the hedge for a macOS
+that names the halves apart, which it holds together idle and under an
+ordinary write; its cap is there because 128 MiB is more than a percent of
+anything under about 13 GB, and uncapped it folded two 8 GB sticks 100 MB
+apart. **Two edges remain**, one each side, and no free-space rule sees past
+either: two disks of one size *and one name* — both left `Untitled` — within
+a percent are one row, twenty gigabytes on 2 TB; and two of one size
+whatever their names are one row until 200 MB is written to one, or 128 MiB
+on 256 GB. An empty name, which is what an unlabelled Windows volume
+reports, counts as none.
 Read-only volumes are dropped while a writable one remains, which is what
 keeps every snap's squashfs off a Linux list, and the memory-backed pseudo
 file systems are named and skipped. **It reads on a thread**, though the

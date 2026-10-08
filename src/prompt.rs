@@ -369,37 +369,69 @@ impl Prompt {
         ))];
 
         // The list, if there is one, between the field and the help line.
+        //
+        // The city column is measured in cells, never bytes (invariant 9), and
+        // over the whole list rather than the rows on screen, so it holds still
+        // as the list scrolls. Capped at eighteen, and at what the dialog
+        // leaves beside the marker: the city is the name a row is chosen by,
+        // so it is the last thing to give way, and says so with `…` when it
+        // does.
         let city_width = listed
             .iter()
-            .map(|p| p.city.len())
+            .map(|p| crate::grid::display_width(p.city))
             .max()
             .unwrap_or(0)
-            .min(18);
+            .min(18)
+            .min(inner.saturating_sub(2));
+        // The identifier column is decided once for the draw, like the city
+        // column and over the same list (invariant 5): every row carries one
+        // when the widest fits beside the cities, and none does otherwise.
+        // Dropped row by row, Melbourne sat with no zone between two rows
+        // that had theirs, which reads as a place without one or a column
+        // that is broken (invariant 11), and the gaps moved as it scrolled.
+        let tz_width = listed
+            .iter()
+            .map(|p| crate::grid::display_width(p.tz))
+            .max()
+            .unwrap_or(0);
+        let with_tz = 2 + city_width + 2 + tz_width <= inner;
+        let row_width = u16::try_from(inner).unwrap_or(u16::MAX);
         // `enumerate` before `skip`, so `index` is the row's place in the whole
         // list and can be compared against `selected`. Enumerating after
         // skipping restarts the count at zero and puts the highlight on the top
         // visible row whatever is actually selected.
         for (index, place) in listed.iter().enumerate().skip(offset).take(rows) {
             let here = index == self.selected;
-            lines.push(Line::from(vec![
+            let city = crate::grid::truncate(place.city, city_width);
+            let pad = city_width.saturating_sub(crate::grid::display_width(&city));
+            let mut parts = vec![vec![
                 Span::styled(
                     if here { "▸ " } else { "  " },
                     Style::default().fg(theme.accent),
                 ),
                 Span::styled(
-                    format!("{:<city_width$}  ", place.city),
+                    format!("{city}{:pad$}", ""),
                     if here {
                         Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(theme.text)
                     },
                 ),
-                // The identifier is shown as well as the city, because it is
-                // what ends up in your config and in zones.toml — picking
-                // Seattle and finding `America/Los_Angeles` written down later
-                // should not be a surprise.
-                Span::styled(place.tz, Style::default().fg(theme.muted)),
-            ]));
+            ]];
+            // The identifier is shown as well as the city, because it is what
+            // ends up in your config and in zones.toml — picking Seattle and
+            // finding `America/Los_Angeles` written down later should not be a
+            // surprise. That makes it a value, so it is drawn whole or not at
+            // all (invariant 19): the terminal cut it at the dialog's edge,
+            // and `Australia/Melbou` is not a zone. `with_tz` already knows
+            // it fits; `assemble` is the guard if that ever drifts.
+            if with_tz {
+                parts.push(vec![Span::styled(
+                    format!("  {}", place.tz),
+                    Style::default().fg(theme.muted),
+                )]);
+            }
+            lines.push(crate::grid::assemble(parts, row_width));
         }
 
         if spaced {
@@ -922,6 +954,155 @@ mod tests {
                     .unwrap_or_else(|e| panic!("{width}x{height} failed to draw: {e}"));
             }
         }
+    }
+
+    /// The list's rows as drawn, each beside the place it should show: the
+    /// text between the borders, marker and padding trimmed off.
+    fn drawn_list(
+        p: &Prompt,
+        width: u16,
+        height: u16,
+    ) -> Vec<(&'static crate::zones::Place, String)> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|f| p.render(f, f.area(), &Theme::default()))
+            .expect("draw");
+        let rows = crate::widgets::testing::rows(terminal.backend().buffer());
+        let Some(top) = rows.iter().position(|row| row.contains('╭')) else {
+            return Vec::new();
+        };
+        let offset = p.offset.get();
+        (0..p.page.get())
+            .filter_map(|i| {
+                let place = p.matches().get(offset + i)?;
+                let inside = rows.get(top + 2 + i)?.split('│').nth(1)?;
+                Some((
+                    *place,
+                    inside.trim().trim_start_matches('▸').trim().to_string(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Invariant 19: the identifier beside each city is a value — it is
+    /// what ends up in `zones.toml` — so it is drawn whole or not at all.
+    /// It was drawn at its natural width after the city column, and the
+    /// terminal cut it at the dialog's edge with nothing to say so:
+    /// `Australia/Melbou` at 40 columns, which is not a zone, and
+    /// `America/Argentina/Buenos_Aires` on anything under 54. The city is
+    /// the name the row is chosen by, so it gives way last and says so.
+    #[test]
+    fn the_zone_list_never_cuts_an_identifier_silently() {
+        for filter in ["", "Argentina", "Australia"] {
+            let mut whole = 0;
+            for width in 1..=64u16 {
+                let p = Prompt::new(
+                    "ZONE",
+                    "Enter adds · Esc cancels",
+                    filter,
+                    Completion::Places(crate::zones::PLACES),
+                );
+                let drawn = drawn_list(&p, width, 18);
+                let mut with_tz = 0;
+                for (place, row) in &drawn {
+                    let mut parts = row.split("  ").map(str::trim).filter(|s| !s.is_empty());
+                    let city = parts.next().unwrap_or_default();
+                    let tz = parts.collect::<Vec<_>>().join("  ");
+                    assert!(
+                        tz.is_empty() || tz == place.tz,
+                        "{} at width {width} is drawn beside {tz:?}, not {}",
+                        place.city,
+                        place.tz
+                    );
+                    // Nothing at all is no fragment: a dialog one column wide
+                    // has no inside to draw a city in.
+                    assert!(
+                        city.is_empty() || city == place.city || city.ends_with('…'),
+                        "{} at width {width} is drawn as {city:?}",
+                        place.city
+                    );
+                    if tz == place.tz {
+                        with_tz += 1;
+                    }
+                    if width == 64 {
+                        assert_eq!(tz, place.tz, "at full width nothing gives way");
+                    }
+                }
+                // Invariants 5 and 11: the column is decided once for the
+                // draw. Dropped row by row, Melbourne sat with no zone
+                // between Canberra and Brisbane with theirs, which reads as
+                // a place with no zone or a column that is broken.
+                assert!(
+                    with_tz == 0 || with_tz == drawn.len(),
+                    "{filter:?} at width {width}: {with_tz} of {} rows carry an identifier: \
+                     {drawn:?}",
+                    drawn.len()
+                );
+                whole += with_tz;
+            }
+            assert!(whole > 0, "no identifier was drawn for {filter:?}");
+        }
+    }
+
+    /// The latent half of the same fault: the city column was sized in
+    /// bytes and padded in characters, and a city is neither — a CJK name
+    /// is three bytes and two cells a glyph. Every zone shipped is ASCII,
+    /// which is why nothing showed, but `zones.rs` is a table anyone may
+    /// extend.
+    #[test]
+    fn the_city_column_is_measured_in_cells() {
+        const WIDE: &[crate::zones::Place] = &[
+            crate::zones::Place {
+                city: "東京都",
+                tz: "Asia/Tokyo",
+            },
+            crate::zones::Place {
+                city: "Paris",
+                tz: "Europe/Paris",
+            },
+        ];
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (width, height) = (60u16, 12u16);
+        let p = Prompt::new("ZONE", "help", "", Completion::Places(WIDE));
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|f| p.render(f, f.area(), &Theme::default()))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let column = |tz: &str| {
+            let len = u16::try_from(tz.len()).expect("short");
+            (0..height).find_map(|y| {
+                (0..=width - len).find(|&x| {
+                    tz.char_indices().all(|(i, c)| {
+                        let at = x + u16::try_from(i).expect("short");
+                        buffer[(at, y)].symbol() == c.to_string()
+                    })
+                })
+            })
+        };
+        let tokyo = column("Asia/Tokyo");
+        assert!(tokyo.is_some(), "the identifier is drawn at all");
+        assert_eq!(
+            tokyo,
+            column("Europe/Paris"),
+            "the identifiers start in one column"
+        );
+        // And that column is where a city column measured in cells puts it:
+        // the marker, the widest city in cells, the gap. Aligned is not
+        // enough, since a column sized in bytes and padded in cells aligns
+        // too, three cells further out — nine bytes for 東京都's six cells.
+        let marker = (0..height)
+            .find_map(|y| (0..width).find(|&x| buffer[(x, y)].symbol() == "▸"))
+            .expect("the selected row's marker is drawn");
+        let city = crate::grid::display_width("東京都").max(crate::grid::display_width("Paris"));
+        assert_eq!(
+            tokyo,
+            Some(marker + 2 + u16::try_from(city).expect("short") + 2),
+            "the identifier starts after a city column {city} cells wide"
+        );
     }
 
     /// The prompt's last row as drawn, between the border and its padding.
