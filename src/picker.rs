@@ -12,6 +12,8 @@
 //! shell decides whether it can be done. Handing the picker a `&mut App` would
 //! have moved the code without moving the responsibility.
 
+use std::cell::Cell;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -119,6 +121,11 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Picker {
     selected: usize,
+    /// The first name drawn. Only `render` knows how many rows the terminal
+    /// leaves the list, so it is `render` that moves the window — and keeps
+    /// where it put it, so the window moves when the cursor leaves it rather
+    /// than following the cursor row by row.
+    offset: Cell<usize>,
     names: Vec<String>,
     keys: PanelKeymap<PickerAction>,
 }
@@ -128,6 +135,7 @@ impl Picker {
     pub fn new(names: Vec<String>) -> Self {
         Self {
             selected: 0,
+            offset: Cell::new(0),
             names,
             keys: PanelKeymap::defaults("panel_picker", ACTIONS),
         }
@@ -191,8 +199,23 @@ impl Picker {
         placed: impl Fn(&str) -> bool,
         error: Option<&str>,
     ) {
-        let mut lines: Vec<Line> = Vec::new();
-        for (index, name) in self.names.iter().enumerate() {
+        // The list, then a blank, the status line and the footer. Every name is
+        // drawn when there is room for it; where there is not, the list
+        // scrolls rather than the rows under it being cut, and keeps at least
+        // the row the cursor is on. Below that it is the blank that goes,
+        // being spacing, before the status or the footer.
+        let height = u16::try_from(self.names.len().saturating_add(TRAILER))
+            .unwrap_or(u16::MAX)
+            .saturating_add(crate::frame::FRAME_HEIGHT);
+        let popup = crate::frame::centred(area, 40, height);
+        let interior = usize::from(popup.height.saturating_sub(crate::frame::FRAME_HEIGHT));
+        let rows = interior.saturating_sub(TRAILER).max(1);
+        let spaced = interior >= rows + TRAILER;
+        let offset = window(self.selected, self.offset.get(), rows, self.names.len());
+        self.offset.set(offset);
+
+        let mut lines: Vec<Line> = Vec::with_capacity(rows + TRAILER);
+        for (index, name) in self.names.iter().enumerate().skip(offset).take(rows) {
             let on = placed(name);
             let here = index == self.selected;
             // A filled mark and an empty one in the track colour, the same
@@ -219,7 +242,9 @@ impl Picker {
             ]));
         }
 
-        lines.push(Line::from(""));
+        if spaced {
+            lines.push(Line::from(""));
+        }
         match error {
             Some(error) => lines.push(Line::from(Span::styled(
                 format!("  {error}"),
@@ -240,14 +265,9 @@ impl Picker {
         } else {
             footer.push(Span::raw("  "));
         }
-        footer.push(Span::styled("esc", key_style));
+        footer.push(Span::styled("Esc", key_style));
         footer.push(Span::styled(" close", Style::default().fg(theme.muted)));
         lines.push(Line::from(footer));
-
-        let height = u16::try_from(lines.len())
-            .unwrap_or(u16::MAX)
-            .saturating_add(crate::frame::FRAME_HEIGHT);
-        let popup = crate::frame::centred(area, 40, height);
 
         frame.render_widget(Clear, popup);
         frame.render_widget(
@@ -267,6 +287,24 @@ impl Picker {
             popup,
         );
     }
+}
+
+/// The rows drawn under the list: a blank, the status line and the footer.
+const TRAILER: usize = 3;
+
+/// The first row of a `rows`-high window over `len` names that keeps
+/// `selected` in view, moving the window from `offset` as little as it can.
+fn window(selected: usize, offset: usize, rows: usize, len: usize) -> usize {
+    let offset = if selected < offset {
+        selected
+    } else if selected >= offset.saturating_add(rows) {
+        selected.saturating_add(1).saturating_sub(rows)
+    } else {
+        offset
+    };
+    // A terminal taller than last time shows the rows above the window
+    // rather than a gap below it.
+    offset.min(len.saturating_sub(rows))
 }
 
 #[cfg(test)]
@@ -381,10 +419,7 @@ mod tests {
             "an unplaced one is hollow:\n{calm}"
         );
         assert!(calm.contains("written to your config on close"), "{calm}");
-        assert!(
-            calm.contains("space") && calm.contains("toggle") && calm.contains("esc"),
-            "{calm}"
-        );
+        assert!(calm.contains("space toggle   Esc close"), "{calm}");
 
         let failing = draw(&picker, Some("no `[layout]` rows found"), 80, 24);
         assert!(
@@ -399,6 +434,95 @@ mod tests {
         // Too small for the dialog: drawn as far as it can be, never a panic.
         let _ = draw(&picker, None, 12, 4);
         let _ = draw(&picker, None, 1, 1);
+    }
+
+    /// The bug the theme picker and the zone prompt were fixed for, in the one
+    /// dialog that never was. On a terminal shorter than the list the bottom
+    /// rows were cut, footer first, while the cursor walked on into them —
+    /// `End` then `space` switched `calculator` with nothing on screen saying
+    /// so. Swept over every height, with the cursor taken to the end and back
+    /// one row at a time, because the window moving down and the window moving
+    /// up are different arithmetic.
+    #[test]
+    fn the_row_under_the_cursor_is_drawn_at_every_height() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::default();
+        let names = crate::widgets::WIDGET_NAMES;
+        let draw = |picker: &Picker, height: u16| -> String {
+            let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
+            terminal
+                .draw(|frame| picker.render(frame, frame.area(), &theme, |_| false, None))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..height)
+                .map(|y| (0..60).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        for height in 3..=30u16 {
+            let mut picker = picker();
+            let visit = |picker: &Picker| {
+                let screen = draw(picker, height);
+                let name = names[picker.selected()];
+                assert!(
+                    screen.contains(&format!("▸ □ {name}")),
+                    "{name} is under the cursor at height {height} and not drawn:\n{screen}"
+                );
+                // The frame, one row of list, the status and the footer make
+                // five rows, and at five or more both are drawn: the list gives
+                // way first, then the blank above the status, which is spacing
+                // rather than anything to read.
+                if height >= 5 {
+                    assert!(
+                        screen.contains("Esc close")
+                            && screen.contains("written to your config on close"),
+                        "the status or footer went before the blank at height {height}:\n{screen}"
+                    );
+                }
+            };
+            press(&mut picker, KeyCode::End);
+            visit(&picker);
+            for _ in 0..names.len() {
+                press(&mut picker, KeyCode::Up);
+                visit(&picker);
+            }
+        }
+
+        // The window moves when the cursor leaves it, not with every key:
+        // one row up from the end, the end is still on screen.
+        let mut short = picker();
+        press(&mut short, KeyCode::End);
+        let _ = draw(&short, 12);
+        press(&mut short, KeyCode::Up);
+        let screen = draw(&short, 12);
+        let last = names[names.len() - 1];
+        assert!(
+            screen.contains(&format!("  □ {last}")),
+            "the window followed the cursor up:\n{screen}"
+        );
+
+        // With room for everything nothing scrolls: the whole list is drawn,
+        // as it always was.
+        let tall = draw(&picker(), 30);
+        for name in names {
+            assert!(tall.contains(&format!("□ {name}")), "{name}:\n{tall}");
+        }
+
+        // A terminal that grows after the list has scrolled shows the rows
+        // above the window, rather than keeping the window where it was with
+        // a gap under it.
+        let grown = {
+            let mut picker = picker();
+            press(&mut picker, KeyCode::End);
+            let _ = draw(&picker, 12);
+            draw(&picker, 30)
+        };
+        assert!(
+            grown.contains(&format!("□ {}", names[0])),
+            "the window stayed scrolled on a taller terminal:\n{grown}"
+        );
     }
 
     #[test]

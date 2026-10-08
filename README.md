@@ -310,11 +310,11 @@ widget mirador has and which of them your layout places:
 │    ■ calculator                      │
 │                                      │
 │   written to your config on close    │
-│   space toggle   esc close           │
+│   space toggle   Esc close           │
 ╰──────────────────────────────────────╯
 ```
 
-`space` toggles, `↑`/`↓` or `j`/`k` move, `esc` closes. A panel appears or
+`space` toggles, `↑`/`↓` or `j`/`k` move, `Esc` closes. A panel appears or
 disappears the moment you toggle it, and the change is written to your config
 when you close the dialog — as a one-line edit, with your comments untouched.
 A new panel joins the row carrying the fewest panels; `m` moves it wherever you

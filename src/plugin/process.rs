@@ -469,6 +469,9 @@ fn apply_frame_message(frame: WireFrame, shared: &Arc<Mutex<Shared>>) -> bool {
     let mut shared = shared
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if stopping(&shared) {
+        return true;
+    }
     if !shared.ready {
         shared.fail("plugin sent a frame before `ready`");
         return false;
@@ -486,6 +489,9 @@ fn apply_error_message(message: String, fatal: bool, shared: &Arc<Mutex<Shared>>
     let mut shared = shared
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if stopping(&shared) {
+        return true;
+    }
     if !shared.ready {
         shared.fail("plugin sent an error before `ready`");
         return false;
@@ -518,6 +524,9 @@ fn apply_watch_message(text: String, shared: &Arc<Mutex<Shared>>) -> bool {
     let mut shared = shared
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if stopping(&shared) {
+        return true;
+    }
     if !shared.ready {
         shared.fail("plugin sent a watch event before `ready`");
         return false;
@@ -534,6 +543,22 @@ fn apply_watch_message(text: String, shared: &Arc<Mutex<Shared>>) -> bool {
     true
 }
 
+/// Whether the host has sent `shutdown` and is waiting out the grace, in
+/// which case a well-formed message is dropped rather than refused.
+///
+/// The supervisor moves to `Stopping` the moment it is told, but the plugin
+/// learns of `shutdown` only once the writer has flushed it, so a frame it was
+/// already sending arrives after the host has stopped listening. A refusal is
+/// an abort, and an abort kills at once: the 300 ms the protocol promises for
+/// cleanup went to any plugin that happened to be drawing. A malformed
+/// message is still refused — that is checked before this is asked — because
+/// the grace is for a plugin that is stopping, not for one that is broken.
+/// Order is not checked: a `ready` that crossed `shutdown` in flight is
+/// dropped like anything else, and so is the frame behind it.
+fn stopping(shared: &Shared) -> bool {
+    matches!(shared.phase, Phase::Stopping)
+}
+
 fn fail_shared(shared: &Arc<Mutex<Shared>>, error: impl Into<String>) -> bool {
     shared
         .lock()
@@ -543,6 +568,9 @@ fn fail_shared(shared: &Arc<Mutex<Shared>>, error: impl Into<String>) -> bool {
 }
 
 fn apply_ready(title: Option<String>, refresh_ms: Option<u64>, shared: &mut Shared) -> bool {
+    if stopping(shared) {
+        return true;
+    }
     if shared.ready {
         shared.fail("plugin sent `ready` more than once");
         return false;
@@ -1169,6 +1197,94 @@ mod tests {
         let ready = Arc::new(Mutex::new(Shared::starting()));
         ready.lock().unwrap().ready = true;
         assert!(!expire_startup(&ready, now, now));
+    }
+
+    /// `shutdown` moves the supervisor to `Stopping` at once, but the plugin
+    /// hears it only once the writer has flushed it, so a plugin drawing every
+    /// 33 ms nearly always has a frame in flight. Every kind of message read in
+    /// that window used to be refused, and a refusal is an abort: the child was
+    /// killed in milliseconds, without the 300 ms the protocol promises for
+    /// cleanup. Dropped, each must leave the phase where it was and draw
+    /// nothing.
+    #[test]
+    fn a_message_during_the_shutdown_grace_is_dropped_rather_than_fatal() {
+        let ready = || PluginMessage::Ready {
+            protocol: PROTOCOL_VERSION,
+            title: None,
+            refresh_ms: None,
+        };
+        let frame = || PluginMessage::Frame {
+            revision: 1,
+            title: None,
+            counter: None,
+            lines: vec![WireLine {
+                spans: vec![span("saving")],
+            }],
+            bindings: Vec::new(),
+            input: InputPolicy::default(),
+            cursor: None,
+        };
+        let stopping = || {
+            let shared = Arc::new(Mutex::new(Shared::starting()));
+            assert!(apply_message(ready(), &shared));
+            shared.lock().unwrap().phase = Phase::Stopping;
+            shared
+        };
+
+        let shared = stopping();
+        let generation = shared.lock().unwrap().generation;
+        for (what, message) in [
+            ("a frame", frame()),
+            (
+                "an error",
+                PluginMessage::Error {
+                    message: "saving".into(),
+                    fatal: false,
+                },
+            ),
+            (
+                "a fatal error",
+                PluginMessage::Error {
+                    message: "gone".into(),
+                    fatal: true,
+                },
+            ),
+            (
+                "a watch event",
+                PluginMessage::Watch {
+                    text: "saved".into(),
+                },
+            ),
+            ("a second ready", ready()),
+        ] {
+            assert!(
+                apply_message(message, &shared),
+                "{what} cut the grace short"
+            );
+            let shared = shared.lock().unwrap();
+            assert_eq!(shared.phase, Phase::Stopping, "after {what}");
+            assert_eq!(shared.generation, generation, "{what} was drawn");
+        }
+        let shared = shared.lock().unwrap();
+        assert!(shared.frame.is_none() && shared.notice.is_none() && shared.watch.is_empty());
+        drop(shared);
+
+        // Shut down before it ever said `ready`: the `ready` and the frame
+        // behind it were both in flight.
+        let shared = Arc::new(Mutex::new(Shared::starting()));
+        shared.lock().unwrap().phase = Phase::Stopping;
+        assert!(apply_message(ready(), &shared), "a late ready");
+        assert!(apply_message(frame(), &shared), "the frame behind it");
+        assert_eq!(shared.lock().unwrap().phase, Phase::Stopping);
+
+        // The grace is for a plugin that is stopping, not for one that is
+        // broken: a malformed message is still refused.
+        assert!(!apply_message(
+            PluginMessage::Watch {
+                text: "two\nlines".into()
+            },
+            &stopping()
+        ));
     }
 
     #[test]
