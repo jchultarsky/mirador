@@ -174,6 +174,9 @@ fn list_keys(keys: &KeysConfig) -> PanelKeymap<NotesAction> {
     PanelKeymap::or_defaults("notes", ACTIONS, keys).with_fixed(FIXED)
 }
 
+/// What the panel says when a search matches nothing.
+const NO_MATCH: &str = "Nothing matches this search. Esc to clear.";
+
 /// Editing has a different vocabulary from browsing. Keeping it separate puts
 /// the scratchpad's selection and clipboard actions in the border while the
 /// form is open instead of continuing to advertise list actions that cannot
@@ -184,11 +187,20 @@ const TITLE_EDIT_BINDINGS: &[Binding] = &[
     Binding::primary("Esc", "cancel"),
 ];
 
+/// The body's whole vocabulary. Only the primaries reach a screen — the
+/// border — because extras are drawn by the `?` overlay alone, and `?` is
+/// typed into a form that holds the keys, so the overlay cannot open over
+/// it. The extras are kept so this table stays the full list of what the
+/// body takes; the README is where the line keys are written down.
 const BODY_EDIT_BINDINGS: &[Binding] = &[
     Binding::primary("Shift+←↑→↓", "select"),
     Binding::primary("Ctrl+V", "paste"),
     Binding::primary("Ctrl+S", "save"),
     Binding::extra("Ctrl+A", "select all"),
+    Binding::extra("Ctrl+E", "end of line"),
+    Binding::extra("Ctrl+K", "delete to end of line"),
+    Binding::extra("Ctrl+U", "delete to start of line"),
+    Binding::extra("Ctrl+W", "delete word before"),
     Binding::extra("Ctrl+C", "copy selection"),
     Binding::extra("Tab", "change field"),
     Binding::extra("Esc", "cancel"),
@@ -673,8 +685,14 @@ impl NotesPanel {
             return KeyOutcome::Ignored;
         };
         match key.code {
+            // Esc abandons the search rather than leaving a half-typed term
+            // filtering the list behind a closed box — the task filter's Esc,
+            // which the README promises for both. This one only closed the
+            // box, and the term it had applied as it was typed stayed.
             KeyCode::Esc => {
+                self.filter.clear();
                 self.mode = Mode::List;
+                self.refresh_view();
             }
             KeyCode::Enter => {
                 self.filter = field.trimmed().to_string();
@@ -803,12 +821,15 @@ impl NotesPanel {
             // none. Prose in a pane of several rows, so wrapped into them,
             // and the last row says so if they run out (invariant 19).
             let message = if !self.view.is_empty() || !self.filter.is_empty() {
-                "Nothing matches this search. Esc to clear.".to_string()
+                NO_MATCH.to_string()
             } else if let Some(key) = self.keys.keys(NotesAction::New).first() {
                 format!("No notes yet. Press `{key}` to write one.")
             } else {
                 "No notes yet.".to_string()
             };
+            // Wrapped into the pane, the last row ending in `…` if it is cut.
+            // Handed whole to a `Paragraph`, the terminal cut it in silence,
+            // and the part it lost was "Esc to clear" — the instruction.
             frame.render_widget(
                 Paragraph::new(crate::grid::fitted_rows(&message, area, false))
                     .style(Style::default().fg(theme.muted)),
@@ -960,10 +981,10 @@ impl NotesPanel {
     /// terminal. See `StocksPanel::status_line`: a note title in a delete
     /// prompt and a typed search term are both as long as the user made them.
     fn status_line(&self, theme: &Theme, width: u16) -> Line<'static> {
-        crate::grid::assemble(vec![self.status_text(theme).spans], width)
+        crate::grid::assemble(vec![self.status_text(theme, width).spans], width)
     }
 
-    fn status_text(&self, theme: &Theme) -> Line<'static> {
+    fn status_text(&self, theme: &Theme, width: u16) -> Line<'static> {
         match (&self.mode, &self.status) {
             (Mode::ConfirmDelete { title, .. }, _) => Line::from(Span::styled(
                 format!("delete \"{title}\"?  y / n"),
@@ -971,11 +992,17 @@ impl NotesPanel {
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
             )),
-            (Mode::Search(field), _) => Line::from(vec![
-                Span::styled("search  ", Style::default().fg(theme.accent)),
-                Span::styled(field.value().to_string(), Style::default().fg(theme.text)),
-                Span::styled("▏", Style::default().fg(theme.accent)),
-            ]),
+            (Mode::Search(field), _) => {
+                // The window, not the whole term: drawn whole and cut by
+                // `assemble`, a long term took the caret with it, and the
+                // caret followed the term wherever the cursor was.
+                const LABEL: &str = "search  ";
+                let room = usize::from(width).saturating_sub(LABEL.len());
+                let (text, caret) = field.visible_inline(room);
+                let mut spans = vec![Span::styled(LABEL, Style::default().fg(theme.accent))];
+                spans.extend(Self::editor_line(&text, caret, None, theme).spans);
+                Line::from(spans)
+            }
             (_, Some((message, is_error))) => Line::from(Span::styled(
                 message.clone(),
                 Style::default().fg(if *is_error { theme.error } else { theme.muted }),
@@ -1071,14 +1098,18 @@ impl NotesPanel {
             }
         };
 
-        let (title_text, title_cursor) =
-            form.title.visible(rows[1].width.saturating_sub(7) as usize);
+        // The caret is a cell of its own, as in the body, and goes where the
+        // next key lands. It used to be pushed after the visible text, so
+        // after Home it sat at the end while typing went in at the start,
+        // and a window that filled the field pushed it past the edge. The
+        // window keeps its cell for the caret while the body has the focus
+        // too, so Tab does not slide the title along by one.
+        let (title_text, title_caret) = form
+            .title
+            .visible_inline(usize::from(rows[1].width.saturating_sub(7)));
         let mut title_spans = vec![Span::styled("title  ", active(Field::Title))];
-        title_spans.push(Span::styled(title_text, Style::default().fg(theme.text)));
-        if form.field == Field::Title {
-            title_spans.push(Span::styled("▏", Style::default().fg(theme.accent)));
-            let _ = title_cursor;
-        }
+        let caret = title_caret.filter(|_| form.field == Field::Title);
+        title_spans.extend(Self::editor_line(&title_text, caret, None, theme).spans);
         frame.render_widget(Paragraph::new(Line::from(title_spans)), rows[1]);
 
         frame.render_widget(
@@ -1991,6 +2022,131 @@ mod tests {
         assert!(matches!(p.mode, Mode::List));
         press(&mut p, KeyCode::Esc);
         assert_eq!(p.view.len(), 2, "Esc clears the search");
+    }
+
+    /// Esc in the open search box abandons the search, as it does in the
+    /// task filter and as the README says. It used to close the box and
+    /// leave the half-typed term filtering the list behind it; the test above
+    /// presses Enter first, so it never sent Esc to the open box at all.
+    #[test]
+    fn esc_in_the_search_box_abandons_the_search() {
+        let (mut p, _g) = panel("search-esc");
+        add_note(&mut p, "Groceries", "milk");
+        add_note(&mut p, "Meeting", "invoice question");
+
+        press(&mut p, KeyCode::Char('/'));
+        type_str(&mut p, "invoice");
+        assert_eq!(p.view.len(), 1, "the search applies as it is typed");
+        press(&mut p, KeyCode::Esc);
+
+        assert!(matches!(p.mode, Mode::List), "Esc closes the box");
+        assert!(p.filter.is_empty(), "and drops the term: {:?}", p.filter);
+        assert_eq!(p.view.len(), 2, "so every note is listed again");
+    }
+
+    /// The sentence for a search that matches nothing says when it has been
+    /// cut (invariant 19).
+    ///
+    /// It was handed to a bare `Paragraph`, so the terminal did the cutting:
+    /// "Nothing matches this search. Esc to clea" at 40 columns, with nothing
+    /// to say a word was missing, and the instruction the sentence exists to
+    /// give was the part lost. `no_panel_cuts_a_value_silently_at_any_width`
+    /// never saw it, because the offline notes panel always has a note to
+    /// show. The empty panel's own sentence is
+    /// `an_empty_panels_message_is_whole_where_it_has_the_rows`; this is the
+    /// same sweep over the other sentence the pane can say, with the search
+    /// box open — width and height both, and both halves asserted: a
+    /// sentence that fits its rows is drawn whole and carries no `…`.
+    #[test]
+    fn a_search_that_matches_nothing_says_when_its_sentence_has_been_cut() {
+        let (mut p, _g) = panel("unmatched-cut");
+        add_note(&mut p, "Groceries", "milk");
+        press(&mut p, KeyCode::Char('/'));
+        type_str(&mut p, "zzz");
+        assert!(p.view.is_empty(), "the search matches nothing");
+
+        let (mut cut, mut whole) = (0, 0);
+        for height in 3..=10u16 {
+            for width in 6..=60u16 {
+                let rows = rows_of(&mut p, width, height);
+                // Row 0 is the summary's, `search: zzz`, and the last is the
+                // search box's; every row between them is the sentence's.
+                let body = &rows[1..usize::from(height) - 1];
+                let drawn: Vec<&str> = body
+                    .iter()
+                    .map(|row| row.trim_end())
+                    .filter(|row| !row.is_empty())
+                    .collect();
+                let wrapped = crate::grid::wrap(NO_MATCH, usize::from(width));
+                if wrapped.len() > body.len() {
+                    cut += 1;
+                    let last = drawn.last().copied().unwrap_or("");
+                    assert!(
+                        last.ends_with('…'),
+                        "it needs {} rows and was cut to {} without saying so at \
+                         {width}x{height}: {drawn:?}",
+                        wrapped.len(),
+                        body.len(),
+                    );
+                } else {
+                    whole += 1;
+                    let expected: Vec<&str> = wrapped.iter().map(|row| row.trim_end()).collect();
+                    assert_eq!(drawn, expected, "it fits at {width}x{height}");
+                }
+            }
+        }
+        assert!(
+            cut > 0 && whole > 0,
+            "the sweep must reach a cut and a whole sentence: cut {cut}, whole {whole}"
+        );
+    }
+
+    /// The title's caret is drawn where the next key lands. It was pushed
+    /// after the visible text whatever the cursor was doing: once the title
+    /// outgrew the field the text filled every cell and the caret was drawn
+    /// past the edge, and after Home it sat at the end while typing went in
+    /// at the start. The long case comes first because it is the one the old
+    /// drawing fails; a caret merely pushed after the new window passes it,
+    /// since the window there ends at the cursor, and fails the second.
+    #[test]
+    fn the_title_caret_is_drawn_where_typing_lands() {
+        let (mut p, _g) = panel("title-caret");
+        press(&mut p, KeyCode::Char('a'));
+        // Thirty-six characters in a field of twenty-three cells, the cursor
+        // ten from the end: after `z`, before `0`. The window keeps a cell
+        // for the caret and gives the rest to what comes before it.
+        type_str(&mut p, "abcdefghijklmnopqrstuvwxyz0123456789");
+        for _ in 0..10 {
+            press(&mut p, KeyCode::Left);
+        }
+        let rows = rows_of(&mut p, 30, 12);
+        assert_eq!(rows[1], "title  efghijklmnopqrstuvwxyz▏", "{rows:?}");
+
+        press(&mut p, KeyCode::Home);
+        let rows = rows_of(&mut p, 60, 12);
+        assert!(rows[1].starts_with("title  ▏abc"), "{rows:?}");
+    }
+
+    /// The search line's caret, likewise: it followed the whole term, so a
+    /// term longer than the line lost it to the `…` that cut the term, and
+    /// Home left it at the end.
+    #[test]
+    fn the_search_caret_is_drawn_where_typing_lands() {
+        let (mut p, _g) = panel("search-caret");
+        press(&mut p, KeyCode::Char('/'));
+        // The cursor nine from the end: after `quarterly`.
+        type_str(&mut p, "invoice for the quarterly accounts");
+        for _ in 0..9 {
+            press(&mut p, KeyCode::Left);
+        }
+        let rows = rows_of(&mut p, 30, 12);
+        let last = rows.last().expect("a status row");
+        assert_eq!(last, "search  ice for the quarterly▏", "{rows:?}");
+
+        press(&mut p, KeyCode::Home);
+        let rows = rows_of(&mut p, 60, 12);
+        let last = rows.last().expect("a status row");
+        assert!(last.starts_with("search  ▏invoice"), "{rows:?}");
     }
 
     #[test]

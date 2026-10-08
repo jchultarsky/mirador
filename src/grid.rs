@@ -447,7 +447,10 @@ pub fn wrapped(text: &str, width: u16) -> String {
 ///
 /// This is the mechanism for prose in a region of several rows. [`truncate`]
 /// is for a region of one: handed a taller one, it keeps the first row and
-/// leaves the rest blank, so a sentence that had the room is cut anyway.
+/// leaves the rest blank, so a sentence that had the room is cut anyway. It
+/// lived in the task panel, for the note preview and the form's message,
+/// until the empty states of several panels were found cut by the terminal
+/// and needed the same thing.
 pub fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
     let width = usize::from(area.width);
     let height = usize::from(area.height);
@@ -1298,12 +1301,6 @@ mod tests {
                 "the cell's caps are `body + 2` wide, and `body` is cut to the \
                  width less the chrome beside it before anything is built",
             ),
-            (
-                "notes.rs",
-                1,
-                "the search field, assembled to the pane by `status_line`",
-            ),
-            ("stocks.rs", 1, "the add field, assembled by `status_line`"),
             (
                 "todo.rs",
                 1,

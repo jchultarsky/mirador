@@ -428,6 +428,13 @@ selection. Typing, Backspace and Delete replace selected text too. With
 nothing selected, `Ctrl+C` keeps its ordinary terminal meaning and quits.
 Your terminal's normal paste shortcut remains the way to bring outside text
 into the note; multiline pastes and literal tabs are kept intact in the body.
+The body also takes the line keys every one-line field has — `Ctrl+E` to the
+end of the line, and `Ctrl+U`, `Ctrl+K` and `Ctrl+W` to delete to its start,
+to its end and the word before the cursor — but not `Ctrl+A`, which goes to
+the start of a one-line field and selects everything here. They act on the
+cursor's line alone and never delete a line break. A selection is let go
+first rather than deleted, and the key acts from the cursor, the moving end
+of the selection.
 
 **`Ctrl+S` saves, from either field.** `Enter` also saves, but only from the
 title, where it cannot be mistaken for a newline — in the body it starts one.
