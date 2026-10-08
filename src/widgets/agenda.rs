@@ -203,8 +203,9 @@ struct State {
     skipped: usize,
     /// When this was read.
     read_at: Option<Instant>,
-    /// The day the window was built around, so a dashboard left open overnight
-    /// notices that "today" moved.
+    /// The day the window was built around. The reader works it out afresh on
+    /// every pass, and `tick` compares it across reads, which is how a
+    /// dashboard left open overnight notices that "today" moved.
     built_for: Option<Date>,
     /// Where the window ended: events from here on were not read at all, so
     /// the next read finding one there has not found anything new.
@@ -670,15 +671,17 @@ impl Panel for AgendaPanel {
 
     fn refresh_interval(&self) -> Duration {
         // The reader thread owns the real cadence. This only decides how
-        // quickly a completed read reaches the screen, and how often the
-        // in-progress marker is re-evaluated.
+        // quickly a completed read reaches the screen.
         Duration::from_secs(20)
     }
 
     fn tick(&mut self) -> bool {
-        // Two things can change without a keypress: a read landing, and an
-        // event starting or ending. The first is a counter; the second is why
-        // this returns true on the day rolling over even when nothing was read.
+        // Only a read landing is reported, and the generation counts those.
+        // The day rolling over arrives the same way: the reader works out
+        // today on every pass, so a new day reaches the panel with the first
+        // read after midnight. An event starting or ending is not reported at
+        // all — the `▸` marker is worked out when the panel is drawn, so it
+        // moves at the next redraw something else asks for, or the next read.
         let now = self.generation.load(Ordering::Acquire);
         let moved = now != self.seen;
         self.seen = now;
@@ -711,14 +714,18 @@ impl Panel for AgendaPanel {
     fn alert(&self) -> Option<crate::panel::Alert> {
         let now = Zoned::now();
 
-        // Reads the events under the lock rather than through `snapshot`, and
-        // the difference is not stylistic. `snapshot` clones the whole event
-        // list, and this runs on every draw — measured at 39 calls in thirty
-        // idle seconds, so a twelve-event calendar cloned 456 events, each with
-        // one or two `String`s, for nothing. A real week of meetings would be
-        // several times that, for ever. Panel::alert's own documentation says
-        // it must not allocate when it has nothing to say, which is nearly
-        // always; this is that promise kept.
+        // Reads the events where they lie rather than through `snapshot`,
+        // which clones the whole list — and this runs on every draw, measured
+        // at 39 calls in thirty idle seconds, so a twelve-event calendar cloned
+        // 456 events, each with one or two `String`s, for nothing. A real week
+        // of meetings would be several times that, for ever. Panel::alert's own
+        // documentation says it must not allocate when it has nothing to say,
+        // which is nearly always; this is that promise kept.
+        //
+        // It still reads them under the lock, which predates `shown`: where
+        // `counter` and `render` read the copy taken at the last tick, this
+        // sees a read the moment it lands, so for up to a tick afterwards the
+        // status bar can name an event the panel has not drawn yet.
         let guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if guard.error.is_some() {
             return None;

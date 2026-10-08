@@ -102,6 +102,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Narrower than `No temperature sensors`, it showed as much of the words as
   fitted — `No temperatu` — with nothing to say the rest had gone. It ends
   in `…` now, as the disk and battery panels' empty states already did.
+- **The shipped config and the README name every widget there is.** The
+  README's guide to the panels opened on "Fourteen widgets", and the
+  config's `Available widgets` comment stopped at thirteen and left out
+  `memory`, `disk`, `battery` and `temperature` — three of them the panels
+  the default layout does not place, which a reader adding one by hand has
+  to find by name. The README says seventeen, and the comment
+  lists all seventeen now, in a new config and in `--print-config`; a config
+  already on disk keeps the comment it was written with.
 
 ## [1.20.0] - 2026-10-07
 

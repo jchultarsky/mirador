@@ -1,8 +1,9 @@
-//! The rolling sample history behind the CPU and network graphs.
+//! The rolling sample history behind every braille graph — cpu, memory,
+//! temperature, network and disk.
 //!
-//! Both panels keep the same shape of buffer under the same rule, and both had
-//! their own copy of it. The rule is the part worth naming: the configured
-//! history is a **floor, not a ceiling**.
+//! All five keep the same shape of buffer under the same rule, and the first
+//! two had their own copy of it before this module. The rule is the part
+//! worth naming: the configured history is a **floor, not a ceiling**.
 
 use std::collections::VecDeque;
 

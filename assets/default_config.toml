@@ -54,8 +54,9 @@ check_for_updates = false
 # not cell counts, so the proportions hold at any terminal size.
 #
 # Available widgets: clocks, weather, todo, notes, stocks, calendar, agenda,
-# pomodoro, watchlog, news, cpu, network, calculator — plus the id of any
-# external panel declared under "External panels" below
+# pomodoro, watchlog, news, cpu, memory, disk, network, battery, temperature,
+# calculator — plus the id of any external panel declared under "External
+# panels" below
 # ---------------------------------------------------------------------------
 [layout]
 rows = [

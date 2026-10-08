@@ -888,20 +888,6 @@ mod tests {
         .is_ok()
     }
 
-    /// The reason [`wrapped`] exists, pinned rather than described.
-    ///
-    /// ratatui's own word wrapper indexes past the end of the buffer and
-    /// panics, which for a dashboard is a crash rather than a misdraw. Two ways
-    /// in: a double-width glyph inside a word too long for a two-cell area, and
-    /// a leading combining mark, which throws the accounting off at any width.
-    /// Neither needs unusual input — emoji in a note is ordinary.
-    ///
-    /// Reported upstream as <https://github.com/ratatui/ratatui/issues/2679>.
-    ///
-    /// **If this test starts failing, ratatui has fixed it.** That is good
-    /// news, and the thing to do is check whether `wrapped` can go, not to
-    /// delete the assertion. The bound lives in a dependency and would leave
-    /// with it.
     /// Nothing outside this module may hand text to ratatui's word wrapper.
     ///
     /// [`wrapped`] exists because that wrapper panics on text mirador did not
@@ -1098,6 +1084,20 @@ mod tests {
         }
     }
 
+    /// The reason [`wrapped`] exists, pinned rather than described.
+    ///
+    /// ratatui's own word wrapper indexes past the end of the buffer and
+    /// panics, which for a dashboard is a crash rather than a misdraw. Two ways
+    /// in: a double-width glyph inside a word too long for a two-cell area, and
+    /// a leading combining mark, which throws the accounting off at any width.
+    /// Neither needs unusual input — emoji in a note is ordinary.
+    ///
+    /// Reported upstream as <https://github.com/ratatui/ratatui/issues/2679>.
+    ///
+    /// **If this test starts failing, ratatui has fixed it.** That is good
+    /// news, and the thing to do is check whether `wrapped` can go, not to
+    /// delete the assertion. The bound lives in a dependency and would leave
+    /// with it.
     #[test]
     fn ratatuis_own_wrapper_is_why_this_module_wraps_first() {
         let hook = std::panic::take_hook();

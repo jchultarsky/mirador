@@ -233,7 +233,7 @@ pub(crate) fn describe_remaining(left: Duration) -> String {
     }
 }
 
-/// The label over the numerals, in the utility face.
+/// The label over the cell, in the utility face.
 fn label_for(flow: Flow) -> &'static str {
     match flow {
         Flow::Discharging => "on battery",
@@ -255,7 +255,7 @@ impl Panel for BatteryPanel {
     fn counter(&self) -> Option<String> {
         // The one fact worth a glance at the frame: how long. It lives here
         // and nowhere inside the panel, the way the task count lives in its
-        // border — the label says which way, the numerals say how much, and
+        // border — the label says which way, the figure says how much, and
         // nothing is said twice.
         let reading = self.reading?;
         match (reading.flow, reading.remaining) {
@@ -595,7 +595,7 @@ mod tests {
 
     /// The counter carries the one fact worth a glance at the frame — how
     /// long — and nothing the panel already says: the label has the state
-    /// and the numerals have the charge.
+    /// and the figure beside the cell has the charge.
     #[test]
     fn the_border_says_how_long_and_nothing_the_panel_already_says() {
         assert_eq!(

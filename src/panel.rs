@@ -21,9 +21,9 @@
 //!
 //! `title`, `counter`, `bindings`, `max_width`, `max_height` and
 //! `refresh_interval` are all "describe yourself", and folding them into one
-//! `describe() -> PanelInfo` would take the trait from thirteen methods to
-//! eight. It would also be slower and less useful, because the six are asked
-//! for at different times and at very different rates: `max_width` and
+//! `describe() -> PanelInfo` would make the trait five methods shorter. It
+//! would also be slower and less useful, because the six are asked for at
+//! different times and at very different rates: `max_width` and
 //! `max_height` during layout, `refresh_interval` on the tick, `bindings` in
 //! three separate places, and `title` and `counter` on **every frame** — the
 //! last two from the shell's render loop, where nothing guards them.
@@ -77,7 +77,7 @@ pub struct RenderContext<'a> {
 ///
 /// Deliberately not "something is wrong". Panels already show what is wrong in
 /// their own frames — an overdue task is red, a stale reading says its age, a
-/// failing fetch says so — and eight of the twelve do it today. Repeating all
+/// failing fetch says so — and most of the panels do it today. Repeating all
 /// of that in one line would produce a signal that is lit permanently, and a
 /// permanently lit alarm is furniture: you stop seeing it inside a week, which
 /// is the unread-badge failure reached from a different direction.

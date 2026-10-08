@@ -710,8 +710,8 @@ impl Default for Keymap {
 }
 
 /// Put every key back to its default by commenting out the live lines under
-/// `[keys]` and each panel's `[<widget>.keys]`, with a line above the first
-/// of them saying when and why.
+/// `[keys]`, each mode's and each panel's `[<widget>.keys]`, with a line
+/// above the first of them saying when and why.
 ///
 /// `None` when there is nothing to comment out. An edit, never a rewrite, for
 /// invariant 16's reason: a round trip through `toml` would throw away every
@@ -1996,9 +1996,11 @@ mod tests {
     /// test that notices an action added here and not documented there.
     #[test]
     fn the_shipped_config_documents_every_default_exactly() {
-        // Normalised first: `include_str!` keeps whatever line endings git
-        // wrote, which is CRLF on a Windows checkout — the trap CLAUDE.md
-        // records for `layout_edit`'s sweep.
+        // Normalised first: `include_str!` keeps whatever line endings are on
+        // disk. `.gitattributes` makes a git checkout LF everywhere, but a
+        // copy that did not come through git — a packager's tarball, a
+        // checkout with its own settings — can still be CRLF, which is the
+        // trap CLAUDE.md records for `layout_edit`'s sweep.
         let shipped = crate::config::DEFAULT_CONFIG.replace("\r\n", "\n");
         let block = shipped
             .split_once("\n[keys]\n")

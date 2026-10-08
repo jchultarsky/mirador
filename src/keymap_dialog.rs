@@ -8,7 +8,7 @@
 //! because the shell is what holds the path and the live keymap.
 //!
 //! Two requests make this more than a table. **Reload** reads the key tables
-//! again — `[keys]` and each panel's `[<widget>.keys]` —
+//! again — `[keys]`, each mode's and each panel's `[<widget>.keys]` —
 //! so a reader can edit the config in another pane and try the result without
 //! restarting — and a mistake is shown here, with the keys they had still in
 //! force, rather than at the next launch as a dashboard that will not start.
@@ -39,10 +39,11 @@ pub enum Request {
     None,
     /// Close the dialog.
     Close,
-    /// Read `[keys]` from the config again and use it if it is valid.
+    /// Read every key table from the config again — `[keys]`, each mode's and
+    /// each panel's `[<widget>.keys]` — and use them if they all check out.
     Reload,
-    /// Comment out `[keys]` in the config and go back to the defaults. Only
-    /// sent after the reader has confirmed it.
+    /// Comment out every key table in the config and go back to the defaults.
+    /// Only sent after the reader has confirmed it.
     Reset,
 }
 

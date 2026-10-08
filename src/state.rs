@@ -535,7 +535,7 @@ mod tests {
         );
     }
 
-    /// `a_dashboard_nobody_has_touched_writes_nothing` cannot see this field.
+    /// `an_untouched_default_config_records_nothing` cannot see this field.
     /// A default config carries an inline `[theme]` table and so names no
     /// theme, which leaves baseline and reported both `None` — equal whether
     /// or not `theme` is in `only_changes_from`'s list. So the case is made

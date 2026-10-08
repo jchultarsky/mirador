@@ -212,7 +212,8 @@ ical.rs      enough RFC 5545 to answer "what is next"; no new dependencies
 calc.rs      the calculator's parser: precedence, brackets, bounded depth
 docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
-             drawings and key tables, the other documentation nothing compiles
+             drawings, key tables and count of widgets, the other
+             documentation nothing compiles
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, memory, disk, network, battery,
              temperature, calculator
@@ -313,7 +314,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 569 of them, including the ones mirador
+    trip through `toml` discards all 570 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -1756,17 +1757,23 @@ the mutations are invalid TOML on purpose and a sweep that quietly stopped
 parsing its own fixtures would pass while testing nothing.
 
 **That exact assertion promptly failed on Windows, and the reason is a trap
-worth keeping.** This repository has no `.gitattributes`, so a Windows checkout
-writes `assets/default_config.toml` with CRLF — and a mutation that replaces
-every `\n` then produces `\r\r\n` and stops being the mutation it is named
-after. Two of the eighteen quietly became invalid TOML, so 13 parsed where 15
-were asserted. The asymmetry that hides this is the part to remember:
+worth keeping.** The repository had no `.gitattributes` then, so a Windows
+checkout wrote `assets/default_config.toml` with CRLF — and a mutation that
+replaces every `\n` then produces `\r\r\n` and stops being the mutation it is
+named after. Two of the eighteen quietly became invalid TOML, so 13 parsed where
+15 were asserted. The asymmetry that hides this is the part to remember:
 **rustc normalises CRLF to LF inside string literals, and `include_str!` does
 not.** So a fixture written as a `const` in the source is LF on every platform
 while one pulled in from a file is whatever git wrote, and two tests that look
-identical are not. Anything built on `include_str!` should normalise first.
-Reproduced locally by converting the fixture before use, which is also how the
-fix was checked — the sweep now passes under either checkout.
+identical are not. Reproduced locally by converting the fixture before use,
+which is also how the fix was checked — the sweep now passes under either
+checkout.
+
+Since 2026-10-07 `.gitattributes` says `* text=auto eol=lf`, so a checkout made
+through git is LF on every platform. **Anything built on `include_str!` should
+still normalise first**: the attribute binds git and nothing else, and a
+downstream packager unpacking a tarball, or a checkout with its own settings,
+need not honour it.
 
 **A widget named twice silently destroyed a comment.** Entries are looked up by
 widget name, so a name used twice has no entry that is unambiguously its own:

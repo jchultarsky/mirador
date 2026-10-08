@@ -608,8 +608,6 @@ mod tests {
         assert!(parse(&["--yes"]).unwrap().assume_yes);
     }
 
-    /// `--yes` only ever *removes* a question. On its own it must not be
-    /// mistaken for a request to reset anything.
     /// Every way a key table can stop mirador starting ends by naming the
     /// flag that undoes it — a panel's table and an unreadable key name
     /// included, neither of which says `[keys]`.
@@ -627,6 +625,8 @@ mod tests {
         assert!(!unrelated.contains("--reset-keys"), "{unrelated}");
     }
 
+    /// `--yes` only ever *removes* a question. On its own it must not be
+    /// mistaken for a request to reset anything.
     #[test]
     fn yes_on_its_own_resets_nothing() {
         let args = parse(&["--yes"]).unwrap();

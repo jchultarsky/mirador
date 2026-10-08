@@ -573,10 +573,6 @@ mod tests {
         assert_eq!(picker.names().len(), crate::themes::bundled_names().len());
     }
 
-    /// Every size down to one cell. `prompt` had a panic that only appeared at
-    /// width 1, found by sweeping rather than by reasoning, so this sweeps —
-    /// and it holds with a list long enough to scroll, which is when the
-    /// arithmetic has something to get wrong.
     /// The golden test for the `t` picker: the default map answers every key
     /// the old `match` answered.
     #[test]
@@ -631,6 +627,10 @@ mod tests {
         assert_eq!(footer, "y keep  Esc put back");
     }
 
+    /// Every size down to one cell. `prompt` had a panic that only appeared at
+    /// width 1, found by sweeping rather than by reasoning, so this sweeps —
+    /// and it holds with a list long enough to scroll, which is when the
+    /// arithmetic has something to get wrong.
     #[test]
     fn it_draws_without_panicking_at_every_size_down_to_one_cell() {
         let dir = themes_dir("tiny");

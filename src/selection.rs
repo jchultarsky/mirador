@@ -1,11 +1,13 @@
 //! Moving a cursor through a list, and working out which row was clicked.
 //!
-//! Free functions over `ListState` rather than a wrapper type. The three list
-//! panels genuinely share these two mechanics, but they disagree about
-//! everything around them — todo and notes preserve the selection by id across
-//! a refilter where stocks clamps by index, and notes resets its body scroll on
-//! every move. Wrapping `ListState` would mean growing hooks for those, which
-//! costs more than the duplication it removes.
+//! Free functions over `ListState` rather than a wrapper type. Four panels
+//! move a cursor with [`up`] and [`down`] — tasks, markets, news and the watch
+//! log — and three map a click with [`row_at`]: tasks, notes and markets. They
+//! share these mechanics and disagree about everything around them — todo and
+//! notes preserve the selection by id across a refilter where stocks clamps by
+//! index, and notes resets its body scroll on every move. Wrapping `ListState`
+//! would mean growing hooks for those, which costs more than the duplication
+//! it removes.
 
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::ListState;
