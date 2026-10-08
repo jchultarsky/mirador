@@ -167,6 +167,38 @@ fn main() -> ExitCode {
     }
 }
 
+/// Ask before resetting `subject`, after `explain` has said what will happen.
+///
+/// The three resets ask the same question under the same rules, so the rules
+/// live here once: the refusal when there is no terminal to ask on, for the
+/// reason [`reset_config`] gives, and what counts as a yes. The refusal comes
+/// before the explanation, since nobody is there to read it.
+fn confirm(subject: impl std::fmt::Display, explain: impl FnOnce()) -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "refusing to reset {subject} without a confirmation.\n\nThere is no \
+             terminal to ask on, so re-run with `--yes` if you mean it."
+        );
+    }
+    explain();
+    print!("Go ahead? [y/N] ");
+    std::io::stdout().flush().context("writing the prompt")?;
+
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("reading your answer")?;
+    Ok(is_yes(&answer))
+}
+
+/// Whether a line typed at a reset's prompt agrees to it.
+///
+/// Anything but an explicit yes is a no, including an empty line. The default
+/// has to be the outcome that loses nothing.
+fn is_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
 /// `--reset-config`: replace the config with the defaults, keeping the old one.
 ///
 /// The confirmation is the point of this function rather than an afterthought.
@@ -180,39 +212,24 @@ fn main() -> ExitCode {
 fn reset_config(path: &Path, assume_yes: bool) -> Result<()> {
     let exists = path.try_exists().unwrap_or(false);
 
-    if !assume_yes {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "refusing to reset {} without a confirmation.\n\nThere is no \
-                 terminal to ask on, so re-run with `--yes` if you mean it.",
-                path.display()
-            );
-        }
-        if exists {
-            println!("This replaces {} with the defaults.", path.display());
-            println!("Your current config will be copied alongside it first.");
-        } else {
-            println!("There is no config at {}.", path.display());
-            println!("This writes the defaults there.");
-        }
-        // Say the second half out loud. Resetting the config without this
-        // leaves the dashboard looking untouched (#153), so a reader who is
-        // told only about the config is being told half of what will happen.
-        println!("Preferences you changed from the keyboard are put aside too.");
-        println!("Your tasks, notes and watchlist are left alone.");
-        print!("Go ahead? [y/N] ");
-        std::io::stdout().flush().context("writing the prompt")?;
-
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("reading your answer")?;
-        // Anything but an explicit yes is a no, including an empty line. The
-        // default has to be the outcome that loses nothing.
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("Left {} alone.", path.display());
-            return Ok(());
-        }
+    if !assume_yes
+        && !confirm(path.display(), || {
+            if exists {
+                println!("This replaces {} with the defaults.", path.display());
+                println!("Your current config will be copied alongside it first.");
+            } else {
+                println!("There is no config at {}.", path.display());
+                println!("This writes the defaults there.");
+            }
+            // Say the second half out loud. Resetting the config without this
+            // leaves the dashboard looking untouched (#153), so a reader who is
+            // told only about the config is being told half of what will happen.
+            println!("Preferences you changed from the keyboard are put aside too.");
+            println!("Your tasks, notes and watchlist are left alone.");
+        })?
+    {
+        println!("Left {} alone.", path.display());
+        return Ok(());
     }
 
     let backup = Config::reset(path)?;
@@ -259,30 +276,18 @@ fn reset_keys(path: &Path, assume_yes: bool) -> Result<()> {
         );
         return Ok(());
     }
-    if !assume_yes {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "refusing to reset the keys in {} without a confirmation.\n\nThere \
-                 is no terminal to ask on, so re-run with `--yes` if you mean it.",
+    if !assume_yes
+        && !confirm(format_args!("the keys in {}", path.display()), || {
+            println!(
+                "This puts every key back to its default by commenting out the [keys] \
+                 and [<panel>.keys] lines in {}.",
                 path.display()
             );
-        }
-        println!(
-            "This puts every key back to its default by commenting out the [keys] \
-             and [<panel>.keys] lines in {}.",
-            path.display()
-        );
-        println!("Nothing else in the file changes.");
-        print!("Go ahead? [y/N] ");
-        std::io::stdout().flush().context("writing the prompt")?;
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("reading your answer")?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("Left {} alone.", path.display());
-            return Ok(());
-        }
+            println!("Nothing else in the file changes.");
+        })?
+    {
+        println!("Left {} alone.", path.display());
+        return Ok(());
     }
     if keymap::reset_file(path).map_err(anyhow::Error::msg)? {
         println!(
@@ -338,42 +343,30 @@ fn factory_reset(config_path: &Path, assume_yes: bool) -> Result<()> {
         .collect();
     let config_exists = config_path.try_exists().unwrap_or(false);
 
-    if !assume_yes {
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "refusing to reset everything without a confirmation.\n\nThere is \
-                 no terminal to ask on, so re-run with `--yes` if you mean it."
-            );
-        }
-        println!("This starts mirador over from scratch.");
-        println!();
-        if config_exists {
-            println!("  Replaced with the defaults:");
-            println!("    {}", config_path.display());
+    if !assume_yes
+        && !confirm("everything", || {
+            println!("This starts mirador over from scratch.");
             println!();
-        }
-        if present.is_empty() {
-            println!("  There is nothing else to set aside.");
-        } else {
-            println!("  Set aside, each kept as a `.bak` beside itself:");
-            for path in &present {
-                println!("    {}", path.display());
+            if config_exists {
+                println!("  Replaced with the defaults:");
+                println!("    {}", config_path.display());
+                println!();
             }
-        }
-        println!();
-        println!("Nothing is deleted. Your tasks and notes stay on disk under their");
-        println!("backup names, and mirador starts again with fresh ones.");
-        print!("Go ahead? [y/N] ");
-        std::io::stdout().flush().context("writing the prompt")?;
-
-        let mut answer = String::new();
-        std::io::stdin()
-            .read_line(&mut answer)
-            .context("reading your answer")?;
-        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("Left everything alone.");
-            return Ok(());
-        }
+            if present.is_empty() {
+                println!("  There is nothing else to set aside.");
+            } else {
+                println!("  Set aside, each kept as a `.bak` beside itself:");
+                for path in &present {
+                    println!("    {}", path.display());
+                }
+            }
+            println!();
+            println!("Nothing is deleted. Your tasks and notes stay on disk under their");
+            println!("backup names, and mirador starts again with fresh ones.");
+        })?
+    {
+        println!("Left everything alone.");
+        return Ok(());
     }
 
     let backup = Config::reset(config_path)?;
@@ -461,44 +454,30 @@ fn run() -> Result<()> {
         print!("{}", config::DEFAULT_CONFIG);
         return Ok(());
     }
+
+    // Resolved once, for everything below. Not any earlier: `--help`,
+    // `--version`, `--update` and `--print-config` need no config, and must
+    // still answer on a platform that has no config directory to resolve.
+    let path = Config::path_or_default(args.config)?;
+
     if args.show_config_path {
-        let path = match args.config {
-            Some(p) => p,
-            None => Config::default_path()?,
-        };
         println!("{}", path.display());
         return Ok(());
     }
 
     if args.reset_config {
-        let path = match args.config.clone() {
-            Some(p) => p,
-            None => Config::default_path()?,
-        };
         return reset_config(&path, args.assume_yes);
     }
 
     if args.reset_keys {
-        let path = match args.config.clone() {
-            Some(p) => p,
-            None => Config::default_path()?,
-        };
         return reset_keys(&path, args.assume_yes);
     }
 
     if args.factory_reset {
-        let path = match args.config.clone() {
-            Some(p) => p,
-            None => Config::default_path()?,
-        };
         return factory_reset(&path, args.assume_yes);
     }
 
     if args.migrate_config {
-        let path = match args.config {
-            Some(p) => p,
-            None => Config::default_path()?,
-        };
         let report = migrate::migrate_file(&path)?;
         if report.is_empty() {
             println!("{} is already current; nothing to do.", path.display());
@@ -514,7 +493,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let (mut config, config_path) = Config::load(args.config).map_err(point_at_reset_keys)?;
+    let (mut config, config_path) = Config::load(path).map_err(point_at_reset_keys)?;
 
     // Preferences changed from the keyboard on a previous run are applied over
     // the config *before* any panel exists, so every panel is constructed with
@@ -576,6 +555,19 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Args> {
         parse_args(args.iter().map(|s| (*s).to_string()))
+    }
+
+    /// What all three resets take for agreement. The prompt says `[y/N]`, so
+    /// only a yes is one: an empty line, a no and anything half-typed leave
+    /// the files alone.
+    #[test]
+    fn only_an_explicit_yes_agrees_to_a_reset() {
+        for answer in ["y", "Y", "yes", "YES", " Yes\n", "y\r\n"] {
+            assert!(is_yes(answer), "{answer:?} should agree");
+        }
+        for answer in ["", "\n", "n", "no", "ye", "yeah", "y es", "sure"] {
+            assert!(!is_yes(answer), "{answer:?} should not agree");
+        }
     }
 
     #[test]
@@ -666,7 +658,7 @@ mod tests {
     fn the_default_config_is_valid_toml_and_parses_into_config() {
         let parsed: Config =
             toml::from_str(config::DEFAULT_CONFIG).expect("bundled config must parse");
-        assert!(!parsed.layout.rows.is_empty());
+        assert!(!parsed.layout.rows.is_empty(), "{:?}", parsed.layout);
     }
 
     /// Every flag `parse_args` matches is in `HELP`, as itself rather than

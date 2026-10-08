@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::store::strip_comment;
+
 /// What a migration did, so it can be reported rather than done silently.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
@@ -180,8 +182,11 @@ pub fn stale_keys() -> impl Iterator<Item = (&'static str, &'static str)> {
 /// Only top-level tables matter here; `[theme.rx_gradient]` is reported as
 /// `theme.rx_gradient` and so will not match a rule scoped to `theme`, which
 /// is what we want.
+///
+/// Read past any comment first, the way [`crate::layout_edit`] reads, since
+/// `[theme] # my colours` is still `[theme]` to the parser.
 fn section_of(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
+    let trimmed = strip_comment(line).trim();
     let inner = trimmed.strip_prefix('[')?.strip_suffix(']')?;
     // Array-of-table headers wrap in a second pair of brackets, and both have
     // to come off together — stripping only the leading one leaves a stray
@@ -193,13 +198,10 @@ fn section_of(line: &str) -> Option<&str> {
     Some(inner.trim())
 }
 
-/// The bare key a line assigns to, if it assigns to one.
+/// The bare key a line assigns to, if it assigns to one. A comment line
+/// strips to nothing and has no `=` left to split at.
 fn key_of(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return None;
-    }
-    let (key, _) = trimmed.split_once('=')?;
+    let (key, _) = strip_comment(line).split_once('=')?;
     Some(key.trim().trim_matches('"'))
 }
 
@@ -470,6 +472,32 @@ mod tests {
         assert_eq!(section_of("[theme.rx_gradient]"), Some("theme.rx_gradient"));
         assert_eq!(section_of("key = 1"), None);
         assert_eq!(section_of("# [weather]"), None);
+        // A comment after a header is legal TOML and still opens the table.
+        // Read as text, the bracket that closes it is no longer the last thing
+        // on the line, so the header was missed or misnamed.
+        assert_eq!(section_of("[theme] # colours"), Some("theme"));
+        assert_eq!(section_of("[theme] # see [notes]"), Some("theme"));
+        // And only an unquoted `#` starts the comment: a literal string's
+        // `'` quotes as well as a basic string's `"`, and an escaped `\"`
+        // does not end the basic string it sits in.
+        assert_eq!(section_of("[\"a#b\"] # c"), Some("\"a#b\""));
+        assert_eq!(
+            section_of("[plugins.config.'a#b']"),
+            Some("plugins.config.'a#b'")
+        );
+        assert_eq!(
+            section_of("[plugins.config.\"a\\\"#b\"]"),
+            Some("plugins.config.\"a\\\"#b\"")
+        );
+        // The other way round: a `\` inside a literal string escapes nothing,
+        // so the `'` after one still closes it. A Windows directory is the
+        // name that ends that way, and read as an escape the comment after it
+        // hides the header, so the plugin's own table is taken for the one
+        // above it and its keys are rewritten as that table's.
+        assert_eq!(
+            section_of("[plugins.config.'C:\\dir\\'] # c"),
+            Some("plugins.config.'C:\\dir\\'")
+        );
     }
 
     #[test]
@@ -479,6 +507,63 @@ mod tests {
         assert_eq!(key_of("# forecast_days = 4"), None);
         assert_eq!(key_of(""), None);
         assert_eq!(key_of("   "), None);
+        assert_eq!(key_of("rx = \"green\" # was red"), Some("rx"));
+        assert_eq!(key_of("\"a#b\" = 1"), Some("a#b"));
+    }
+
+    /// Every rule is scoped to a table, so a header the walk does not
+    /// recognise leaves the keys under it in whichever table came before.
+    /// `[theme] # my colours` is a header — it parses — and the `rx` below it
+    /// was neither migrated nor, through [`change_at`], hinted at: the load
+    /// error pointed the reader at `--print-config` rather than at the fix.
+    #[test]
+    fn a_commented_header_still_scopes_its_keys() {
+        let text = "[theme] # my colours\nrx = \"green\"\n";
+        let (out, changes) = migrate(text).unwrap_or_else(|refusal| panic!("refused: {refusal:?}"));
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(out.contains("# rx = \"green\""), "got:\n{out}");
+        assert!(out.starts_with("[theme] # my colours\n"), "got:\n{out}");
+
+        let at = text.find("rx").expect("the key is in the text");
+        let change = change_at(text, at);
+        assert!(
+            change
+                .as_deref()
+                .is_some_and(|c| c.starts_with("[theme] rx will be commented out")),
+            "the line under a commented header was read as {change:?}"
+        );
+    }
+
+    /// The other half of reading past a comment: a `#` inside a quoted table
+    /// name is not one. Cut there, `[plugins.config.'chan#1']` is no header,
+    /// so the keys under it are counted in the table before — `[theme]` here
+    /// — and a plugin's own `rx` is commented out as a retired theme key.
+    /// Nothing would refuse that, because a plugin's config is an opaque table
+    /// and the edited file still loads. Once for each way a `#` can be quoted.
+    #[test]
+    fn a_hash_inside_a_quoted_table_name_is_not_a_comment() {
+        for name in ["'chan#1'", "\"a\\\"#b\""] {
+            let text = format!(
+                "[weather]\nforecast_days = 4\n\
+                 [[plugins]]\nid = \"probe\"\ncommand = [\"/usr/bin/true\"]\n\
+                 [theme]\nborder = \"red\"\n\
+                 [plugins.config.{name}]\nrx = \"green\"\n"
+            );
+            let (out, changes) =
+                migrate(&text).unwrap_or_else(|refusal| panic!("{name}: refused: {refusal:?}"));
+            assert_eq!(changes.len(), 1, "{name}: {changes:?}");
+            assert!(
+                changes[0].starts_with("[weather] forecast_days"),
+                "{name}: {changes:?}"
+            );
+            assert!(out.ends_with("\nrx = \"green\"\n"), "{name}: got:\n{out}");
+            let at = text.rfind("rx").expect("the key is in the text");
+            assert_eq!(
+                change_at(&text, at),
+                None,
+                "{name}: rx was read as a theme key"
+            );
+        }
     }
 
     #[test]

@@ -831,6 +831,9 @@ fn is_keys_header(trimmed: &str) -> bool {
 
 /// How far `line` opens (positive) or closes (negative) an array, ignoring
 /// brackets inside strings — `"["` is a key — and anything after a comment.
+///
+/// The quoting is [`crate::store::strip_comment`]'s, copied because the
+/// brackets are counted in the same walk; change one and change the other.
 fn bracket_depth_change(line: &str) -> i32 {
     let mut change = 0;
     let mut quote: Option<char> = None;
@@ -2050,6 +2053,23 @@ mod tests {
              # Keys reset to the defaults by mirador on 2026-09-24. What was set:\n\
              # quit = [\n#   \"x\",\n#   \"[\",  # a key that is a bracket\n# ]\n\
              # theme = \"T\"\n\n[network]\ninterfaces = []\n"
+        );
+    }
+
+    /// A literal string has no escapes, so `'\'` is a whole key and its
+    /// array closes on the line it opened. Read as a basic string's escape,
+    /// the backslash swallowed the closing quote, the array never ended, and
+    /// the section after it was commented out with the keys — which the
+    /// self-check then refused. This is what pins the walk's copy of
+    /// `strip_comment`'s quoting: without it, that rule could be dropped
+    /// from the copy and every test stayed green.
+    #[test]
+    fn a_literal_key_ending_in_a_backslash_closes_its_array() {
+        let text = "[keys]\nquit = ['\\', \"q\"]\n\n[clocks]\ntwelve_hour = true\n";
+        let edited = reset_text(text, NOTE).expect("resets").expect("changed");
+        assert_eq!(
+            edited,
+            format!("[keys]\n# {NOTE}\n# quit = ['\\', \"q\"]\n\n[clocks]\ntwelve_hour = true\n")
         );
     }
 

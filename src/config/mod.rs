@@ -186,13 +186,8 @@ impl Config {
         crate::widgets::is_known_widget(id) || self.plugin(id).is_some()
     }
 
-    /// Load the config, creating a commented default if none exists.
-    pub fn load(explicit: Option<PathBuf>) -> Result<(Self, PathBuf)> {
-        let path = match explicit {
-            Some(p) => p,
-            None => Self::default_path()?,
-        };
-
+    /// Load the config at `path`, creating a commented default if none exists.
+    pub fn load(path: PathBuf) -> Result<(Self, PathBuf)> {
         if !path.exists() {
             crate::store::write_atomic(&path, DEFAULT_CONFIG)
                 .with_context(|| format!("writing default config to {}", path.display()))?;
@@ -219,6 +214,11 @@ impl Config {
         let dir = crate::themes::user_dir(config_path);
         self.theme = crate::themes::resolve(&name, dir.as_deref())?;
         Ok(())
+    }
+
+    /// The config `--config` named, else `MIRADOR_CONFIG`, else the platform's.
+    pub fn path_or_default(explicit: Option<PathBuf>) -> Result<PathBuf> {
+        explicit.map_or_else(Self::default_path, Ok)
     }
 
     /// Platform-appropriate config location.
@@ -538,8 +538,13 @@ impl Config {
     pub fn notes_path(&self) -> Result<PathBuf> {
         match &self.notes.file {
             Some(p) => Ok(expand_tilde(p)),
-            None => Ok(Self::default_data_dir()?.join("notes.toml")),
+            None => Self::default_notes_path(),
         }
+    }
+
+    /// Where notes live when `[notes].file` is unset.
+    fn default_notes_path() -> Result<PathBuf> {
+        Ok(Self::default_data_dir()?.join("notes.toml"))
     }
 
     /// Resolve the agenda's `.ics` path, expanding a leading `~`.
@@ -559,8 +564,13 @@ impl Config {
     pub fn stocks_path(&self) -> Result<PathBuf> {
         match &self.stocks.file {
             Some(p) => Ok(expand_tilde(p)),
-            None => Ok(Self::default_data_dir()?.join("watchlist.toml")),
+            None => Self::default_watchlist_path(),
         }
+    }
+
+    /// Where the watchlist lives when `[stocks].file` is unset.
+    fn default_watchlist_path() -> Result<PathBuf> {
+        Ok(Self::default_data_dir()?.join("watchlist.toml"))
     }
 
     /// Where the world clocks live. Like the watchlist, this is a data file
@@ -588,15 +598,19 @@ impl Config {
     /// path the reader chose, and resetting the config already stops mirador
     /// looking there — moving a file out of a directory the reader picked
     /// would be a surprise a reset cannot justify.
+    ///
+    /// Built from the same functions the panels find their files with, so
+    /// each name is spelt once. Spelt again here, a file renamed there would
+    /// leave a reset setting aside a name nothing uses any more and keeping
+    /// the file it was meant to move.
     pub fn owned_data_files() -> Result<Vec<PathBuf>> {
-        let dir = Self::default_data_dir()?;
         Ok(vec![
-            crate::state::default_path(&dir),
-            dir.join("todos.toml"),
-            dir.join("notes.toml"),
-            dir.join("watchlist.toml"),
-            dir.join("zones.toml"),
-            crate::update::default_path(&dir),
+            Self::state_path()?,
+            Self::default_data_path()?,
+            Self::default_notes_path()?,
+            Self::default_watchlist_path()?,
+            Self::zones_path()?,
+            Self::update_cache_path()?,
         ])
     }
 
@@ -879,6 +893,26 @@ mod tests {
         ] {
             assert!(names.iter().any(|n| n == wanted), "{wanted} must be reset");
         }
+        // And each is the very file the code that writes it uses. The names
+        // above are the spec of what the directory holds; a file renamed where
+        // a panel finds it, and not here, passes them and leaves a reset moving
+        // a name nothing writes any more while the real file stays put.
+        let config = Config::default();
+        for (what, used) in [
+            ("tasks", config.todo_path()),
+            ("notes", config.notes_path()),
+            ("watchlist", config.stocks_path()),
+            ("zones", Config::zones_path()),
+            ("state", Config::state_path()),
+            ("update check", Config::update_cache_path()),
+        ] {
+            let used = used.expect("a default path");
+            assert!(
+                files.contains(&used),
+                "the {what} file is written to {} and a reset would not move it: {files:?}",
+                used.display()
+            );
+        }
         assert!(
             !names.iter().any(|n| n == "calendar.ics"),
             "a factory reset must not touch a calendar mirador only ever reads: {names:?}"
@@ -1107,24 +1141,9 @@ mod tests {
     fn the_rust_default_layout_matches_the_shipped_one() {
         let shipped: Config = toml::from_str(DEFAULT_CONFIG).expect("must parse");
 
-        let shape = |layout: &Layout| -> Vec<(u16, Vec<(String, u16)>)> {
-            layout
-                .rows
-                .iter()
-                .map(|r| {
-                    let panels = r
-                        .panels
-                        .iter()
-                        .map(|p| (p.widget.clone(), p.width))
-                        .collect();
-                    (r.height, panels)
-                })
-                .collect()
-        };
-
         assert_eq!(
-            shape(&shipped.layout),
-            shape(&Layout::default()),
+            shipped.layout,
+            Layout::default(),
             "the shipped config and the Rust default describe different \
              dashboards. Both are first impressions — the file on a true first \
              run, the Rust default for any config that omits [layout] — so a \
@@ -1318,6 +1337,18 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
                 "{source} was accepted, or the error did not name the key: {message}"
             );
         }
+    }
+
+    /// The same hint behind a header with a comment after it, which is legal
+    /// TOML and which the migration's walk did not read as a header — so the
+    /// reader got the unknown-key error and no word of the fix.
+    #[test]
+    fn a_commented_header_does_not_hide_the_migration_hint() {
+        let message = refusal("[theme] # my colours\nrx = \"green\"");
+        assert!(
+            message.contains("--migrate-config"),
+            "a comment after `[theme]` hid the migration hint: {message}"
+        );
     }
 
     #[test]

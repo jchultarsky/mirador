@@ -380,6 +380,47 @@ pub fn line_ending(source: &str) -> &'static str {
     }
 }
 
+/// A line up to the `#` that starts its TOML comment, if it has one.
+///
+/// Only a `#` outside a string starts one. TOML quotes with `'` as well as
+/// `"`, and a `\"` inside a `"` string is part of it, so both are tracked:
+/// knowing only `"`, a scan cuts `[plugins.config.'chan#1']` at the `#` and
+/// leaves a line that is no longer a header. Each line is scanned on its own,
+/// so the later lines of a multi-line string are read as though outside it,
+/// the limit both of its callers already live with.
+///
+/// Three modules read a hand-written file line by line, and they have to
+/// agree on where a line's text ends. Two of them did not: [`crate::layout_edit`]
+/// stripped comments and [`crate::migrate`] did not, so `[theme] # my colours`
+/// — a header, by the parser's reckoning — was no header to the migration,
+/// and a retired key under it was neither rewritten nor hinted at. Both call
+/// this now. The third, [`crate::keymap`], keeps its own copy of the same
+/// scan in `bracket_depth_change`, because it counts brackets in the same
+/// walk; a change to the quoting rule here belongs there too.
+pub fn strip_comment(line: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' && q == '"' {
+                    escaped = true;
+                } else if ch == q {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '"' | '\'' => quote = Some(ch),
+                '#' => return &line[..index],
+                _ => {}
+            },
+        }
+    }
+    line
+}
+
 /// Scaffolding the whole crate's tests share.
 #[cfg(test)]
 pub(crate) mod testing {

@@ -1840,7 +1840,8 @@ line, and a hang is the one failure a dashboard cannot recover from.
 Non-findings, recorded because they were checked rather than assumed. Edits are
 sorted by anchor and applied in reverse, and an insertion anchored where a
 deleted row's span begins looked like it could collide; it does not, and the
-rows come out in order. And every byte-offset slice in the module — `strip_comment`,
+rows come out in order. And every byte-offset slice in the module — `strip_comment`
+(since moved to `store.rs`, so `migrate` reads comments the same way),
 `quoted_value`, `after_key`, `set_number` — indexes at a character boundary by
 construction, so the multi-byte panic that `ical` had cannot happen here.
 

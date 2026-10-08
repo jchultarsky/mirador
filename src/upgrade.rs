@@ -51,11 +51,7 @@ pub fn cleanup_stale() {
 }
 
 fn method(current: &Path) -> Result<Method> {
-    let updater = current.with_file_name(if cfg!(windows) {
-        "mirador-update.exe"
-    } else {
-        "mirador-update"
-    });
+    let updater = current.with_file_name(format!("mirador-update{}", std::env::consts::EXE_SUFFIX));
     if updater
         .try_exists()
         .with_context(|| format!("checking for {}", updater.display()))?
