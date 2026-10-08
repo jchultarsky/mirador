@@ -294,7 +294,7 @@ Press `w` — a key that is on the status bar and in the help — to see every
 widget mirador has and which of them your layout places:
 
 ```
-╭PANELS────────────────────────────────╮
+╭┤PANELS├──────────────────────────────╮
 │    ■ clocks                          │
 │    ■ weather                         │
 │    ■ todo                            │
@@ -306,7 +306,11 @@ widget mirador has and which of them your layout places:
 │    ■ watchlog                        │
 │    ■ news                            │
 │    ■ cpu                             │
+│    ■ memory                          │
+│    □ disk                            │
 │    ■ network                         │
+│    □ battery                         │
+│    □ temperature                     │
 │    ■ calculator                      │
 │                                      │
 │   written to your config on close    │

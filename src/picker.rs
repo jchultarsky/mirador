@@ -17,10 +17,11 @@ use std::cell::Cell;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::frame::Binding;
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::theme::Theme;
 
@@ -95,7 +96,9 @@ pub const ACTIONS: &[Meta<PickerAction>] = &[
             (KeyCode::Char('w'), NONE),
         ],
         label: "close",
-        primary: true,
+        // The footer offers Esc for this instead, under this label: Esc
+        // closes too, and is the one key no table can take away.
+        primary: false,
         joins: false,
         about: "close, writing any change to the config",
     },
@@ -115,6 +118,48 @@ pub enum Action {
     Toggle(String),
     /// Close the dialog and commit whatever changed.
     Close,
+}
+
+/// `keys` with Esc's hint beside them. Esc closes as `close` does and is in
+/// no table, so its hint carries `close`'s label.
+fn with_esc(keys: PanelKeymap<PickerAction>) -> PanelKeymap<PickerAction> {
+    let close = ACTIONS
+        .iter()
+        .find(|meta| meta.action == PickerAction::Close)
+        .expect("close is in the table");
+    keys.with_fixed(&[Binding::owned(crate::frame::ESC, close.label, true)])
+}
+
+/// A move of a dialog's list cursor.
+///
+/// The panel picker, the theme picker and the prompt's list each own a
+/// cursor, and each wrote the clamps out by hand — three copies of one piece
+/// of arithmetic, which is how one of them came to have no window at all.
+/// This is the one copy, with [`window`] beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    Up(usize),
+    Down(usize),
+    First,
+    Last,
+}
+
+impl Step {
+    /// Where a cursor at `selected` lands in a list of `len`: clamped at both
+    /// ends, never wrapping. A cursor left past the end of a list that has
+    /// since got shorter is brought back before it moves, whichever way —
+    /// `selection::up` once walked one down a row at a time with nothing
+    /// highlighted the whole way.
+    pub(crate) fn apply(self, selected: usize, len: usize) -> usize {
+        let last = len.saturating_sub(1);
+        let selected = selected.min(last);
+        match self {
+            Self::Up(rows) => selected.saturating_sub(rows),
+            Self::Down(rows) => selected.saturating_add(rows).min(last),
+            Self::First => 0,
+            Self::Last => last,
+        }
+    }
 }
 
 /// An open picker.
@@ -137,7 +182,7 @@ impl Picker {
             selected: 0,
             offset: Cell::new(0),
             names,
-            keys: PanelKeymap::defaults("panel_picker", ACTIONS),
+            keys: with_esc(PanelKeymap::defaults("panel_picker", ACTIONS)),
         }
     }
 
@@ -145,7 +190,7 @@ impl Picker {
     /// last loaded it.
     #[must_use]
     pub fn with_keys(mut self, keys: PanelKeymap<PickerAction>) -> Self {
-        self.keys = keys;
+        self.keys = with_esc(keys);
         self
     }
 
@@ -161,15 +206,13 @@ impl Picker {
     /// than dismissing on any of them — a stray keystroke must not close it and
     /// leave the user wondering whether the toggle took.
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
-        let last = self.names.len().saturating_sub(1);
-
         if key.code == KeyCode::Esc {
             return Action::Close;
         }
         let Some(action) = self.keys.action(key) else {
             return Action::None;
         };
-        match action {
+        let step = match action {
             PickerAction::Close => return Action::Close,
             PickerAction::Toggle => {
                 return self
@@ -178,11 +221,12 @@ impl Picker {
                     .cloned()
                     .map_or(Action::None, Action::Toggle);
             }
-            PickerAction::Down => self.selected = self.selected.saturating_add(1).min(last),
-            PickerAction::Up => self.selected = self.selected.saturating_sub(1),
-            PickerAction::First => self.selected = 0,
-            PickerAction::Last => self.selected = last,
-        }
+            PickerAction::Down => Step::Down(1),
+            PickerAction::Up => Step::Up(1),
+            PickerAction::First => Step::First,
+            PickerAction::Last => Step::Last,
+        };
+        self.selected = step.apply(self.selected, self.names.len());
         Action::None
     }
 
@@ -203,14 +247,14 @@ impl Picker {
         // drawn when there is room for it; where there is not, the list
         // scrolls rather than the rows under it being cut, and keeps at least
         // the row the cursor is on. Below that it is the blank that goes,
-        // being spacing, before the status or the footer.
+        // being spacing, then the status, so that the footer with the way out
+        // gives way to nothing but the row under the cursor.
         let height = u16::try_from(self.names.len().saturating_add(TRAILER))
             .unwrap_or(u16::MAX)
             .saturating_add(crate::frame::FRAME_HEIGHT);
         let popup = crate::frame::centred(area, 40, height);
         let interior = usize::from(popup.height.saturating_sub(crate::frame::FRAME_HEIGHT));
-        let rows = interior.saturating_sub(TRAILER).max(1);
-        let spaced = interior >= rows + TRAILER;
+        let (rows, spaced) = list_rows(interior, TRAILER);
         let offset = window(self.selected, self.offset.get(), rows, self.names.len());
         self.offset.set(offset);
 
@@ -245,45 +289,47 @@ impl Picker {
         if spaced {
             lines.push(Line::from(""));
         }
-        match error {
-            Some(error) => lines.push(Line::from(Span::styled(
-                format!("  {error}"),
-                Style::default().fg(theme.error),
-            ))),
-            None => lines.push(Line::from(Span::styled(
-                "  written to your config on close",
-                Style::default().fg(theme.muted),
-            ))),
+        // The status and the footer sit under the names, two columns in, and
+        // are fitted to the dialog as drawn: `centred` clamps it to the
+        // screen, and the terminal cut both there with nothing to say so
+        // (invariant 19). The status is prose, as often as not an error from
+        // writing the config, and is ellipsised; the footer's hints drop
+        // whole, Esc last. Either gives up the indent, being padding, before
+        // a letter of what it says.
+        let inner = usize::from(popup.width.saturating_sub(crate::frame::FRAME_WIDTH));
+        let indent = |width: usize| if width + 2 <= inner { "  " } else { "" };
+        let (status, colour) = match error {
+            Some(error) => (error, theme.error),
+            None => ("written to your config on close", theme.muted),
+        };
+        let status = crate::grid::truncate(status, inner);
+        // Pushed only with room for the footer under it. Without that check
+        // the status took the footer's row and the way out was the line the
+        // dialog cut, with nothing to mark it, in favour of a constant string
+        // about where a change goes.
+        if interior >= rows + 2 {
+            lines.push(Line::from(vec![
+                Span::raw(indent(crate::grid::display_width(&status))),
+                Span::styled(status, Style::default().fg(colour)),
+            ]));
         }
-        // The toggle key is the one `[panel_picker.keys]` gave it; Esc always
-        // closes, whatever else does.
-        let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
-        let mut footer = Vec::new();
-        if let Some(toggle) = self.keys.keys(PickerAction::Toggle).first() {
-            footer.push(Span::styled(format!("  {toggle}"), key_style));
-            footer.push(Span::styled(" toggle   ", Style::default().fg(theme.muted)));
-        } else {
-            footer.push(Span::raw("  "));
-        }
-        footer.push(Span::styled("Esc", key_style));
-        footer.push(Span::styled(" close", Style::default().fg(theme.muted)));
-        lines.push(Line::from(footer));
+        // The primary keys as `[panel_picker.keys]` has them — the toggle
+        // key, then Esc, which always closes, whatever else does.
+        let footer = crate::frame::key_row(
+            self.keys.bindings(),
+            "   ",
+            theme,
+            u16::try_from(inner).unwrap_or(u16::MAX),
+        );
+        lines.push(Line::from(
+            std::iter::once(Span::raw(indent(footer.width())))
+                .chain(footer.spans)
+                .collect::<Vec<_>>(),
+        ));
 
         frame.render_widget(Clear, popup);
         frame.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border_focused))
-                    .padding(Padding::horizontal(1))
-                    .title_top(Line::from(Span::styled(
-                        "PANELS",
-                        Style::default()
-                            .fg(theme.title)
-                            .add_modifier(Modifier::BOLD),
-                    ))),
-            ),
+            Paragraph::new(lines).block(crate::frame::dialog_block(theme, "panels", popup.width)),
             popup,
         );
     }
@@ -292,9 +338,26 @@ impl Picker {
 /// The rows drawn under the list: a blank, the status line and the footer.
 const TRAILER: usize = 3;
 
+/// How a dialog's `interior` rows are shared between its list and the
+/// `trailer` rows drawn under it, the first of which is a blank: the rows
+/// the list can have, and whether the blank still fits.
+///
+/// The list gets every row the trailer can spare and never fewer than the
+/// one the cursor is on. Below that it is the blank that goes, being
+/// spacing, before anything there is to read.
+pub(crate) fn list_rows(interior: usize, trailer: usize) -> (usize, bool) {
+    let rows = interior.saturating_sub(trailer).max(1);
+    (rows, interior >= rows + trailer)
+}
+
 /// The first row of a `rows`-high window over `len` names that keeps
 /// `selected` in view, moving the window from `offset` as little as it can.
-fn window(selected: usize, offset: usize, rows: usize, len: usize) -> usize {
+///
+/// Shared by every dialog that owns a list cursor. The theme picker and the
+/// prompt each kept a copy that moved the window in `handle_key` against a
+/// fixed row count, which is what let the theme picker preview a theme its
+/// terminal had no row to draw.
+pub(crate) fn window(selected: usize, offset: usize, rows: usize, len: usize) -> usize {
     let offset = if selected < offset {
         selected
     } else if selected >= offset.saturating_add(rows) {
@@ -470,15 +533,21 @@ mod tests {
                     screen.contains(&format!("▸ □ {name}")),
                     "{name} is under the cursor at height {height} and not drawn:\n{screen}"
                 );
-                // The frame, one row of list, the status and the footer make
-                // five rows, and at five or more both are drawn: the list gives
-                // way first, then the blank above the status, which is spacing
-                // rather than anything to read.
+                // The frame, one row of list and the footer make four rows,
+                // and at four or more the way out is drawn: the list gives
+                // way first, then the blank above the status, which is
+                // spacing, then the status, which says where a change goes
+                // and is no use to somebody looking for the way out.
+                if height >= 4 {
+                    assert!(
+                        screen.contains("Esc close"),
+                        "the footer went before the status at height {height}:\n{screen}"
+                    );
+                }
                 if height >= 5 {
                     assert!(
-                        screen.contains("Esc close")
-                            && screen.contains("written to your config on close"),
-                        "the status or footer went before the blank at height {height}:\n{screen}"
+                        screen.contains("written to your config on close"),
+                        "the status went before the blank at height {height}:\n{screen}"
                     );
                 }
             };
@@ -523,6 +592,26 @@ mod tests {
             grown.contains(&format!("□ {}", names[0])),
             "the window stayed scrolled on a taller terminal:\n{grown}"
         );
+    }
+
+    /// The one copy of the dialogs' cursor arithmetic: clamped at both ends,
+    /// never wrapping, a page that would pass an end stopping at it, and a
+    /// cursor left past the end of a list that has since got shorter brought
+    /// back before it moves, whichever way.
+    #[test]
+    fn a_step_stays_inside_the_list() {
+        assert_eq!(Step::Up(1).apply(0, 5), 0);
+        assert_eq!(Step::Down(1).apply(4, 5), 4);
+        assert_eq!(Step::Down(1).apply(2, 5), 3);
+        assert_eq!(Step::Down(12).apply(2, 5), 4);
+        assert_eq!(Step::Up(12).apply(3, 5), 0);
+        assert_eq!(Step::First.apply(3, 5), 0);
+        assert_eq!(Step::Last.apply(0, 5), 4);
+        assert_eq!(Step::Down(1).apply(0, 0), 0);
+        assert_eq!(Step::Last.apply(0, 0), 0);
+        // A list of nine cut to five under a cursor on row eight.
+        assert_eq!(Step::Up(1).apply(8, 5), 3);
+        assert_eq!(Step::Down(1).apply(8, 5), 4);
     }
 
     #[test]

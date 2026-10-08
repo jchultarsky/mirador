@@ -55,6 +55,80 @@ pub fn centred(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+/// Esc, as every dialog spells it: the key no dialog's table can move.
+///
+/// The form [`crate::keymap::Key`] displays, which is what the key map lists
+/// and what a key table's errors say. The dialogs once had three spellings
+/// of it between them — `esc`, `ESC` and `Esc`.
+pub const ESC: &str = "Esc";
+
+/// The frame a dialog is drawn in: rounded, padded, in the focused border
+/// colour, with `title` punched into the top border as `┤TITLE├` — the way
+/// [`draw`] punches a panel's.
+///
+/// One builder for the four dialogs, which built it by hand and had drifted:
+/// two drew the brackets and two laid a bare title on the border. `width` is
+/// the dialog's own. A title too long for it is cut and says so with `…`,
+/// rather than losing its closing `├` to the corner, and one cut down to the
+/// ellipsis alone is not drawn — the rule `draw` keeps for a panel.
+pub fn dialog_block(theme: &Theme, title: &str, width: u16) -> Block<'static> {
+    let border = Style::default().fg(theme.border_focused);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(border)
+        .padding(Padding::horizontal(1));
+    // Inside the two corners, less the two brackets.
+    let room = usize::from(width).saturating_sub(4);
+    let title = crate::grid::truncate(&crate::glyphs::utility(title), room);
+    if title.is_empty() || title == "…" {
+        return block;
+    }
+    block.title_top(Line::from(vec![
+        Span::styled("┤", border),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(theme.title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("├", border),
+    ]))
+}
+
+/// A dialog's key row: each primary binding as `key action`, the key bold in
+/// the key colour, `gap` between them, fitted to `width`.
+///
+/// The bindings are the ones a dialog's key table derives, so a moved key, a
+/// relabelled action or a hint made primary reaches the row with nothing
+/// else to edit — invariant 3, which the two pickers' footers broke by
+/// spelling their labels out a second time.
+///
+/// The last binding is the way out — each dialog appends Esc's with
+/// `with_fixed` — and it is the last to go: hints drop whole, the ones
+/// before it first, and Esc alone and still too wide is cut with `…`. The
+/// row was built at its natural width and the terminal cut it wherever the
+/// edge fell, `Esc put` with no `back`, and narrower still the keep hint
+/// whole and Esc gone with nothing to say so (invariant 19).
+pub fn key_row(bindings: &[Binding], gap: &str, theme: &Theme, width: u16) -> Line<'static> {
+    let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
+    let muted = Style::default().fg(theme.muted);
+    let hints = bindings
+        .iter()
+        .filter(|binding| binding.primary)
+        .map(|binding| {
+            vec![
+                Span::styled(binding.key.clone(), key_style),
+                Span::styled(format!(" {}", binding.action), muted),
+            ]
+        })
+        .collect();
+    crate::grid::assemble(
+        crate::grid::way_out_last(hints, &Span::styled(gap.to_string(), muted), width.into()),
+        width,
+    )
+}
+
 /// A key binding, as declared by a panel.
 ///
 /// One declaration feeds the border hint, the status bar and the help overlay,
@@ -615,5 +689,280 @@ mod tests {
         let buf = terminal.backend().buffer();
         let line: String = (0..6).map(|x| buf[(x, 0)].symbol()).collect();
         assert_eq!(line, "──────", "a clipped label is worse than none");
+    }
+
+    /// A dialog narrower than its title cuts the title and says so, rather
+    /// than letting the corner take its closing `├` and leave `┤KEY M` on the
+    /// border; one with no room for a letter of it draws no title at all.
+    #[test]
+    fn a_dialog_title_is_cut_with_its_brackets_or_not_drawn() {
+        let theme = Theme::default();
+        for width in 1..=16u16 {
+            let mut terminal = Terminal::new(TestBackend::new(width, 3)).unwrap();
+            terminal
+                .draw(|f| f.render_widget(dialog_block(&theme, "key map", width), f.area()))
+                .unwrap();
+            let buf = terminal.backend().buffer();
+            let top: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+            if width >= 11 {
+                assert!(top.contains("┤KEY MAP├"), "{width}: {top}");
+            } else if width >= 6 {
+                assert!(top.contains("…├"), "{width}: cut and marked: {top}");
+            } else {
+                assert!(!top.contains('┤'), "{width}: no room, no title: {top}");
+            }
+            assert_eq!(
+                top.contains('┤'),
+                top.contains('├'),
+                "{width}: a bracket without its partner: {top}"
+            );
+        }
+    }
+
+    /// The first row of an 80x30 screen with a dialog's top border in it.
+    fn dialog_top(draw: impl FnOnce(&mut ratatui::Frame)) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(draw).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..30)
+            .map(|y| (0..80).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .find(|row| row.contains('╭'))
+            .expect("a dialog")
+            .trim()
+            .to_string()
+    }
+
+    /// The four dialogs built their frames by hand and drew their titles two
+    /// ways: `┤THEME├` and `┤KEY MAP├` punched into the border the way every
+    /// panel's is, `PANELS` and a prompt's label laid on it with no brackets.
+    /// One builder now, and this reads each dialog's own top border.
+    #[test]
+    fn every_dialog_punches_its_title_into_the_border() {
+        let theme = Theme::default();
+        let picker = crate::picker::Picker::new(vec!["clocks".into()]);
+        let themes = crate::theme_picker::ThemePicker::new(None, None);
+        let prompt = crate::prompt::Prompt::new(
+            "ADD A CLOCK",
+            "Esc cancels",
+            "",
+            crate::prompt::Completion::None,
+        );
+        let mut keys = crate::keymap_dialog::KeymapDialog::new();
+        let keymap = crate::keymap::Keymap::default();
+        let tops = [
+            (
+                dialog_top(|f| picker.render(f, f.area(), &theme, |_| false, None)),
+                "┤PANELS├",
+            ),
+            (
+                dialog_top(|f| themes.render(f, f.area(), &theme)),
+                "┤THEME├",
+            ),
+            (
+                dialog_top(|f| prompt.render(f, f.area(), &theme)),
+                "┤ADD A CLOCK├",
+            ),
+            (
+                dialog_top(|f| keys.render(f, f.area(), &keymap, &[], None, &theme)),
+                "┤KEY MAP├",
+            ),
+        ];
+        for (top, title) in tops {
+            assert!(top.starts_with(&format!("╭{title}─")), "{top}");
+        }
+    }
+
+    /// The rows inside a dialog drawn on a `width`x30 screen, between its side
+    /// borders and trimmed — the last is its footer. Empty where the dialog
+    /// is too narrow to have an inside.
+    fn dialog_rows(width: u16, draw: impl FnOnce(&mut ratatui::Frame)) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        terminal.draw(draw).unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..30)
+            .map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect();
+        let (Some(top), Some(bottom)) = (
+            rows.iter().position(|row| row.contains('╭')),
+            rows.iter().position(|row| row.contains('╰')),
+        ) else {
+            return Vec::new();
+        };
+        rows[top + 1..bottom]
+            .iter()
+            .filter_map(|row| {
+                let inside = row.trim().strip_prefix('│')?.strip_suffix('│')?;
+                Some(inside.trim().to_string())
+            })
+            .collect()
+    }
+
+    /// What a dialog's key row has to say: its hints but the way out, the
+    /// gap between them, the way out, and the whole row where there is room.
+    struct Footer {
+        dialog: &'static str,
+        hints: &'static [&'static str],
+        gap: &'static str,
+        esc: &'static str,
+        full: &'static str,
+    }
+
+    impl Footer {
+        /// Invariant 19 for a dialog's key row, and the way out last: at
+        /// every width from 1 to 100 the row is whole hints ending in `esc`,
+        /// or `esc` alone cut with an `…`, and it says nothing only where the
+        /// dialog has no room inside its border and padding.
+        fn sweep(&self, mut draw: impl FnMut(&mut ratatui::Frame)) {
+            let Self { dialog, esc, .. } = self;
+            let (mut cut, mut dropped) = (false, false);
+            for width in 1..=100u16 {
+                let rows = dialog_rows(width, &mut draw);
+                let Some(footer) = rows.last() else {
+                    continue;
+                };
+                if footer.is_empty() {
+                    assert!(width < 5, "{dialog} at {width}: room, and nothing said");
+                    continue;
+                }
+                if let Some(head) = footer.strip_suffix('…') {
+                    assert!(
+                        esc.starts_with(head.trim_end()),
+                        "{dialog} at {width}: cut, and not down to {esc:?} alone: {footer:?}"
+                    );
+                    cut = true;
+                } else {
+                    self.assert_whole(width, footer);
+                    dropped |= footer == esc;
+                }
+                if width == 100 {
+                    assert_eq!(
+                        footer, self.full,
+                        "{dialog}: every hint where there is room"
+                    );
+                }
+            }
+            // A sweep that never reached the cut tests nothing.
+            assert!(cut && dropped, "{dialog}: cut {cut}, dropped {dropped}");
+        }
+
+        /// `footer` is whole hints, `gap` between them, ending in `esc`.
+        fn assert_whole(&self, width: u16, footer: &str) {
+            let Self {
+                dialog,
+                hints,
+                gap,
+                esc,
+                ..
+            } = self;
+            let Some(rest) = footer.strip_suffix(esc) else {
+                panic!("{dialog} at {width}: {footer:?} does not end in {esc:?}");
+            };
+            if rest.is_empty() {
+                return;
+            }
+            let rest = rest.strip_suffix(gap).unwrap_or_else(|| {
+                panic!("{dialog} at {width}: {footer:?} has no gap before {esc:?}")
+            });
+            for hint in rest.split(gap) {
+                assert!(
+                    hints.contains(&hint),
+                    "{dialog} at {width}: {hint:?} is not a whole hint in {footer:?}"
+                );
+            }
+        }
+    }
+
+    /// The terminal cut the pickers' key rows wherever the edge fell —
+    /// `↵ keep  Esc put` with no `back` and no mark, and narrower still the
+    /// keep hint whole and Esc, the way out, gone without a trace. The key
+    /// map's row dropped from the end, so Esc went first; and a prompt on a
+    /// screen under twenty columns measured its help row for the twenty it
+    /// asked for, and the terminal cut that to `Esc can`.
+    #[test]
+    fn every_dialog_footer_drops_whole_hints_and_keeps_esc_longest() {
+        let theme = Theme::default();
+        let picker = crate::picker::Picker::new(
+            crate::widgets::WIDGET_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
+        Footer {
+            dialog: "the panel picker",
+            hints: &["space toggle"],
+            gap: "   ",
+            esc: "Esc close",
+            full: "space toggle   Esc close",
+        }
+        .sweep(|f| picker.render(f, f.area(), &theme, |_| false, None));
+
+        let themes = crate::theme_picker::ThemePicker::new(None, None);
+        Footer {
+            dialog: "the theme picker",
+            hints: &["↵ keep"],
+            gap: "  ",
+            esc: "Esc put back",
+            full: "↵ keep  Esc put back",
+        }
+        .sweep(|f| themes.render(f, f.area(), &theme));
+
+        let prompt = crate::prompt::Prompt::new(
+            "ADD A CLOCK",
+            "Tab completes · Esc cancels",
+            "",
+            crate::prompt::Completion::None,
+        );
+        Footer {
+            dialog: "a prompt",
+            hints: &["Tab completes"],
+            gap: " · ",
+            esc: "Esc cancels",
+            full: "Tab completes · Esc cancels",
+        }
+        .sweep(|f| prompt.render(f, f.area(), &theme));
+
+        let mut keys = crate::keymap_dialog::KeymapDialog::new();
+        let keymap = crate::keymap::Keymap::default();
+        Footer {
+            dialog: "the key map",
+            hints: &["↓ more", "↑↓ more", "↑ more", "r reload", "d defaults"],
+            gap: "  ",
+            esc: "Esc close",
+            full: "r reload  d defaults  Esc close",
+        }
+        .sweep(|f| keys.render(f, f.area(), &keymap, &[], None, &theme));
+    }
+
+    /// The panel picker's status row is prose — its usual line, or what was
+    /// just refused, or why the config could not be written — and is whole
+    /// or cut with an `…`. The terminal cut the usual line to `written to
+    /// your config on cl` on a screen under 37 columns, and an error longer
+    /// than the dialog's 36 inside columns at every size.
+    #[test]
+    fn the_panel_pickers_status_row_is_whole_or_says_it_was_cut() {
+        let theme = Theme::default();
+        let picker = crate::picker::Picker::new(vec!["clocks".into(), "cpu".into()]);
+        for error in [
+            None,
+            Some("config not saved: /home/someone/.config/mirador/config.toml: permission denied"),
+        ] {
+            let status = error.unwrap_or("written to your config on close");
+            let mut cut = false;
+            for width in 1..=100u16 {
+                let rows = dialog_rows(width, |f| {
+                    picker.render(f, f.area(), &theme, |_| false, error);
+                });
+                let Some(row) = rows.len().checked_sub(2).map(|row| &rows[row]) else {
+                    continue;
+                };
+                if let Some(head) = row.strip_suffix('…') {
+                    assert!(status.starts_with(head), "{width}: {row:?}");
+                    cut = true;
+                } else {
+                    assert!(row.is_empty() || row == status, "{width}: {row:?}");
+                }
+            }
+            assert!(cut, "a sweep that never cut the status tests nothing");
+        }
     }
 }

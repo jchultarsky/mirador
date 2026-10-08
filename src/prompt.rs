@@ -18,10 +18,11 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph};
+use ratatui::widgets::{Clear, Paragraph};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
+use crate::picker::{Step, window};
 use crate::textfield::TextField;
 use crate::theme::Theme;
 
@@ -166,48 +167,42 @@ impl Prompt {
         // complaint goes.
         self.error = None;
 
-        let listed = self.matches();
+        let len = self.listed.len();
+        let step = match key.code {
+            KeyCode::Esc => return Outcome::Cancelled,
+            KeyCode::Down => Step::Down(1),
+            KeyCode::Up => Step::Up(1),
+            KeyCode::PageDown => Step::Down(LIST_ROWS),
+            KeyCode::PageUp => Step::Up(LIST_ROWS),
+            KeyCode::Home if len > 0 => Step::First,
+            KeyCode::End if len > 0 => Step::Last,
+            KeyCode::Enter => {
+                return match self.listed.get(self.selected) {
+                    Some(place) => Outcome::Chose {
+                        label: place.city,
+                        value: place.tz,
+                    },
+                    // Nothing matched, so the reader knows something the list
+                    // does not. Hand back what they typed rather than
+                    // refusing it.
+                    None => Outcome::Submitted(self.field.trimmed().to_string()),
+                };
+            }
+            _ => return self.edit(key),
+        };
+        // The window moves only when the selection would otherwise leave it,
+        // so the list stays put while the cursor travels across it and
+        // scrolls by one at the edges. Recomputing it from the selection each
+        // time would be stateless and simpler, and would also jump the whole
+        // list whenever you crossed a page boundary going back up.
+        self.selected = step.apply(self.selected, len);
+        self.offset = window(self.selected, self.offset, LIST_ROWS, len);
+        Outcome::Editing
+    }
+
+    /// A key for the text rather than the list.
+    fn edit(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
-            KeyCode::Esc => Outcome::Cancelled,
-            KeyCode::Down => {
-                self.selected = (self.selected + 1).min(listed.len().saturating_sub(1));
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::Up => {
-                self.selected = self.selected.saturating_sub(1);
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::PageDown => {
-                self.selected = (self.selected + LIST_ROWS).min(listed.len().saturating_sub(1));
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::PageUp => {
-                self.selected = self.selected.saturating_sub(LIST_ROWS);
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::Home if !listed.is_empty() => {
-                self.selected = 0;
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::End if !listed.is_empty() => {
-                self.selected = listed.len() - 1;
-                self.scroll_into_view();
-                Outcome::Editing
-            }
-            KeyCode::Enter => match listed.get(self.selected) {
-                Some(place) => Outcome::Chose {
-                    label: place.city,
-                    value: place.tz,
-                },
-                // Nothing matched, so the reader knows something the list does
-                // not. Hand back what they typed rather than refusing it.
-                None => Outcome::Submitted(self.field.trimmed().to_string()),
-            },
             KeyCode::Tab => {
                 self.complete();
                 self.refilter();
@@ -218,7 +213,7 @@ impl Prompt {
             // scrolled to row thirty, pressed Left to fix a typo, and the
             // highlight jumped back to the top of the list.
             //
-            // Home and End are absent because the arms above claim them
+            // Home and End are absent because `handle_key` claims them
             // whenever there is a list to move through; they reach the field
             // only when there is not, and then there is no selection to lose.
             KeyCode::Left | KeyCode::Right => {
@@ -235,21 +230,6 @@ impl Prompt {
                 self.offset = 0;
                 Outcome::Editing
             }
-        }
-    }
-
-    /// Keep the selected row inside the window that is drawn.
-    ///
-    /// Only moves the window when the selection would otherwise leave it, so
-    /// the list stays put while the cursor travels across it and scrolls by one
-    /// at the edges. Recomputing the window from the selection each time would
-    /// be stateless and simpler, and would also jump the whole list whenever
-    /// you crossed a page boundary going back up.
-    fn scroll_into_view(&mut self) {
-        if self.selected < self.offset {
-            self.offset = self.selected;
-        } else if self.selected >= self.offset + LIST_ROWS {
-            self.offset = self.selected + 1 - LIST_ROWS;
         }
     }
 
@@ -340,8 +320,11 @@ impl Prompt {
         let height = 3 + rows + crate::frame::FRAME_HEIGHT;
         let popup = crate::frame::centred(screen, width, height);
 
-        // Room for the text, inside the border and its padding.
-        let inner = usize::from(width).saturating_sub(usize::from(crate::frame::FRAME_WIDTH));
+        // Room for the text, inside the border and its padding — of the popup
+        // as drawn. `centred` clamps it to the screen, and measured from the
+        // twenty columns asked for, a screen narrower than that cut the help
+        // row's way out to `Esc can` with no mark.
+        let inner = usize::from(popup.width).saturating_sub(usize::from(crate::frame::FRAME_WIDTH));
         let (visible, cursor) = self.field.visible(inner);
 
         let mut lines = vec![Line::from(Span::styled(
@@ -403,19 +386,7 @@ impl Prompt {
 
         frame.render_widget(Clear, popup);
         frame.render_widget(
-            Paragraph::new(lines).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme.border_focused))
-                    .padding(Padding::horizontal(1))
-                    .title_top(Line::from(Span::styled(
-                        self.label,
-                        Style::default()
-                            .fg(theme.title)
-                            .add_modifier(Modifier::BOLD),
-                    ))),
-            ),
+            Paragraph::new(lines).block(crate::frame::dialog_block(theme, self.label, popup.width)),
             popup,
         );
 
@@ -441,33 +412,23 @@ impl Prompt {
 /// Key hints ending in the way out, as `grid::assemble` parts that fit
 /// `width`: whole parts drop, and the last part is the last to go.
 ///
-/// The parts before the way out drop first, from the right, so a narrow
-/// dialog still says how to leave it. Each part after the first carries
-/// `separator` at its front, so a dropped part takes its separator with it.
-/// The way out alone and still too wide is left to `assemble`, which
-/// ellipsises it. A prompt's help, the task form's key row and the note
-/// form's footer all fit this way.
+/// The plain-text form of [`crate::grid::way_out_last`], every part and its
+/// `separator` in one `style`. A prompt's help and the task and note forms'
+/// key rows fit this way.
 pub(crate) fn way_out_last(
-    mut parts: Vec<String>,
+    parts: Vec<String>,
     separator: &str,
     width: usize,
     style: Style,
 ) -> Vec<Vec<Span<'static>>> {
-    while parts.len() > 1 && crate::grid::display_width(&parts.join(separator)) > width {
-        parts.remove(parts.len() - 2);
-    }
-    parts
-        .into_iter()
-        .enumerate()
-        .map(|(index, part)| {
-            let text = if index == 0 {
-                part
-            } else {
-                format!("{separator}{part}")
-            };
-            vec![Span::styled(text, style)]
-        })
-        .collect()
+    crate::grid::way_out_last(
+        parts
+            .into_iter()
+            .map(|part| vec![Span::styled(part, style)])
+            .collect(),
+        &Span::styled(separator.to_string(), style),
+        width,
+    )
 }
 
 /// Replace a leading `~` with the user's home directory.
