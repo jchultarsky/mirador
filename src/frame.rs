@@ -124,7 +124,7 @@ pub fn key_row(bindings: &[Binding], gap: &str, theme: &Theme, width: u16) -> Li
         })
         .collect();
     crate::grid::assemble(
-        crate::grid::way_out_last(hints, &Span::styled(gap.to_string(), muted), width.into()),
+        crate::grid::way_out_last(hints, &Span::styled(gap.to_string(), muted), width),
         width,
     )
 }

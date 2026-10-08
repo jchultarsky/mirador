@@ -309,15 +309,12 @@ impl Prompt {
     /// and values, not prose (invariant 19), so they drop whole; and the last
     /// part is the way out, so it is the last to go: the parts before it drop
     /// first, from the right. Alone and still too wide, it is ellipsised.
-    fn help_line(&self, count: Option<String>, width: usize, style: Style) -> Line<'static> {
+    fn help_line(&self, count: Option<String>, width: u16, style: Style) -> Line<'static> {
         let parts = count
             .into_iter()
             .chain(self.help.split(" · ").map(str::to_string))
             .collect();
-        crate::grid::assemble(
-            way_out_last(parts, " · ", width, style),
-            u16::try_from(width).unwrap_or(u16::MAX),
-        )
+        crate::grid::assemble(way_out_last(parts, " · ", width, style), width)
     }
 
     /// Draw the prompt over the middle of `screen`.
@@ -444,7 +441,7 @@ impl Prompt {
             )),
             None => self.help_line(
                 (listed.len() > rows).then(|| format!("{rows} of {}", listed.len())),
-                inner,
+                row_width,
                 Style::default().fg(theme.muted),
             ),
         });
@@ -487,7 +484,7 @@ impl Prompt {
 pub(crate) fn way_out_last(
     parts: Vec<String>,
     separator: &str,
-    width: usize,
+    width: u16,
     style: Style,
 ) -> Vec<Vec<Span<'static>>> {
     crate::grid::way_out_last(

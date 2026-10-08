@@ -69,7 +69,7 @@ use ratatui::widgets::Paragraph;
 use crate::calc::{self, CalcError};
 use crate::config::CalculatorConfig;
 use crate::frame::{Binding, FRAME_WIDTH};
-use crate::grid::{Column, Grid, display_width};
+use crate::grid::{Column, Grid, cell_width};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
 /// This panel's bindings, written once, with the tape actions optional.
@@ -527,7 +527,7 @@ impl Panel for CalculatorPanel {
 
         // The marker's width comes off the grid and goes back as an indent, so
         // the header lines up with the rows under it.
-        let marker = u16::try_from(display_width(MARKER)).unwrap_or(2);
+        let marker = cell_width(MARKER);
         let grid = Grid::new(COLUMNS, area.width.saturating_sub(marker));
         let indent = " ".repeat(usize::from(marker));
 
@@ -731,6 +731,7 @@ fn entry_tail(typing: &str, grid: &Grid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::display_width;
 
     fn new_panel() -> CalculatorPanel {
         CalculatorPanel::new(CalculatorConfig::default())

@@ -1102,7 +1102,7 @@ impl TodoPanel {
                 crate::prompt::way_out_last(
                     keys,
                     " · ",
-                    usize::from(rows[7].width),
+                    rows[7].width,
                     Style::default().fg(theme.muted),
                 ),
                 rows[7].width,

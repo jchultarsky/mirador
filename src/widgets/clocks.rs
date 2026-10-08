@@ -16,7 +16,7 @@ use ratatui::widgets::Paragraph;
 use crate::config::ClocksConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
-use crate::grid::{Column, Grid};
+use crate::grid::{Column, Grid, cell_width};
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
@@ -655,8 +655,7 @@ fn choose_face(
 ) -> (String, Option<String>, Option<u16>) {
     let fits =
         |text: &str, columns: u16| glyphs::fitting_scale(text, columns, rows, MAX_CLOCK_SCALE);
-    let cells = |text: &str| u16::try_from(crate::grid::display_width(text)).unwrap_or(u16::MAX);
-    let meridiem_cells = meridiem.map_or(0, |m| cells(m).saturating_add(1));
+    let meridiem_cells = meridiem.map_or(0, |m| cell_width(m).saturating_add(1));
     if !show_seconds {
         return (
             short.to_string(),
@@ -667,7 +666,7 @@ fn choose_face(
     if let Some(scale) = fits(full, width.saturating_sub(meridiem_cells)) {
         return (full.to_string(), None, Some(scale));
     }
-    let suffix_cells = cells(seconds).max(meridiem.map_or(0, cells)) + 1;
+    let suffix_cells = cell_width(seconds).max(meridiem.map_or(0, cell_width)) + 1;
     if let Some(scale) = fits(short, width.saturating_sub(suffix_cells)) {
         return (short.to_string(), Some(seconds.to_string()), Some(scale));
     }
@@ -959,11 +958,9 @@ impl Panel for ClocksPanel {
             let suffix = small_seconds
                 .iter()
                 .chain(&meridiem)
-                .map(|text| crate::grid::display_width(text))
+                .map(|text| cell_width(text))
                 .max()
-                .map_or(0, |cells| {
-                    u16::try_from(cells).unwrap_or(u16::MAX).saturating_add(1)
-                });
+                .map_or(0, |cells| cells.saturating_add(1));
             let total = big.width + suffix;
             let x = area.x + (area.width.saturating_sub(total)) / 2;
 
@@ -1058,6 +1055,11 @@ impl Panel for ClocksPanel {
         if cursor < bottom && !self.config.date_format.is_empty() {
             let date = glyphs::utility(&local.strftime(&self.config.date_format).to_string());
             let date = crate::grid::truncate(&date, usize::from(area.width));
+            // Not `cell_width`, which saturates: `truncate` counts a control
+            // character as no cells and `display_width` as one, so a format
+            // padded with enough of them measures past a `u16` even here, and
+            // a width saturated to the maximum would draw it flush left. One
+            // that does not fit a `u16` is drawn nowhere, as it always was.
             let width = u16::try_from(crate::grid::display_width(&date)).unwrap_or(0);
             let x = area.x + (area.width.saturating_sub(width)) / 2;
             frame.render_widget(
@@ -1585,8 +1587,7 @@ mod tests {
                             };
                             let symbol = cell.symbol();
                             row.push_str(symbol);
-                            x += u16::try_from(crate::grid::display_width(symbol).max(1))
-                                .unwrap_or(1);
+                            x += cell_width(symbol).max(1);
                         }
                         row
                     })
@@ -1628,6 +1629,59 @@ mod tests {
                 "no width in the sweep actually cut `{full}`, so this proves nothing"
             );
         }
+    }
+
+    /// A date that measures wider than a `u16` is not drawn, as it was not
+    /// before `cell_width` took over the measuring. It can still get there
+    /// after `truncate`, because the two measure differently: `truncate`
+    /// counts a control character as no cells and `display_width` as one, so
+    /// a `date_format` padded with seventy thousand of them comes back whole.
+    /// Saturating that to `u16::MAX` drew the date flush left in a panel that
+    /// centres it; the width it was measured at is not one to place it by.
+    #[test]
+    fn a_date_measured_wider_than_a_u16_is_not_drawn() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let config = crate::config::Config::default();
+        let gradients = config.theme.gradients();
+        let format = format!("MIDWEEK{}", "\u{1}".repeat(70_000));
+        assert!(
+            crate::grid::display_width(&crate::grid::truncate(&format, 40)) > 65_535,
+            "the format no longer survives `truncate` too wide for a u16, so this proves nothing"
+        );
+
+        let (mut panel, _guard) = panel_from_named(
+            "date-u16",
+            ClocksConfig {
+                date_format: format,
+                ..ClocksConfig::default()
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                panel.render(
+                    frame,
+                    frame.area(),
+                    RenderContext {
+                        theme: &config.theme,
+                        gradients: &gradients,
+                        focused: true,
+                        watch: &crate::watch::WatchLog::default(),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .filter_map(|x| buffer.cell((x, y)).map(ratatui::buffer::Cell::symbol))
+                    .collect()
+            })
+            .collect();
+        assert!(rows.iter().all(|row| !row.contains("MIDWEEK")), "{rows:#?}");
     }
 
     /// The small seconds beside the numerals are a value: `26`, not `2`. At

@@ -23,6 +23,7 @@ use crate::chart::meter_line;
 use crate::config::PomodoroConfig;
 use crate::frame::{Binding, FRAME_HEIGHT, FRAME_WIDTH};
 use crate::glyphs::{self, BigText};
+use crate::grid::cell_width;
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 
@@ -601,7 +602,7 @@ impl Panel for PomodoroPanel {
                 &glyphs::utility(self.phase.label()),
                 usize::from(area.width),
             );
-            let x = area.x + area.width.saturating_sub(display_width(&label)) / 2;
+            let x = area.x + area.width.saturating_sub(cell_width(&label)) / 2;
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     label.clone(),
@@ -609,7 +610,7 @@ impl Panel for PomodoroPanel {
                         .fg(phase_colour)
                         .add_modifier(Modifier::BOLD),
                 )),
-                Rect::new(x, cursor, display_width(&label).min(area.width), 1),
+                Rect::new(x, cursor, cell_width(&label).min(area.width), 1),
             );
             cursor += 1;
         }
@@ -764,7 +765,7 @@ fn draw_clock(
         // `05:0` would be a time nobody set; `05:…` says it was cut.
         let time = crate::grid::truncate(time, usize::from(area.width));
         let time = time.as_str();
-        let width = display_width(time);
+        let width = cell_width(time);
         let x = area.x + area.width.saturating_sub(width) / 2;
         frame.render_widget(
             Paragraph::new(Span::styled(time.to_owned(), Style::default().fg(colour))),
@@ -786,12 +787,6 @@ fn draw_clock(
         );
     }
     big.height
-}
-
-/// Width in display cells, as a `u16` because every caller here is doing
-/// arithmetic on `Rect` fields. The measurement itself is `grid::display_width`.
-fn display_width(text: &str) -> u16 {
-    u16::try_from(crate::grid::display_width(text)).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]

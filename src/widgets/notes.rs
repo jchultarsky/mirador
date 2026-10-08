@@ -1189,7 +1189,7 @@ impl NotesPanel {
                     .map(str::to_string)
                     .to_vec(),
                 "   ",
-                usize::from(width),
+                width,
                 muted,
             ),
         };
