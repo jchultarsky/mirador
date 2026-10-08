@@ -40,6 +40,20 @@ impl Gradient {
     /// With no `end` the ramp is flat. With `start` and `end` it is one linear
     /// segment. With all three, 0..=50 runs start to mid and 50..=100 runs mid
     /// to end, matching btop's two-segment model.
+    ///
+    /// Only a ramp with a true-colour stop is interpolated. A named or indexed
+    /// colour is whatever the terminal says it is, so there is nothing to
+    /// blend, and a ramp with one among its stops *steps* between them
+    /// instead: halves for two stops, thirds for three. That keeps a theme
+    /// written in the sixteen ANSI colours inside them, which is the only
+    /// reason such a theme exists. The one exception is `black` and `white`
+    /// beside a hex stop, which blend as `#000000` and `#ffffff` because they
+    /// always have; a ramp of names alone steps, those two included.
+    ///
+    /// The steps are placed for the graphs, which colour each row by the top of
+    /// its band, rounded: a two-row graph's rows top out at 50 and 100, a
+    /// three-row graph's at 33, 67 and 100. So a step starts just above each
+    /// boundary, and a short graph still shows every colour the ramp has.
     pub fn new(start: Color, mid: Option<Color>, end: Option<Color>) -> Self {
         let mut colors = Box::new([start; STEPS]);
 
@@ -47,9 +61,12 @@ impl Gradient {
             return Self { colors };
         };
 
-        let (a, b) = (rgb(start), rgb(end));
-        match mid.map(rgb) {
-            Some(m) => {
+        let true_colour = [Some(start), mid, Some(end)]
+            .into_iter()
+            .any(|stop| matches!(stop, Some(Color::Rgb(..))));
+        let rgb = |stop| if true_colour { rgb(stop) } else { None };
+        match (rgb(start), mid.map(rgb), rgb(end)) {
+            (Some(a), Some(Some(m)), Some(b)) => {
                 for (i, slot) in colors.iter_mut().enumerate().take(51) {
                     *slot = lerp(a, m, i, 50);
                 }
@@ -57,11 +74,18 @@ impl Gradient {
                     colors[i] = lerp(m, b, i - 50, 50);
                 }
             }
-            None => {
+            (Some(a), None, Some(b)) => {
                 for (i, slot) in colors.iter_mut().enumerate() {
                     *slot = lerp(a, b, i, STEPS - 1);
                 }
             }
+            _ => match mid {
+                Some(mid) => {
+                    colors[34..=67].fill(mid);
+                    colors[68..].fill(end);
+                }
+                None => colors[51..].fill(end),
+            },
         }
 
         Self { colors }
@@ -94,18 +118,24 @@ impl Gradient {
     }
 }
 
-/// Resolve a `Color` to RGB so it can be interpolated.
+/// The RGB value of a stop in a ramp that has a true-colour stop, or `None`
+/// when it has none to rely on.
 ///
-/// Named and indexed colours have no true RGB value we can rely on — the
-/// terminal decides what they look like — so they collapse to mid grey. In
-/// practice gradients are configured with hex values; this only keeps the
-/// arithmetic total.
-fn rgb(color: Color) -> (u8, u8, u8) {
+/// Black and white are given `#000000` and `#ffffff` so that a ramp from
+/// `black` to a hex colour still blends, as it always has — not because the
+/// terminal agrees: both are palette entries, and a Solarized terminal's black
+/// is `#073642`. So `Gradient::new` asks only when a stop is already true
+/// colour, and a ramp written wholly in names steps, those two included.
+/// Other named and indexed colours used to collapse to mid grey here so the
+/// arithmetic stayed total, and every ramp in the bundled `ansi` and
+/// `high-contrast` themes baked to that one grey, sent as a 24-bit escape by
+/// the theme that exists to avoid them.
+fn rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
-        Color::Rgb(r, g, b) => (r, g, b),
-        Color::Black => (0, 0, 0),
-        Color::White => (255, 255, 255),
-        _ => (128, 128, 128),
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Black => Some((0, 0, 0)),
+        Color::White => Some((255, 255, 255)),
+        _ => None,
     }
 }
 
@@ -252,12 +282,16 @@ impl<'a> BrailleGraph<'a> {
                     continue;
                 };
 
+                // The ratio in `u128`, as `Gradient::scaled` and `meter_spans`
+                // take it. Each side used to be clamped to `u32::MAX` on its
+                // own, so a scale above that — a disk past two gigabytes a
+                // second — drew every sample too high. Hundredths of a per
+                // cent, so the result is below 10,001 and converts exactly.
                 let pct = |index: Option<usize>| -> Option<f64> {
                     let raw = *visible.get(index?)?;
-                    Some(
-                        f64::from(u32::try_from(raw.min(self.max)).unwrap_or(u32::MAX)) * 100.0
-                            / f64::from(u32::try_from(self.max).unwrap_or(u32::MAX)),
-                    )
+                    let basis_points =
+                        u128::from(raw.min(self.max)) * 10_000 / u128::from(self.max);
+                    Some(f64::from(u32::try_from(basis_points).unwrap_or(10_000)) / 100.0)
                 };
 
                 let (Some(left), Some(right)) = (pct(end.checked_sub(2)), pct(end.checked_sub(1)))
@@ -404,7 +438,7 @@ mod tests {
         let g = Gradient::new(c(0, 0, 0), Some(c(120, 60, 30)), Some(c(255, 255, 255)));
         let mut previous = (0u8, 0u8, 0u8);
         for level in 0..=100 {
-            let now = rgb(g.at(level));
+            let now = rgb(g.at(level)).expect("hex stops bake to true colour");
             assert!(now.0 >= previous.0, "red went backwards at {level}");
             previous = now;
         }
@@ -590,5 +624,152 @@ mod tests {
         let spans = meter_spans(5, 10, 0, &g, Style::default());
         assert!(spans.is_empty(), "{spans:?}");
         assert_eq!(meter_spans(5, 0, 4, &g, Style::default()).len(), 4);
+    }
+
+    /// A scale above `u32::MAX` — a disk reading five gigabytes a second, whose
+    /// combined graph is scaled to twice that — must draw each sample at its
+    /// own height. Thirty per cent of a four-row graph is the bottom row and a
+    /// little of the next; clamping the scale to `u32::MAX` while leaving the
+    /// sample alone drew it at seventy.
+    #[test]
+    fn a_scale_beyond_u32_draws_samples_at_their_true_height() {
+        let gradient = Gradient::flat(c(1, 1, 1));
+        let area = Rect::new(0, 0, 10, 4);
+        let mut buf = Buffer::empty(area);
+        BrailleGraph::new(&[3_000_000_000; 40], 10_000_000_000, &gradient).render(area, &mut buf);
+
+        let row = |y: u16| -> String { (0..10).map(|x| buf[(x, y)].symbol()).collect() };
+        for y in [0, 1] {
+            assert!(
+                row(y).chars().all(|c| c == ' '),
+                "30% reached row {y} of 4: `{}`",
+                row(y)
+            );
+        }
+        assert!(
+            row(2).chars().any(|c| c != ' '),
+            "30% must rise past the bottom quarter, got `{}`",
+            row(2)
+        );
+    }
+
+    /// Named stops have no RGB value mirador can rely on — the terminal
+    /// decides — so interpolating them meant collapsing them to a grey first.
+    /// A ramp of names steps between the names instead.
+    #[test]
+    fn named_colour_stops_keep_their_colours_rather_than_baking_to_grey() {
+        let three = Gradient::new(Color::Green, Some(Color::Yellow), Some(Color::Red));
+        assert_eq!(three.at(0), Color::Green);
+        assert_eq!(three.at(33), Color::Green);
+        assert_eq!(three.at(34), Color::Yellow);
+        assert_eq!(three.at(67), Color::Yellow);
+        assert_eq!(three.at(68), Color::Red);
+        assert_eq!(three.at(100), Color::Red);
+
+        let two = Gradient::new(Color::Indexed(28), None, Some(Color::LightRed));
+        assert_eq!(two.at(0), Color::Indexed(28));
+        assert_eq!(two.at(50), Color::Indexed(28));
+        assert_eq!(two.at(51), Color::LightRed);
+        assert_eq!(two.at(100), Color::LightRed);
+    }
+
+    /// `black` and `white` are palette entries like any other name — a
+    /// Solarized terminal's black is `#073642` — so a ramp written wholly in
+    /// names stays in names even when those are the two it uses. Beside a hex
+    /// stop they still blend as `#000000` and `#ffffff`, as they always did.
+    #[test]
+    fn black_and_white_blend_only_beside_a_true_colour() {
+        for (ramp, gradient) in [
+            ("two", Gradient::new(Color::Black, None, Some(Color::White))),
+            (
+                "three",
+                Gradient::new(Color::White, Some(Color::Black), Some(Color::White)),
+            ),
+        ] {
+            for level in 0..=100 {
+                assert!(
+                    !matches!(gradient.at(level), Color::Rgb(..)),
+                    "the {ramp} ramp at {level} is {:?}, a true-colour escape",
+                    gradient.at(level)
+                );
+            }
+        }
+        let two = Gradient::new(Color::Black, None, Some(Color::White));
+        assert_eq!(two.at(50), Color::Black);
+        assert_eq!(two.at(51), Color::White);
+
+        let mixed = Gradient::new(Color::Black, None, Some(Color::Rgb(200, 0, 0)));
+        assert_eq!(mixed.at(50), Color::Rgb(100, 0, 0));
+        let mixed = Gradient::new(
+            Color::Rgb(0, 0, 200),
+            Some(Color::White),
+            Some(Color::Black),
+        );
+        assert_eq!(mixed.at(25), Color::Rgb(127, 127, 227));
+        assert_eq!(mixed.at(100), Color::Rgb(0, 0, 0));
+    }
+
+    /// A graph colours each row by the top of its band, rounded, so a stepped
+    /// ramp whose steps sat on those tops showed a three-row graph only two of
+    /// its three colours, and a two-row graph only one.
+    #[test]
+    fn a_short_graph_shows_every_colour_a_stepped_ramp_has() {
+        let three = Gradient::new(Color::Green, Some(Color::Yellow), Some(Color::Red));
+        let two = Gradient::new(Color::Green, None, Some(Color::Red));
+        for (gradient, rows, want) in [
+            (&three, 3u16, vec![Color::Red, Color::Yellow, Color::Green]),
+            (&two, 2, vec![Color::Red, Color::Green]),
+        ] {
+            let data = [100u64; 20];
+            let area = Rect::new(0, 0, 10, rows);
+            let mut buf = Buffer::empty(area);
+            BrailleGraph::new(&data, 100, gradient).render(area, &mut buf);
+            let colours: Vec<Color> = (0..rows).map(|y| buf[(9, y)].fg).collect();
+            assert_eq!(colours, want, "{rows} rows");
+        }
+    }
+
+    /// `ansi` exists to work on a terminal with no true colour, and
+    /// `high-contrast` inherits it for the same reason. A single baked level
+    /// that came out as `Color::Rgb` is a 24-bit escape that theme promised
+    /// never to send — and every level did, in one grey, through 1.19.2.
+    #[test]
+    fn the_ansi_themes_draw_their_graphs_in_the_terminals_own_colours() {
+        let ansi = crate::themes::resolve("ansi", None).unwrap().gradients();
+        assert_eq!(ansi.cpu.at(0), Color::Green);
+        assert_eq!(ansi.cpu.at(100), Color::Red);
+
+        for name in ["ansi", "high-contrast"] {
+            let g = crate::themes::resolve(name, None).unwrap().gradients();
+            for (ramp, gradient) in [
+                ("cpu", &g.cpu),
+                ("rx", &g.rx),
+                ("tx", &g.tx),
+                ("gain", &g.gain),
+                ("loss", &g.loss),
+            ] {
+                for level in 0..=100 {
+                    assert!(
+                        !matches!(gradient.at(level), Color::Rgb(..)),
+                        "`{name}` {ramp} at {level} is {:?}, a true-colour escape",
+                        gradient.at(level)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The cpu ramp is how a busy machine looks different from an idle one,
+    /// and every bundled theme names a different colour for each end of it.
+    #[test]
+    fn every_bundled_theme_has_a_cpu_ramp_that_changes_colour() {
+        for name in crate::themes::bundled_names() {
+            let g = crate::themes::resolve(name, None).unwrap().gradients();
+            assert_ne!(
+                g.cpu.at(0),
+                g.cpu.at(100),
+                "`{name}` draws an idle and a saturated cpu in one colour"
+            );
+        }
     }
 }

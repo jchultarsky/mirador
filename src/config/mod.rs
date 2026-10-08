@@ -615,7 +615,13 @@ impl Config {
         if let Some(file) = &state.agenda_file {
             self.agenda.file = Some(std::path::PathBuf::from(file));
         }
-        if let Some(location) = &state.weather_location {
+        // Not over coordinates: they win, and the name only labels them, so a
+        // place remembered before they were written would retitle the panel
+        // over their weather. The panel then reports the config's name, and
+        // the stale entry is retracted at the next save (invariant 17).
+        if let Some(location) = &state.weather_location
+            && (self.weather.latitude.is_none() || self.weather.longitude.is_none())
+        {
             self.weather.location.clone_from(location);
         }
         // Durations are clamped rather than dropped: the panel already bounds

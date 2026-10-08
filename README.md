@@ -489,7 +489,9 @@ Current conditions and an hourly forecast from [Open-Meteo](https://open-meteo.c
 which needs no key and no account. `u` switches between imperial and metric at
 runtime, converting what is already on screen rather than re-fetching. `L` sets
 the location without touching your config; the panel re-geocodes and refetches
-on the spot. `r` refetches by hand, ahead of the regular refresh.
+on the spot. If `[weather]` sets `latitude` and `longitude`, those decide the
+place, and `L` asks you to remove them first. `r` refetches by hand, ahead of
+the regular refresh.
 
 A failed refresh keeps the last reading and shows its age in amber rather than
 blanking the panel — weather two hours old is still useful, and an empty panel

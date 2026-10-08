@@ -183,6 +183,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   taken from spare room where there is any, instead of covering the last
   clock, and `the big clock stays` now appears when there is no table
   under the clock to show it with.
+- **The `ansi` and `high-contrast` themes colour their graphs again.** A
+  gradient written with colour names was blended through a stand-in grey,
+  so every graph, meter and gain or loss figure in both themes came out one
+  true-colour grey whatever the load — sent as a 24-bit escape by the theme
+  that exists to avoid them. A ramp of named or numbered colours now steps
+  between the colours it names, so `ansi` runs green, yellow, red in your
+  terminal's own palette, and hex ramps blend as before.
+- **A fast disk's I/O graph is drawn at the right height.** Above about two
+  gigabytes a second the graph's scale was capped while the readings were
+  not, so a 3 GB/s read on a disk peaking at 5 GB/s filled seventy per cent
+  of the graph instead of thirty, and anything past 4.3 GB/s drew as a full
+  column.
+  The disk panel's combined graph reached this on an ordinary large copy
+  from a modern SSD.
+- **`L` no longer renames a weather panel that `[weather]` pins with
+  coordinates.** `latitude` and `longitude` win over the place name, so a
+  name typed at `L` only retitled the panel over the old place's weather,
+  and was remembered that way across restarts. With coordinates configured
+  `L` now says to remove them to choose a place by name, and a place
+  remembered before they were added no longer relabels them. A name you gave
+  coordinates with `L` in an earlier version is dropped the same way; put it
+  in `[weather].location` to keep it.
+- **"City, Country" finds the city in that country.** The text after the
+  comma was matched against the region and the two-letter country code
+  only, so `London, Canada` — the form the `L` prompt suggests — showed
+  London, England. The country's name now counts too.
+- **A failing weather refresh says why.** Once a reading was on screen a
+  failure showed only "refresh failing", so a misspelt place left the old
+  place's weather up and never said the new one was not found. The reason
+  now follows the reading's age, cut with `…` where the panel is narrow.
+- **The weather panel bounds what the weather service sends it.** A place
+  name, region or observation time is drawn on every frame, and a broken or
+  hostile response could make any of them megabytes long; a failure's
+  reason could too, because the JSON parser quotes the value it rejects.
+  Names and reasons are now cut at parse with `…`, far above anything real,
+  and an observation time that is not a time is dropped.
 
 ## [1.19.2] - 2026-10-07
 
