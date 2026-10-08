@@ -206,6 +206,9 @@ struct State {
     /// The day the window was built around, so a dashboard left open overnight
     /// notices that "today" moved.
     built_for: Option<Date>,
+    /// Where the window ended: events from here on were not read at all, so
+    /// the next read finding one there has not found anything new.
+    built_until: Option<jiff::Timestamp>,
 }
 
 #[derive(Debug)]
@@ -243,6 +246,14 @@ pub struct AgendaPanel {
     /// have changed *from*, and a log opening with forty entries is a log
     /// nobody reads twice.
     known: Option<std::collections::HashSet<String>>,
+    /// Where the window of the read behind `known` ended.
+    ///
+    /// The reader builds its window from today on every pass, so each
+    /// midnight brings a day into it that the last read never looked at. An
+    /// event from here on is new to the window, not to the calendar, and
+    /// announcing it logged the next instance of every repeating meeting as
+    /// having appeared, every night.
+    known_until: Option<jiff::Timestamp>,
     /// Events waiting to be drained by the watch log.
     pending: Vec<crate::watch::Event>,
     /// What the reader thread had published at the last tick.
@@ -316,6 +327,7 @@ impl AgendaPanel {
             status: None,
             asking: None,
             known: None,
+            known_until: None,
             pending: Vec::new(),
             shown: State::default(),
         }
@@ -376,8 +388,13 @@ impl AgendaPanel {
             .map(|event| format!("{}@{}", event.summary, event.start.timestamp()))
             .collect();
 
+        let horizon = self.known_until.take();
         if let Some(known) = self.known.take() {
             for event in &state.events {
+                // Past the last window: out of sight then, not absent.
+                if horizon.is_some_and(|until| event.start.timestamp() >= until) {
+                    continue;
+                }
                 let key = format!("{}@{}", event.summary, event.start.timestamp());
                 if !known.contains(&key) {
                     self.pending.push(crate::watch::Event::new(
@@ -392,6 +409,7 @@ impl AgendaPanel {
             }
         }
         self.known = Some(current);
+        self.known_until = state.built_until;
     }
 
     /// Point the panel at a different calendar and read it now.
@@ -413,6 +431,7 @@ impl AgendaPanel {
                 skipped: guard.skipped,
                 read_at: guard.read_at,
                 built_for: guard.built_for,
+                built_until: guard.built_until,
             },
             Err(poisoned) => {
                 let guard = poisoned.into_inner();
@@ -422,6 +441,7 @@ impl AgendaPanel {
                     skipped: guard.skipped,
                     read_at: guard.read_at,
                     built_for: guard.built_for,
+                    built_until: guard.built_until,
                 }
             }
         }
@@ -565,6 +585,7 @@ fn read_loop(
                         skipped: calendar.skipped.len(),
                         read_at: Some(Instant::now()),
                         built_for: Some(today),
+                        built_until: Some(until.timestamp()),
                     }
                 }
                 // A missing file is the unconfigured case, not a failure.
@@ -819,15 +840,45 @@ impl Panel for AgendaPanel {
                 Style::default().fg(theme.error),
             )));
         }
+        // Wrapped, for the reason the empty state's path is: `o` puts up the
+        // calendar's path, which is the whole message, and as one `Line` the
+        // terminal cut it at the edge — the default macOS path lost its
+        // filename at every width this panel takes.
         if let Some(message) = &self.status {
-            notices.push(Line::from(TextSpan::styled(
-                message.clone(),
+            notices.extend(wrapped_lines(
+                message,
+                area.width,
                 Style::default().fg(theme.muted),
-            )));
+            ));
         }
 
         let (list_area, notice_area) =
-            split_for_notices(area, u16::try_from(notices.len()).unwrap_or(0));
+            split_for_notices(area, u16::try_from(notices.len()).unwrap_or(u16::MAX));
+        // The list keeps a row, so a short panel can have fewer rows for the
+        // notices than they wrapped to. The last one it has says so, rather
+        // than the rows past it going in silence (invariant 19).
+        let fits = usize::from(notice_area.height);
+        if notices.len() > fits {
+            notices.truncate(fits);
+            if let Some(last) = notices.last_mut() {
+                let text: String = last
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                let style = last
+                    .spans
+                    .first()
+                    .map_or_else(Style::default, |span| span.style);
+                *last = Line::from(TextSpan::styled(
+                    crate::grid::truncate(
+                        &format!("{}…", text.trim_end()),
+                        usize::from(area.width),
+                    ),
+                    style,
+                ));
+            }
+        }
 
         // Bound the scroll against this frame's rows and height before drawing:
         // a re-read can shorten the calendar and a resize can lengthen the
@@ -1077,7 +1128,11 @@ fn event_line(
         Style::default().fg(theme.text)
     };
 
-    let used = marker.len() + TIME_WIDTH.max(crate::grid::display_width(&time)) + 1;
+    // Cells, not bytes (invariant 9): `▸` is three bytes and one cell, and a
+    // `len` here gave the row under way, the one the marker points at, two
+    // cells less than the rows around it.
+    let used =
+        crate::grid::display_width(marker) + TIME_WIDTH.max(crate::grid::display_width(&time)) + 1;
     let room = usize::from(width).saturating_sub(used);
 
     let mut text = event.summary.clone();
@@ -1683,5 +1738,129 @@ mod tests {
             Some("/home/someone/calendar.ics"),
             "a read landing must not clear a status it did not put up"
         );
+    }
+
+    /// `o` exists to show the path, so a path cut at the panel's edge is the
+    /// whole message lost. It went up as one `Line` and the terminal cut it:
+    /// even at the 52 cells the panel stops growing at, the default macOS
+    /// path stopped in the middle of `calendar.ics` with nothing to say so. It
+    /// wraps now, and in a panel too short for all of it the last row it gets
+    /// ends in `…`.
+    #[test]
+    fn the_path_shown_by_o_is_wrapped_rather_than_cut_off() {
+        let path = PathBuf::from("/Users/someone/Library/Application Support/mirador/calendar.ics");
+        let mut panel = AgendaPanel::new(&AgendaConfig::default(), path);
+        panel.handle_key(KeyEvent::from(KeyCode::Char('o')));
+
+        let rows = screen(&mut panel, 30, 12);
+        let joined: String = rows.iter().map(|row| row.trim_end()).collect();
+        assert!(
+            joined.contains("mirador/calendar.ics"),
+            "the path lost its end at 30 columns: {rows:#?}"
+        );
+        assert!(
+            !joined.contains('…'),
+            "and a path that fits says nothing was cut: {rows:#?}"
+        );
+
+        let short = screen(&mut panel, 30, 3);
+        assert!(
+            short[2].trim_end().ends_with('…'),
+            "a path with fewer rows than it needs says so: {short:#?}"
+        );
+    }
+
+    /// The marker beside the meeting under way is two cells, and it was
+    /// measured in bytes — four, since `▸` takes three — so that row, the one
+    /// the marker exists to point at, lost a location every other row kept.
+    #[test]
+    fn the_meeting_under_way_has_the_room_any_other_row_has() {
+        let theme = crate::theme::Theme::default();
+        let mut e = event(date(2026, 8, 1), 9, "Design review", false);
+        e.location = Some("Room 12".into());
+        // Two cells of marker, a six-cell time and a space leave twenty-five:
+        // the summary and its location exactly.
+        for in_progress in [false, true] {
+            let text: String = event_line(&e, in_progress, true, 34, &theme)
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect();
+            assert!(
+                text.contains("Room 12"),
+                "in progress {in_progress}: `{text}`"
+            );
+            assert_eq!(crate::grid::display_width(&text), 34, "`{text}`");
+        }
+    }
+
+    /// Midnight moves the reader's window on a day, and the day it reaches
+    /// was never in the last read. Taking its events for new ones logged the
+    /// next instance of every repeating meeting as having "appeared in your
+    /// calendar", every night, on a dashboard left open overnight — which is
+    /// the way this one is used. Only an event inside the last window can
+    /// have been added since; one past it was out of sight, not absent.
+    #[test]
+    fn a_day_coming_into_the_window_is_not_news() {
+        let midnight = |day: Date| day.at(0, 0, 0, 0).to_zoned(tz()).unwrap().timestamp();
+        let read = |first: Date, events: Vec<ical::Event>| State {
+            events,
+            built_for: Some(first),
+            built_until: Some(midnight(first + Span::new().days(2))),
+            ..State::default()
+        };
+        let (wed, thu, fri) = (date(2026, 10, 7), date(2026, 10, 8), date(2026, 10, 9));
+        let standup = |day| event(day, 9, "Standup", false);
+        let mut panel = idle_panel();
+
+        panel.shown = read(wed, vec![standup(wed), standup(thu)]);
+        panel.note_new_entries();
+        assert!(panel.pending.is_empty(), "a first read is never news");
+
+        panel.shown = read(thu, vec![standup(thu), standup(fri)]);
+        panel.note_new_entries();
+        let logged: Vec<&str> = panel.pending.iter().map(|e| e.text.as_str()).collect();
+        assert!(logged.is_empty(), "Friday came into view: {logged:?}");
+
+        panel.shown = read(
+            thu,
+            vec![standup(thu), event(fri, 15, "Dentist", false), standup(fri)],
+        );
+        panel.note_new_entries();
+        let logged: Vec<&str> = panel.pending.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        assert!(
+            logged[0].starts_with("Dentist appeared"),
+            "an event added inside the window is still news: {logged:?}"
+        );
+    }
+
+    /// The horizon `note_new_entries` relies on is the reader's to publish:
+    /// without it every read looks unbounded and the test above proves
+    /// nothing about a running panel.
+    #[test]
+    fn a_read_says_where_its_window_ends() {
+        let dir = std::env::temp_dir().join(format!("mirador-agenda-until-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ics = dir.join("cal.ics");
+        std::fs::write(&ics, "BEGIN:VCALENDAR\nEND:VCALENDAR\n").unwrap();
+        let config = AgendaConfig {
+            days: 3,
+            ..AgendaConfig::default()
+        };
+        let mut panel = AgendaPanel::new(&config, ics);
+        for _ in 0..100 {
+            if panel.tick() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let today = panel.shown.built_for.expect("a read landed");
+        let until = panel.shown.built_until.expect("and said where it stops");
+        let tz = TimeZone::system();
+        let expected = ical::local_midnight(today + Span::new().days(3), &tz).unwrap();
+        assert_eq!(until, expected.timestamp());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

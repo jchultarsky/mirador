@@ -637,8 +637,10 @@ impl Zones {
                 .with_context(|| format!("parsing the clock zones in {}", path.display()))?;
             (parsed.zones, false)
         } else {
-            // Seeded and marked dirty, so the file exists to be hand-edited
-            // after the first run.
+            // Seeded and marked dirty, so the caller's first save writes the
+            // file to be hand-edited after the first run. `ClocksPanel::new`
+            // makes that save straight away; until it did, the file appeared
+            // only when a clock was first changed from the panel.
             (seed.to_vec(), !seed.is_empty())
         };
 

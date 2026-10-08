@@ -189,8 +189,11 @@ fn default_keys() -> PanelKeymap<ClocksAction> {
 /// being readable-from-across-the-room and starts being a poster.
 const MAX_CLOCK_SCALE: u16 = 3;
 
-/// Rows the numerals occupy at that scale: glyphs are five rows tall at 1.
-const BIG_CLOCK_ROWS: u16 = 5 * MAX_CLOCK_SCALE;
+/// Rows a glyph occupies at scale 1.
+const GLYPH_ROWS: u16 = 5;
+
+/// Rows the numerals occupy at the largest scale.
+const BIG_CLOCK_ROWS: u16 = GLYPH_ROWS * MAX_CLOCK_SCALE;
 
 /// Columns of the secondary zone list.
 ///
@@ -243,6 +246,10 @@ pub struct ClocksPanel {
     /// Which secondary clock is selected, for `d`. The primary is index 0 and
     /// cannot be selected, because it cannot be removed.
     selected: usize,
+    /// The first secondary clock the table shows, when it has more clocks than
+    /// rows. Moved by `render` to keep `selected` on screen, as the theme
+    /// picker moves its own, because only `render` knows how many rows fit.
+    zone_offset: usize,
     /// The `a` or `e` dialog, while it is open.
     asking: Option<crate::prompt::Prompt>,
     /// Which entry `e` opened the dialog on, when it was `e` rather than `a`.
@@ -263,7 +270,14 @@ pub struct ClocksPanel {
 impl ClocksPanel {
     /// Resolve every zone once, at construction.
     pub fn new(config: ClocksConfig, path: std::path::PathBuf) -> anyhow::Result<Self> {
-        let zones = crate::zones::Zones::load(path, &config.zones)?;
+        let mut zones = crate::zones::Zones::load(path, &config.zones)?;
+        // Persist the seed on a first run, as the watchlist does, so there is
+        // a file to edit by hand and `[clocks].zones` is not read again. The
+        // load marks a seed to be written and nothing used to write it until
+        // a clock was changed from the panel: the config was re-read at every
+        // launch until then, and ignored without a word after. A failure is
+        // reported the way a failed edit is, and the panel builds regardless.
+        zones.save_reporting();
         let mut clocks: Vec<Clock> = zones
             .zones()
             .iter()
@@ -299,6 +313,7 @@ impl ClocksPanel {
             twelve_hour,
             zones,
             selected: 1,
+            zone_offset: 0,
             asking: None,
             editing: None,
             status: None,
@@ -824,7 +839,17 @@ impl Panel for ClocksPanel {
             u16::try_from(self.secondary.len()).unwrap_or(0) + 2
         };
         let clock_budget = area.height.saturating_sub(date_rows + zone_rows).max(1);
-
+        let face = |rows: u16| {
+            choose_face(
+                self.show_seconds,
+                &full,
+                &short,
+                &seconds,
+                meridiem.as_deref(),
+                area.width,
+                rows,
+            )
+        };
         // Width and height together, inside `choose_face`: filtering a
         // width-only answer by height rejects instead of stepping down a scale,
         // and a *shorter* string earns a bigger one. That is how hiding the
@@ -839,15 +864,40 @@ impl Panel for ClocksPanel {
         // plain text with the seconds intact rather than to numerals without
         // them: `s` is on, and a clock that dropped its seconds on its own
         // would read as the key not having worked (#106, the other way round).
-        let (time_text, small_seconds, scale) = choose_face(
-            self.show_seconds,
-            &full,
-            &short,
-            &seconds,
-            meridiem.as_deref(),
-            area.width,
-            clock_budget,
-        );
+        let (mut time_text, mut small_seconds, mut scale) = face(clock_budget);
+
+        // A notice — `o`'s path, `the big clock stays`, a failed save — has
+        // the last row to itself. It used to be painted over whatever had
+        // been drawn there: with no table that was the date, and the end of
+        // the date showed through beside it.
+        //
+        // The row comes from slack: the blank line above the table, which
+        // goes first when room is short, or rows the numerals leave unused.
+        // Only when there is neither does the clock give it up. Taking it
+        // from the clock's budget every time cost the numerals a whole scale
+        // step for a one-line message — fifteen rows to ten at the panel's own
+        // largest size, until the next key, or for good after a failed save.
+        //
+        // A failed write to the zone file has to be seen: the clock is on
+        // screen now and would silently be gone at the next launch.
+        let notice = self
+            .status
+            .as_ref()
+            .or(self.zones.last_error.as_ref())
+            .filter(|_| area.height >= 2)
+            .cloned();
+        if notice.is_some() {
+            let face_rows = scale.map_or(1, |scale| GLYPH_ROWS * scale);
+            let table_rows = zone_rows.saturating_sub(1);
+            if face_rows
+                .saturating_add(date_rows)
+                .saturating_add(table_rows)
+                >= area.height
+            {
+                (time_text, small_seconds, scale) = face(clock_budget.saturating_sub(1).max(1));
+            }
+        }
+        let bottom = area.y + area.height - u16::from(notice.is_some());
         let mut cursor = area.y;
 
         if let Some(scale) = scale {
@@ -868,7 +918,7 @@ impl Panel for ClocksPanel {
 
             for (index, row) in big.rows.iter().enumerate() {
                 let y = area.y + u16::try_from(index).unwrap_or(0);
-                if y >= area.y + area.height {
+                if y >= bottom {
                     break;
                 }
                 frame.render_widget(
@@ -886,7 +936,7 @@ impl Panel for ClocksPanel {
                 // future mistake there show as missing seconds rather than as
                 // a cut one, which is the failure a reader cannot see.
                 let room = (area.x + area.width).saturating_sub(sx);
-                if room >= suffix.saturating_sub(1) && y < area.y + area.height {
+                if room >= suffix.saturating_sub(1) && y < bottom {
                     frame.render_widget(
                         Paragraph::new(Span::styled(
                             seconds.clone(),
@@ -954,7 +1004,7 @@ impl Panel for ClocksPanel {
         // screen says `…`; this one did not. `date_format` is the reader's, so
         // it can hold any text at all, which is why `chars()` was the second
         // fault rather than a theoretical one.
-        if cursor < area.y + area.height && !self.config.date_format.is_empty() {
+        if cursor < bottom && !self.config.date_format.is_empty() {
             let date = glyphs::utility(&local.strftime(&self.config.date_format).to_string());
             let date = crate::grid::truncate(&date, usize::from(area.width));
             let width = u16::try_from(crate::grid::display_width(&date)).unwrap_or(0);
@@ -971,20 +1021,52 @@ impl Panel for ClocksPanel {
             cursor += 1;
         }
 
-        if self.secondary.is_empty() || cursor >= area.y + area.height {
+        // The notice's row, cleared first: the table ends above it, and it was
+        // once painted over the last clock in the table, and with no table
+        // never reached at all — `d` on the big clock said why in a field
+        // nobody could see.
+        if let Some(message) = &notice {
+            let row = Rect::new(area.x, bottom, area.width, 1);
+            frame.render_widget(ratatui::widgets::Clear, row);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    crate::grid::truncate(message, usize::from(area.width)),
+                    Style::default().fg(theme.error),
+                )),
+                row,
+            );
+        }
+
+        if self.secondary.is_empty() || cursor >= bottom {
             return;
         }
 
         // A blank line separates the numerals from the table, but only when
         // there is room for the whole table underneath it.
-        let needed = u16::try_from(self.secondary.len()).unwrap_or(0) + 1;
-        if (area.y + area.height).saturating_sub(cursor) > needed {
+        let needed = u16::try_from(self.secondary.len()).unwrap_or(u16::MAX);
+        if bottom.saturating_sub(cursor) > needed.saturating_add(1) {
             cursor += 1;
         }
-        let remaining = (area.y + area.height).saturating_sub(cursor);
-        if remaining == 0 {
+        let remaining = bottom.saturating_sub(cursor);
+        // A header needs a clock under it to say anything.
+        if remaining < 2 {
             return;
         }
+
+        // More clocks than rows: the table shows a window of them that follows
+        // the cursor, so the clock `d` would remove is always one on screen.
+        // Every clock used to go into the paragraph and the terminal dropped
+        // the ones past the bottom, with the cursor walking on through them.
+        let rows = usize::from(remaining - 1);
+        let at = self.selected.saturating_sub(1);
+        if at < self.zone_offset {
+            self.zone_offset = at;
+        } else if at >= self.zone_offset + rows {
+            self.zone_offset = at + 1 - rows;
+        }
+        self.zone_offset = self
+            .zone_offset
+            .min(self.secondary.len().saturating_sub(rows));
 
         // Once per draw rather than once per row: `s` and `h` govern the whole
         // panel, not just the numerals above this table. Hours first, since
@@ -1007,7 +1089,13 @@ impl Panel for ClocksPanel {
         let grid = Grid::new(columns, area.width);
         let mut lines = vec![grid.header(theme)];
 
-        for (index, clock) in self.secondary.iter().enumerate() {
+        for (index, clock) in self
+            .secondary
+            .iter()
+            .enumerate()
+            .skip(self.zone_offset)
+            .take(rows)
+        {
             // The cursor is over the zone list, whose first entry is zone 1.
             let here = ctx.focused && index + 1 == self.selected;
             // Marked by reversing the label rather than by a gutter arrow: the
@@ -1060,20 +1148,6 @@ impl Panel for ClocksPanel {
             Paragraph::new(lines),
             Rect::new(area.x, cursor, area.width, remaining),
         );
-
-        // A failed write to the zone file has to be seen: the clock is on
-        // screen now and would silently be gone at the next launch.
-        if let Some(message) = self.status.as_ref().or(self.zones.last_error.as_ref())
-            && area.height > 0
-        {
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    crate::grid::truncate(message, usize::from(area.width)),
-                    Style::default().fg(theme.error),
-                )),
-                Rect::new(area.x, area.y + area.height - 1, area.width, 1),
-            );
-        }
     }
 }
 
@@ -1147,14 +1221,17 @@ mod tests {
             })
         };
 
+        // Built once and drawn at every size. Building a panel saves its
+        // seeded zone list, and three thousand saves to disk made this one test
+        // take fifteen seconds.
+        let (mut with, _a) = panel_from_named("secs-on", ClocksConfig::default());
+        with.show_seconds = true;
+        let (mut without, _b) = panel_from_named("secs-off", ClocksConfig::default());
+        without.show_seconds = false;
+
         let mut shrank = Vec::new();
         for width in 20..104u16 {
             for height in 6..24u16 {
-                let (mut with, _a) = panel_from_named("secs-on", ClocksConfig::default());
-                with.show_seconds = true;
-                let (mut without, _b) = panel_from_named("secs-off", ClocksConfig::default());
-                without.show_seconds = false;
-
                 if draws_block_numerals(&mut with, width, height)
                     && !draws_block_numerals(&mut without, width, height)
                 {
@@ -1429,11 +1506,12 @@ mod tests {
         let config = crate::config::Config::default();
         let gradients = config.theme.gradients();
         let mut seen_small_seconds = false;
+        // One panel, drawn at every size; see the meridiem test.
+        let (mut panel, _guard) = panel_from_named("small-secs", ClocksConfig::default());
+        panel.show_seconds = true;
 
         for width in 8..=100u16 {
             for height in 6..=14u16 {
-                let (mut panel, _guard) = panel_from_named("small-secs", ClocksConfig::default());
-                panel.show_seconds = true;
                 let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
                 terminal
                     .draw(|frame| {
@@ -1632,12 +1710,14 @@ mod tests {
     #[test]
     fn the_meridiem_is_drawn_whole_or_not_at_all() {
         let (mut seen_beside, mut seen_plain) = (false, false);
+        // One panel, drawn at every size: building one saves its seeded zone
+        // list, and a save per size made this test take seconds.
+        let (mut panel, _guard) = panel_from_named("meridiem", ClocksConfig::default());
+        panel.twelve_hour = true;
         for show_seconds in [true, false] {
+            panel.show_seconds = show_seconds;
             for width in 6..=100u16 {
                 for height in 6..=14u16 {
-                    let (mut panel, _guard) = panel_from_named("meridiem", ClocksConfig::default());
-                    panel.twelve_hour = true;
-                    panel.show_seconds = show_seconds;
                     let rows = drawn(&mut panel, width, height);
                     let top = &rows[0];
                     if top.contains('\u{2588}') {
@@ -1757,6 +1837,10 @@ mod tests {
 
     /// The primary is index 0 and never selectable, so the last `d` on an
     /// empty list has to say why nothing happened rather than look broken.
+    ///
+    /// Read off the screen as well as the field: with no table to draw, the
+    /// panel returned before it reached the notice, so the field said why and
+    /// the screen said nothing.
     #[test]
     fn the_big_clock_survives_and_says_so() {
         let (mut panel, _guard) = panel_from_named(
@@ -1769,6 +1853,276 @@ mod tests {
         press(&mut panel, KeyCode::Char('d'));
         assert_eq!(panel.primary.label, "Home", "still there");
         assert!(panel.status.is_some(), "and the panel says why");
+        let rows = drawn(&mut panel, 40, 12);
+        assert!(
+            rows.iter().any(|row| row.contains("the big clock stays")),
+            "on screen, too: {rows:#?}"
+        );
+    }
+
+    /// A first run writes the seeded list out, so `zones.toml` is there to be
+    /// edited by hand, as the shipped config says, and `[clocks].zones` is not
+    /// read again. It was marked to be written and never was: the file
+    /// appeared only once a clock was changed from the panel, and until then
+    /// the config was re-read every launch — after which, with nothing to say
+    /// so, it stopped being.
+    #[test]
+    fn a_first_run_writes_the_seeded_zone_file() {
+        let seed = vec![zone("Home", "UTC"), zone("Tokyo", "Asia/Tokyo")];
+        let (panel, _guard) = panel_from_named(
+            "first_run_writes",
+            ClocksConfig {
+                zones: seed.clone(),
+                ..ClocksConfig::default()
+            },
+        );
+        assert!(
+            panel.zones.path().exists(),
+            "the seed is on disk to be edited"
+        );
+        assert_eq!(panel.zones.last_error, None);
+        let written = crate::zones::Zones::load(panel.zones.path(), &[]).expect("reads back");
+        let names = |zones: &[ClockZone]| -> Vec<(String, String)> {
+            zones
+                .iter()
+                .map(|z| (z.label.clone(), z.timezone.clone()))
+                .collect()
+        };
+        assert_eq!(names(written.zones()), names(&seed));
+    }
+
+    /// The other side: a config with no clocks has nothing to seed, and writes
+    /// nothing, so a list added to the config later is still read.
+    #[test]
+    fn an_empty_seed_writes_no_zone_file() {
+        let (panel, _guard) = panel_from_named(
+            "empty_seed_writes_nothing",
+            ClocksConfig {
+                zones: Vec::new(),
+                ..ClocksConfig::default()
+            },
+        );
+        assert!(!panel.zones.path().exists());
+    }
+
+    /// A seed that cannot be written is reported the way a failed edit is,
+    /// and the panel still builds: the clocks are on screen either way.
+    #[test]
+    fn a_seed_that_cannot_be_written_is_reported_not_fatal() {
+        let (_, guard) = panel_from_named("unwritable_seed", ClocksConfig::default());
+        let blocker = guard.0.join("blocker");
+        std::fs::write(&blocker, "a file where a directory has to be").unwrap();
+        let panel = ClocksPanel::new(ClocksConfig::default(), blocker.join("zones.toml"))
+            .expect("a failed save does not stop the panel");
+        assert!(panel.zones.last_error.is_some(), "it is reported");
+        assert!(panel.alert().is_some(), "where the status bar sees it");
+    }
+
+    /// More clocks than rows: the table shows a window of them that follows
+    /// the cursor, so the clock `d` would remove is always one you can see.
+    /// Every zone went into one paragraph and the terminal dropped the ones
+    /// past the bottom, while the cursor walked on through rows nobody could
+    /// see.
+    #[test]
+    fn the_selected_clock_is_always_on_screen() {
+        let names = [
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+        ];
+        let zones = [
+            "UTC",
+            "Asia/Tokyo",
+            "Europe/Paris",
+            "America/New_York",
+            "Australia/Sydney",
+            "Asia/Kolkata",
+            "America/Chicago",
+            "Africa/Cairo",
+        ];
+        let mut seed = vec![zone("Home", "local")];
+        seed.extend(names.iter().zip(zones).map(|(n, z)| zone(n, z)));
+        let (mut panel, _guard) = panel_from_named(
+            "window",
+            ClocksConfig {
+                zones: seed,
+                ..ClocksConfig::default()
+            },
+        );
+
+        let first = drawn(&mut panel, 40, 8);
+        assert!(
+            !first.iter().any(|row| row.contains("Hotel")),
+            "the table has to be too tall for the panel, or this proves nothing: {first:#?}"
+        );
+        let on_screen = |panel: &mut ClocksPanel, name: &str| {
+            assert_eq!(names[panel.selected - 1], name);
+            let rows = drawn(panel, 40, 8);
+            let shown = rows.iter().filter(|row| row.contains(name)).count();
+            assert_eq!(shown, 1, "{name} is selected: {rows:#?}");
+        };
+        let (last, rest) = names.split_last().expect("names");
+        for name in rest {
+            on_screen(&mut panel, name);
+            press(&mut panel, KeyCode::Down);
+        }
+        on_screen(&mut panel, last);
+        for name in rest.iter().rev() {
+            press(&mut panel, KeyCode::Up);
+            on_screen(&mut panel, name);
+        }
+    }
+
+    /// With no table, the notice's row is budgeted like the date: the clock
+    /// and the date fit above it, and nothing drawn there before shows
+    /// through beside it. It was painted over the date, and the end of the
+    /// date showed through after the message at the heights where the two
+    /// met.
+    #[test]
+    fn a_notice_on_a_lone_clock_has_its_row_to_itself() {
+        for height in 2..=14u16 {
+            let (mut panel, _guard) = panel_from_named(
+                "lone-notice",
+                ClocksConfig {
+                    zones: Vec::new(),
+                    ..ClocksConfig::default()
+                },
+            );
+            panel.status = Some("the big clock stays".into());
+            let rows = drawn(&mut panel, 40, height);
+            let last = rows.last().expect("a row").trim_end().to_string();
+            assert_eq!(last, "the big clock stays", "height {height}: {rows:#?}");
+        }
+    }
+
+    /// A notice takes a row of its own under the table. It was painted over
+    /// the last row, so `o` on the last clock hid the clock it was pressed on.
+    #[test]
+    fn a_notice_never_covers_a_clock() {
+        let (mut panel, _guard) = panel_from_named(
+            "notice_row",
+            ClocksConfig {
+                zones: vec![
+                    zone("Home", "local"),
+                    zone("Alpha", "UTC"),
+                    zone("Bravo", "Asia/Tokyo"),
+                    zone("Charlie", "Europe/Paris"),
+                ],
+                ..ClocksConfig::default()
+            },
+        );
+        press(&mut panel, KeyCode::Down);
+        press(&mut panel, KeyCode::Down);
+        let calm = drawn(&mut panel, 40, 7);
+        assert!(
+            calm[6].contains("Charlie"),
+            "the table ends on the panel's last row: {calm:#?}"
+        );
+        press(&mut panel, KeyCode::Char('o'));
+        let rows = drawn(&mut panel, 40, 7);
+        assert!(
+            rows.iter().any(|row| row.contains("Charlie")),
+            "the selected clock is still drawn: {rows:#?}"
+        );
+        let path = panel.zones.path().display().to_string();
+        let head: String = path.chars().take(10).collect();
+        assert!(rows[6].contains(&head), "and the path under it: {rows:#?}");
+    }
+
+    /// A notice is one row for a moment, and the numerals are the panel's
+    /// face: a key that shrinks them until the next key is the footprint
+    /// change the visual system refuses. The row comes from slack — the blank
+    /// line above the table, or rows the numerals leave unused — and from
+    /// the clock only when there is none. It was taken from the clock's
+    /// budget every time, so at the panel's own largest size `o` dropped the
+    /// numerals from fifteen rows to ten, and a failed save kept them there.
+    ///
+    /// Asserted at the size the panel asks for, where it sits in a tall row,
+    /// and then at every height: with a table there is always a separator to
+    /// give, and a lone clock gives from its own last row whenever it is
+    /// blank. Where it is not, the clock steps down rather than lose its
+    /// last row of numerals under the notice — every digit fills every row
+    /// of its glyph, so a whole face is a multiple of five rows.
+    #[test]
+    fn a_notice_does_not_cost_the_numerals_a_scale_step() {
+        let numerals = |rows: &[String]| rows.iter().filter(|row| row.contains('\u{2588}')).count();
+        let notice = "the big clock stays";
+        let (mut table, _a) = panel_from_named("notice-table", ClocksConfig::default());
+        let (mut lone, _b) = panel_from_named(
+            "notice-lone",
+            ClocksConfig {
+                zones: vec![zone("Home", "local")],
+                ..ClocksConfig::default()
+            },
+        );
+        let (mut undated, _c) = panel_from_named(
+            "notice-undated",
+            ClocksConfig {
+                zones: vec![zone("Home", "local")],
+                date_format: String::new(),
+                ..ClocksConfig::default()
+            },
+        );
+
+        let width = table.max_width().expect("a widest") - FRAME_WIDTH;
+        let tallest = table.max_height().expect("a tallest") - FRAME_HEIGHT;
+        table.status = None;
+        let calm = drawn(&mut table, width, tallest);
+        assert_eq!(
+            numerals(&calm),
+            usize::from(BIG_CLOCK_ROWS),
+            "the numerals are at their largest, or this proves nothing: {calm:#?}"
+        );
+        table.status = Some(notice.into());
+        let noted = drawn(&mut table, width, tallest);
+        assert_eq!(numerals(&noted), numerals(&calm), "{noted:#?}");
+        assert!(noted.last().is_some_and(|row| row.contains(notice)));
+        for name in ["UTC", "London", "Tokyo"] {
+            assert!(
+                noted.iter().any(|row| row.contains(name)),
+                "{name} is still drawn: {noted:#?}"
+            );
+        }
+
+        for (panel, has_table, dated) in [
+            (&mut table, true, true),
+            (&mut lone, false, true),
+            (&mut undated, false, false),
+        ] {
+            for height in 2..=tallest + 3 {
+                panel.status = None;
+                let calm = drawn(panel, width, height);
+                panel.status = Some(notice.into());
+                let noted = drawn(panel, width, height);
+                assert!(
+                    noted.last().is_some_and(|row| row.contains(notice)),
+                    "height {height}: {noted:#?}"
+                );
+                assert_eq!(
+                    numerals(&noted) % usize::from(GLYPH_ROWS),
+                    0,
+                    "height {height}, numerals cut under the notice: {noted:#?}"
+                );
+                // Nor does the date give way while the numerals have a row to
+                // give: it is not slack, and dropping it is the clock losing
+                // half of itself to a passing message.
+                let face = numerals(&calm);
+                if dated && face > 0 {
+                    let date = calm[face].trim();
+                    assert!(!date.is_empty(), "the date is under the numerals");
+                    assert!(
+                        noted.iter().any(|row| row.trim() == date),
+                        "height {height}, the date gave way: {noted:#?}"
+                    );
+                }
+                let spare = has_table || calm.last().is_some_and(|row| row.trim().is_empty());
+                if spare {
+                    assert_eq!(
+                        numerals(&noted),
+                        numerals(&calm),
+                        "height {height}, a row to spare: {calm:#?} {noted:#?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
