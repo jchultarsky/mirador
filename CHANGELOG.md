@@ -146,6 +146,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   panel did not take asked for nothing. The notice, and a watch log rule
   line the paste had just made untrue, stayed up until something else
   redrew. Both now go with the paste, as they do with a click.
+- **The agenda marks a meeting the moment it starts.** The `▸` beside an
+  event under way, and the status bar's `in 3m` before one, are worked out
+  as the panel is drawn, and the panel asked to be drawn only when it read
+  its calendar again. With nothing else on the dashboard redrawing, a
+  meeting started unmarked and the countdown ran behind the clock until the
+  next read: about a minute at the default, an hour at
+  `refresh_secs = 3600`. The default layout hid it, because the clock
+  redraws every minute. The panel now redraws when an event starts or ends,
+  and as each minute of the countdown goes by.
 
 ## [1.20.0] - 2026-10-07
 
