@@ -1318,14 +1318,11 @@ mod tests {
     /// Every JSON object inside a fenced `json` block of
     /// `docs/plugin-protocol.md`, in document order.
     ///
-    /// Read at test time from the repository, the way `docs.rs` reads
-    /// `CLAUDE.md`: `/docs` never reaches the published crate, and a test is
-    /// the only thing that needs it.
+    /// Read at test time from the repository, through the same door `docs.rs`
+    /// reads `CLAUDE.md` by: `/docs` never reaches the published crate, and a
+    /// test is the only thing that needs it.
     fn documented_messages() -> Vec<serde_json::Value> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/plugin-protocol.md");
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
-            .replace("\r\n", "\n");
+        let text = crate::docs::repo_text("docs/plugin-protocol.md");
         let mut objects = Vec::new();
         let mut in_json = false;
         let mut buffer = String::new();

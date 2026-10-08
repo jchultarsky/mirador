@@ -213,7 +213,11 @@ calc.rs      the calculator's parser: precedence, brackets, bounded depth
 docs.rs      the guard on *this file* — cited tests, version, paths, and that
              every module below is listed — and on the README's panel
              drawings, key tables and count of widgets, the other
-             documentation nothing compiles
+             documentation nothing compiles; and `repo_text` and
+             `source_files`, the one reader and one walker every test that
+             reads the repository's own files at run time goes through —
+             `include_str!` at compile time is the other route, and
+             `repo_text` lists who takes it
 widgets/     clocks, weather, todo, notes, stocks, calendar, agenda,
              pomodoro, watchlog, news, cpu, memory, disk, network, battery,
              temperature, calculator

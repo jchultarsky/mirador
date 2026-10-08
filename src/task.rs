@@ -662,7 +662,7 @@ mod tests {
     /// noticed.
     #[test]
     fn the_task_file_example_in_the_readme_actually_parses() {
-        let readme = include_str!("../README.md");
+        let readme = crate::docs::repo_text("README.md");
         let start = readme
             .find("## Task file format")
             .expect("the README documents the task file format");

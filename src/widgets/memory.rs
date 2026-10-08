@@ -16,7 +16,7 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
@@ -288,20 +288,16 @@ impl Panel for MemoryPanel {
                 )),
                 Rect::new(rows[2].x, rows[2].y, rows[2].width, 1),
             );
-            let y = rows[2].y + 1;
-            for (index, (glyph, style)) in
-                meter_spans(u64::from(swap_pct), 100, rows[2].width, gradient, track)
-                    .iter()
-                    .enumerate()
-            {
-                let x = rows[2].x + u16::try_from(index).unwrap_or(u16::MAX);
-                if x >= rows[2].x + rows[2].width {
-                    break;
-                }
-                frame.buffer_mut()[(x, y)]
-                    .set_char(*glyph)
-                    .set_style(*style);
-            }
+            frame.render_widget(
+                Paragraph::new(Line::from(meter_spans(
+                    u64::from(swap_pct),
+                    100,
+                    rows[2].width,
+                    gradient,
+                    track,
+                ))),
+                Rect::new(rows[2].x, rows[2].y + 1, rows[2].width, 1),
+            );
         }
     }
 }

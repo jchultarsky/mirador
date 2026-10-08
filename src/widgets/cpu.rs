@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
@@ -286,16 +286,13 @@ fn draw_core_strip(
         }
         let value = pct.clamp(0.0, 100.0).round() as u64;
         if per >= 3 {
-            let cells = meter_spans(value, 100, per.saturating_sub(1), gradient, track);
-            for (index, (glyph, style)) in cells.iter().enumerate() {
-                let cx = x + u16::try_from(index).unwrap_or(0);
-                if cx >= row.x + row.width {
-                    break;
-                }
-                frame.buffer_mut()[(cx, y)]
-                    .set_char(*glyph)
-                    .set_style(*style);
-            }
+            // A cell short of `per`, for the gap that tells one core's meter
+            // from the next.
+            let width = per.saturating_sub(1);
+            frame.render_widget(
+                Paragraph::new(Line::from(meter_spans(value, 100, width, gradient, track))),
+                Rect::new(x, y, width.min(right - x), 1),
+            );
             x += per;
         } else {
             // Fewer columns than cores: the last cell says the strip
