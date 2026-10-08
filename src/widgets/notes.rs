@@ -863,14 +863,30 @@ impl NotesPanel {
             // the whole wrapped body and asking it to `scroll` past most of it
             // made the cost of a frame proportional to the note rather than to
             // the pane — see `WrappedBody` and #178.
-            let scroll = usize::from(self.body_scroll);
+            //
+            // The last of them ends in `…` while there is more below it
+            // (invariant 19). The body scrolls, but nothing else on screen
+            // says so, and a cut that falls between two sentences looks like
+            // the end of the note.
             let height = usize::from(rows[2].height);
+            let width = usize::from(rows[2].width);
             let wrapped = Self::wrapped_body(&mut self.wrapped_body, &note.body, rows[2].width);
-            let visible: Vec<Line<'static>> = wrapped
+            let start = usize::from(self.body_scroll).min(wrapped.len());
+            let end = start.saturating_add(height).min(wrapped.len());
+            let more = end < wrapped.len();
+            let visible: Vec<Line<'static>> = wrapped[start..end]
                 .iter()
-                .skip(scroll.min(wrapped.len()))
-                .take(height)
-                .map(|row| Line::from(row.clone()))
+                .enumerate()
+                .map(|(at, row)| {
+                    if more && start + at + 1 == end {
+                        Line::from(crate::grid::truncate(
+                            &format!("{}…", row.trim_end()),
+                            width,
+                        ))
+                    } else {
+                        Line::from(row.clone())
+                    }
+                })
                 .collect();
             Paragraph::new(visible).style(Style::default().fg(theme.text))
         };
@@ -2247,6 +2263,74 @@ mod tests {
                 "{width}: {summary:?}"
             );
         }
+    }
+
+    /// Invariant 19 along the height. The reader scrolls, but nothing on
+    /// screen said there was anything to scroll to: the rows that fitted were
+    /// drawn and the rest dropped in silence, so the default dashboard showed
+    /// the seeded note as `You are reading it in the` and stopped. That one
+    /// at least breaks off mid-sentence; a cut that falls between sentences
+    /// looks like the end of the note. The last row drawn now ends in `…`
+    /// while there is more below it.
+    ///
+    /// Swept over the height with the width pinned, and both halves asserted:
+    /// a body that fits is drawn whole with no `…`, so an ellipsis stuck on
+    /// unconditionally fails too.
+    #[test]
+    fn a_body_longer_than_the_reader_ends_in_an_ellipsis() {
+        const BODY: &str = "You are reading it in the detail pane. That is the point \
+                            of the panel: a note's whole value is the text inside it. \
+                            The rest of it is here to be cut.";
+        const WIDTH: u16 = 40;
+        let (mut p, _dir) = panel("body-cut");
+        add_note(&mut p, "Long", BODY);
+
+        let (mut cut, mut whole) = (0, 0);
+        for height in 4..=40u16 {
+            p.body_area = None;
+            let screen = rows_of(&mut p, WIDTH, height);
+            let Some(area) = p.body_area else { continue };
+            let row = |y: u16| -> String {
+                let text: String = screen[usize::from(y)]
+                    .chars()
+                    .skip(usize::from(area.x))
+                    .take(usize::from(area.width))
+                    .collect();
+                text.trim_end().to_string()
+            };
+            let wrapped = crate::grid::wrap(BODY, usize::from(area.width));
+            let rows = usize::from(area.height);
+            let shown: Vec<String> = (area.y..area.bottom()).map(row).collect();
+            let all = screen.join("\n");
+            if wrapped.len() > rows {
+                cut += 1;
+                let (last, above) = shown.split_last().expect("a row at least");
+                for (drawn, wrapped) in above.iter().zip(&wrapped) {
+                    assert_eq!(drawn, wrapped.trim_end(), "at height {height}:\n{all}");
+                }
+                let kept = last.strip_suffix('…').unwrap_or_else(|| {
+                    panic!(
+                        "a body needing {} rows was cut to {rows} without saying so \
+                         at height {height}:\n{all}",
+                        wrapped.len()
+                    )
+                });
+                assert!(
+                    wrapped[rows - 1].starts_with(kept),
+                    "at height {height}:\n{all}"
+                );
+            } else {
+                whole += 1;
+                for (i, drawn) in shown.iter().enumerate() {
+                    let expected = wrapped.get(i).map_or("", |line| line.trim_end());
+                    assert_eq!(drawn, expected, "at height {height}:\n{all}");
+                }
+            }
+        }
+        assert!(
+            cut > 0 && whole > 0,
+            "the sweep must reach both a cut and a whole body: cut {cut}, whole {whole}"
+        );
     }
 
     #[test]

@@ -450,6 +450,12 @@ map, that one is the procedure.
     region fed prose is this bug waiting**, and wrapping it first (as `grid::wrapped`
     requires) is not the same as fitting it.
 
+    The notes reader was the second, found on 2026-10-08 the same way, in
+    `dump_dashboard` at the default size: the seeded note stopped at "You are
+    reading it in the" with nothing to say the body went on. It scrolls, which
+    is why nobody had looked — a region that scrolls still has to say there is
+    somewhere to scroll to. `a_body_longer_than_the_reader_ends_in_an_ellipsis`.
+
 ## Visual system
 
 Design thesis: *the watch station*. The vernacular is a lookout's instrument

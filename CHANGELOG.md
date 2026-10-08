@@ -163,6 +163,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a release build an interval of nothing at all: every feed fetched again
   and again with no wait. It now stops at a year like the others, and a
   config past it is refused with the key named.
+- **A note too long for its reader says so.** The notes panel draws as much
+  of a note's body as fits and scrolls for the rest, but nothing on screen
+  said there was a rest: the default dashboard showed the example note as
+  `You are reading it in the` and stopped, and a cut that fell between two
+  sentences looked like the end of the note. The last row drawn now ends in
+  `…` while there is more below it.
 
 ## [1.20.0] - 2026-10-07
 
