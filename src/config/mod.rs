@@ -340,18 +340,7 @@ impl Config {
                 }
             }
         }
-        if !matches!(self.weather.units.as_str(), "metric" | "imperial") {
-            anyhow::bail!(
-                "`[weather].units` is `{}`; expected `metric` or `imperial`.",
-                self.weather.units
-            );
-        }
-        if !matches!(self.temperature.units.as_str(), "celsius" | "fahrenheit") {
-            anyhow::bail!(
-                "`[temperature].units` is `{}`; expected `celsius` or `fahrenheit`.",
-                self.temperature.units
-            );
-        }
+        self.validate_words()?;
         // A zero-length phase would end on the tick it started and spin the
         // timer through the cycle; a zero-round set would divide by zero
         // deciding when the long break falls. Both are caught here rather than
@@ -398,6 +387,51 @@ impl Config {
             );
         }
 
+        Ok(())
+    }
+
+    /// The keys that take one of a few words.
+    ///
+    /// Each is checked the way its panel reads it — the units exactly, the
+    /// rest with case folded, the sort trimmed as well by its own parser — so
+    /// every value that worked still loads, and one the panel would have passed
+    /// over for its default is refused here instead of starting the dashboard
+    /// wrong without a word.
+    fn validate_words(&self) -> Result<()> {
+        if !WeatherConfig::UNITS.contains(&self.weather.units.as_str()) {
+            return Err(not_one_of(
+                "[weather].units",
+                &self.weather.units,
+                &WeatherConfig::UNITS,
+            ));
+        }
+        if !TemperatureConfig::UNITS.contains(&self.temperature.units.as_str()) {
+            return Err(not_one_of(
+                "[temperature].units",
+                &self.temperature.units,
+                &TemperatureConfig::UNITS,
+            ));
+        }
+        if self.todo.sort.parse::<crate::task::SortMode>().is_err() {
+            let words = crate::task::SortMode::ALL.map(crate::task::SortMode::label);
+            return Err(not_one_of("[todo].sort", &self.todo.sort, &words));
+        }
+        for (key, value, words) in [
+            (
+                "[notes].preview",
+                &self.notes.preview,
+                NotesConfig::PREVIEWS,
+            ),
+            (
+                "[calendar].week_starts",
+                &self.calendar.week_starts,
+                CalendarConfig::WEEK_STARTS,
+            ),
+        ] {
+            if !words.iter().any(|word| word.eq_ignore_ascii_case(value)) {
+                return Err(not_one_of(key, value, &words));
+            }
+        }
         Ok(())
     }
 
@@ -494,12 +528,12 @@ impl Config {
     /// `smart` meant something else should not take a dashboard down.
     pub fn apply_state(&mut self, state: &crate::state::UiState) {
         if let Some(units) = &state.weather_units
-            && matches!(units.as_str(), "metric" | "imperial")
+            && WeatherConfig::UNITS.contains(&units.as_str())
         {
             self.weather.units.clone_from(units);
         }
         if let Some(units) = &state.temperature_units
-            && matches!(units.as_str(), "celsius" | "fahrenheit")
+            && TemperatureConfig::UNITS.contains(&units.as_str())
         {
             self.temperature.units.clone_from(units);
         }
@@ -572,6 +606,18 @@ impl Config {
         }
     }
 }
+
+/// The refusal for a key that takes one of a few words: what was written, and
+/// every word the key takes, so the message is also the fix.
+fn not_one_of(key: &str, value: &str, words: &[&str]) -> anyhow::Error {
+    let quoted: Vec<String> = words.iter().map(|word| format!("`{word}`")).collect();
+    let expected = match quoted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => quoted.concat(),
+    };
+    anyhow::anyhow!("`{key}` is `{value}`; expected {expected}.")
+}
+
 /// Turn a parse failure into an error that says how to fix it.
 ///
 /// The common case by far is a config written by an older version: mirador
@@ -1185,6 +1231,59 @@ rows = [{ height = 1, panels = [{ widget = "example" }] }]
     fn bad_units_are_rejected() {
         let config: Config = toml::from_str("[weather]\nunits = \"kelvin\"").expect("parses");
         assert!(config.validate().is_err());
+    }
+
+    /// `[todo].sort`, `[notes].preview` and `[calendar].week_starts` each
+    /// take a closed set of words, and nothing checked them: each panel read
+    /// the words it knew and fell back to its default for anything else, so
+    /// a misspelling started the dashboard and quietly did nothing. The two
+    /// `units` keys beside them had been refused by name all along.
+    #[test]
+    fn a_word_a_setting_does_not_take_is_refused_by_name() {
+        for (text, key, accepted) in [
+            (
+                "[todo]\nsort = \"dues\"",
+                "[todo].sort",
+                "`smart`, `due`, `priority`, `created` or `title`",
+            ),
+            (
+                "[notes]\npreview = \"besides\"",
+                "[notes].preview",
+                "`below` or `beside`",
+            ),
+            // A trailing space: the calendar compares the whole word, so this
+            // started every week on Sunday.
+            (
+                "[calendar]\nweek_starts = \"Monday \"",
+                "[calendar].week_starts",
+                "`sunday` or `monday`",
+            ),
+        ] {
+            let config: Config = toml::from_str(text).expect("parses");
+            let Err(err) = config.validate() else {
+                panic!("{text:?} is a word the setting does not take and must be refused");
+            };
+            let err = err.to_string();
+            assert!(
+                err.contains(&format!("`{key}`")) && err.contains(accepted),
+                "the refusal must name the key and say what to write instead: {err}"
+            );
+        }
+
+        // What the panels already read keeps loading. Case is folded for all
+        // three, as the panels fold it, and the sort is trimmed, as its parser
+        // always has been — so no config that worked is refused.
+        for text in [
+            "[todo]\nsort = \" Due \"",
+            "[notes]\npreview = \"Beside\"",
+            "[notes]\npreview = \"below\"",
+            "[calendar]\nweek_starts = \"MONDAY\"",
+        ] {
+            let config: Config = toml::from_str(text).expect("parses");
+            config
+                .validate()
+                .unwrap_or_else(|e| panic!("{text:?} worked before and must still load: {e}"));
+        }
     }
 
     #[test]

@@ -188,6 +188,28 @@ pub fn days_between(from: Date, to: Date) -> i32 {
         .map_or(0, |span| span.get_days())
 }
 
+/// The last day a horizon of `days` shows, or `None` when it shows
+/// everything: at 0 by definition, and at a figure that runs past the end of
+/// the calendar, since no due date can lie beyond that. Fallible arithmetic
+/// throughout, because the figure comes straight from a config and
+/// `Span::days` panics on one that `u32` holds easily.
+fn horizon_end(today: Date, days: u32) -> Option<Date> {
+    if days == 0 {
+        return None;
+    }
+    let span = jiff::Span::new().try_days(i64::from(days)).ok()?;
+    today.checked_add(span).ok()
+}
+
+/// Whether a task due on `due` is hidden by a horizon of `days` from `today`.
+pub fn beyond_horizon(due: Option<Date>, today: Date, days: u32) -> bool {
+    past(horizon_end(today, days), due)
+}
+
+fn past(last_day: Option<Date>, due: Option<Date>) -> bool {
+    last_day.zip(due).is_some_and(|(last, due)| due > last)
+}
+
 /// How the list is ordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortMode {
@@ -205,6 +227,17 @@ pub enum SortMode {
 }
 
 impl SortMode {
+    /// Every mode, in the order `s` cycles through them. Parsing reads its
+    /// words from here, so the list a refused `[todo].sort` quotes back is the
+    /// list the parser accepts.
+    pub const ALL: [Self; 5] = [
+        Self::Smart,
+        Self::Due,
+        Self::Priority,
+        Self::Created,
+        Self::Title,
+    ];
+
     /// The next mode in the cycle.
     pub fn next(self) -> Self {
         match self {
@@ -231,16 +264,14 @@ impl std::str::FromStr for SortMode {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "smart" => Ok(Self::Smart),
-            "due" => Ok(Self::Due),
-            "priority" => Ok(Self::Priority),
-            "created" => Ok(Self::Created),
-            "title" => Ok(Self::Title),
-            other => {
-                anyhow::bail!("`{other}` is not a sort mode (smart, due, priority, created, title)")
-            }
-        }
+        let wanted = s.trim().to_ascii_lowercase();
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.label() == wanted)
+            .ok_or_else(|| {
+                let words = Self::ALL.map(Self::label).join(", ");
+                anyhow::anyhow!("`{wanted}` is not a sort mode ({words})")
+            })
     }
 }
 
@@ -375,18 +406,27 @@ impl TaskStore {
     }
 
     /// Ids in display order for the given options.
+    ///
+    /// `horizon_days` hides a task due more than that many days after
+    /// `today`, and 0 hides nothing. A task with no due date, or one already
+    /// late, is never beyond it. The horizon is measured from `today` on every
+    /// call rather than fixed when the panel was built, so the rebuild at
+    /// midnight brings a task into view on the day it comes into range.
     pub fn view(
         &self,
         sort: SortMode,
         show_completed: bool,
         filter: &str,
+        horizon_days: u32,
         today: Date,
     ) -> Vec<u64> {
+        let last_day = horizon_end(today, horizon_days);
         let mut visible: Vec<&Task> = self
             .tasks
             .iter()
             .filter(|t| show_completed || !t.done)
             .filter(|t| t.matches(filter))
+            .filter(|t| !past(last_day, t.due))
             .collect();
 
         visible.sort_by(|a, b| compare(a, b, sort, today));
@@ -647,6 +687,23 @@ energy_level = \"high\"
         }
     }
 
+    /// `ALL` is where the parser and a refused `[todo].sort` both find their
+    /// words, so a mode missing from it could be cycled to and never parsed.
+    /// `next` is an exhaustive match, which makes it the list to check against.
+    #[test]
+    fn every_sort_mode_is_listed_once_and_parses_from_its_label() {
+        let mut cycle = vec![SortMode::Smart];
+        while cycle.last().unwrap().next() != SortMode::Smart {
+            cycle.push(cycle.last().unwrap().next());
+        }
+        assert_eq!(cycle, SortMode::ALL, "ALL is the order `s` cycles in");
+        for mode in SortMode::ALL {
+            assert_eq!(mode.label().parse::<SortMode>().unwrap(), mode);
+            let shouted = format!(" {} ", mode.label().to_ascii_uppercase());
+            assert_eq!(shouted.parse::<SortMode>().unwrap(), mode);
+        }
+    }
+
     #[test]
     fn priority_sorts_high_first() {
         let mut ps = vec![
@@ -768,7 +825,7 @@ energy_level = \"high\"
         future.priority = Priority::High;
         store.add(future);
 
-        let view = store.view(SortMode::Smart, false, "", today());
+        let view = store.view(SortMode::Smart, false, "", 0, today());
         assert_eq!(view[0], overdue_id);
     }
 
@@ -779,9 +836,9 @@ energy_level = \"high\"
         let id = store.add(task(0, "done thing"));
         store.with_task(id, |t| t.toggle_done(today()));
 
-        let view = store.view(SortMode::Smart, false, "", today());
+        let view = store.view(SortMode::Smart, false, "", 0, today());
         assert!(view.is_empty(), "{view:?}");
-        assert_eq!(store.view(SortMode::Smart, true, "", today()).len(), 1);
+        assert_eq!(store.view(SortMode::Smart, true, "", 0, today()).len(), 1);
     }
 
     #[test]
@@ -798,12 +855,20 @@ energy_level = \"high\"
         store.add(b);
 
         assert_eq!(
-            store.view(SortMode::Smart, false, "errand", today()).len(),
+            store
+                .view(SortMode::Smart, false, "errand", 0, today())
+                .len(),
             2
         );
-        assert_eq!(store.view(SortMode::Smart, false, "milk", today()).len(), 1);
-        assert_eq!(store.view(SortMode::Smart, false, "zzz", today()).len(), 0);
-        assert_eq!(store.view(SortMode::Smart, false, "", today()).len(), 2);
+        assert_eq!(
+            store.view(SortMode::Smart, false, "milk", 0, today()).len(),
+            1
+        );
+        assert_eq!(
+            store.view(SortMode::Smart, false, "zzz", 0, today()).len(),
+            0
+        );
+        assert_eq!(store.view(SortMode::Smart, false, "", 0, today()).len(), 2);
     }
 
     #[test]

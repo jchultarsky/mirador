@@ -313,7 +313,7 @@ map, that one is the procedure.
     nothing. Both are whole-panel measurements, frame and padding included.
 16. **The config is edited, never reserialised.** This is the real form of the
     "never rewrites the config" rule, which was always about comments: a round
-    trip through `toml` discards all 568 of them, including the ones mirador
+    trip through `toml` discards all 569 of them, including the ones mirador
     wrote to explain its own options. `migrate.rs` established the alternative
     and `layout_edit.rs` follows it — find the line, change that line, leave
     everything else alone. Adding a panel is a one-line diff.
@@ -1883,7 +1883,10 @@ mechanical answer.
 key from `assets/default_config.toml` at all thirty-one release tags and
 diffing: 78 keys, none lost. So `migrate.rs` covering "every rename ever
 shipped" was already true — its four rules are all pre-`0.1.0`, and there has
-been nothing to migrate since.
+been nothing to migrate since. **Two keys have since left the template on
+purpose**: `[cpu].warn_pct` and `critical_pct` were taken out on 2026-10-07
+because nothing ever read them, are still accepted by `CpuConfig`, and will show
+as expected losses the next time this audit runs.
 
 Two cautions about that check, because it was wrong twice before it was right.
 The first version used `awk` with `[ \t]`, which BSD awk does not read as a tab,

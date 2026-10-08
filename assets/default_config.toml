@@ -281,7 +281,8 @@ refresh_minutes = 30
 show_completed = false
 sort           = "smart"       # smart | due | priority | created | title
 date_format    = "%a %d %b"
-horizon_days   = 0             # hide tasks due further out than this; 0 = show all
+horizon_days   = 0             # hide tasks due more than this many days out;
+                               # 0 shows all, and undated tasks always show
 
 # The list's own keys, written as under [keys] at the end of this file. The
 # form, the filter and the delete question keep theirs, and Esc always clears
@@ -587,8 +588,6 @@ sample_secs   = 2             # seconds between samples. Every sample is a new
                               # closely; 2 covers twice the time in the same
                               # chart.
 show_per_core = true
-warn_pct      = 70.0
-critical_pct  = 90.0
 
 # The panel's own keys, written as under [keys] at the end of this file.
 [cpu.keys]

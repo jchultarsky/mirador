@@ -3,7 +3,8 @@
 //! These live together rather than beside their panels because they are the
 //! *schema of the config file*: `serde` reads them all before any panel exists,
 //! and a reader working out what a key does should find every key in one place.
-//! They carry no behaviour beyond `Default`.
+//! They carry no behaviour beyond `Default`, and the closed sets of words
+//! that some keys take, which `Config::validate` checks.
 //!
 //! Every one of them sets `deny_unknown_fields`. A silently ignored key is the
 //! worst outcome a config can have — it makes a stale config look like stale
@@ -122,6 +123,13 @@ impl Default for WeatherConfig {
     }
 }
 
+impl WeatherConfig {
+    /// Every word `units` takes, spelt exactly so. The config and the state
+    /// file are both checked against this one list, so a word added here is
+    /// accepted from either.
+    pub const UNITS: [&'static str; 2] = ["metric", "imperial"];
+}
+
 /// To-do list settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -230,6 +238,12 @@ impl Default for NotesConfig {
     }
 }
 
+impl NotesConfig {
+    /// Every word `preview` takes, in any case, which is how the panel
+    /// compares it.
+    pub const PREVIEWS: [&'static str; 2] = ["below", "beside"];
+}
+
 /// Agenda settings: what is next, from a local `.ics` file.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -291,6 +305,12 @@ impl Default for CalendarConfig {
             keys: crate::keymap::KeysConfig::default(),
         }
     }
+}
+
+impl CalendarConfig {
+    /// Every word `week_starts` takes, in any case, which is how the panel
+    /// compares it.
+    pub const WEEK_STARTS: [&'static str; 2] = ["sunday", "monday"];
 }
 
 /// Calculator settings.
@@ -391,9 +411,12 @@ pub struct CpuConfig {
     pub sample_secs: u64,
     /// Also draw a per-core breakdown when the panel is tall enough.
     pub show_per_core: bool,
-    /// Percentage above which the readout turns the warning colour.
+    /// Accepted and not read. It promised a readout that turned the warning
+    /// colour above this figure, and nothing ever did that: the readout takes
+    /// its colour from the graph's ramp, so it warms with the load rather than
+    /// switching at a line. Kept so a config that sets it still loads.
     pub warn_pct: f32,
-    /// Percentage above which the readout turns the error colour.
+    /// Accepted and not read, as `warn_pct` is, for the error colour.
     pub critical_pct: f32,
     /// The panel's keys, where the reader has moved them. See
     /// [`crate::keymap::PanelKeymap`].
@@ -498,6 +521,13 @@ impl Default for TemperatureConfig {
             keys: crate::keymap::KeysConfig::default(),
         }
     }
+}
+
+impl TemperatureConfig {
+    /// Every word `units` takes, spelt exactly so. The config and the state
+    /// file are both checked against this one list, so a word added here is
+    /// accepted from either.
+    pub const UNITS: [&'static str; 2] = ["celsius", "fahrenheit"];
 }
 
 /// Disk panel settings.
