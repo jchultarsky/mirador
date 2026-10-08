@@ -7,7 +7,7 @@
 //! user's config with a bare `fs::write`, so a crash or a full disk part-way
 //! through left them with a truncated config file and no way back.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -24,43 +24,174 @@ use anyhow::{Context, Result};
 /// or partial file — the one outcome the temp-and-rename dance is there to
 /// prevent. It is not free, but these files are a few kilobytes and are written
 /// when the user changes something, not on a timer.
+///
+/// **A symlink is written through, not over.** A rename replaces whatever has
+/// the name, so renaming onto a link put a regular file where the link had
+/// been: a config symlinked into a dotfiles repository lost its link on the
+/// first layout change, and the copy under version control silently stopped
+/// hearing about anything after that. The file at the end of the link is found
+/// first, by [`resolve`], and the temporary goes beside *it* — which is also
+/// what keeps the rename on one file system when the link crosses to another.
+///
+/// **A failed save takes its temporary with it.** The name is unique per write
+/// and a failed save is tried again at the next change, so a full disk, or a
+/// file held open by an editor on Windows, left one more temporary beside the
+/// user's data for every attempt, each holding as much of the file as fitted.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
-    use std::io::Write;
+    let target = resolve(path)?;
 
-    if let Some(parent) = path.parent() {
-        // Not `is_dir()` first: the check would be a race, and `create_dir_all`
-        // is already a no-op when the directory exists.
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating directory {}", parent.display()))?;
+    if let Some(parent) = folder_of(&target) {
+        if target == path {
+            // Not `is_dir()` first: the check would be a race, and
+            // `create_dir_all` is already a no-op when the directory exists.
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating directory {}", parent.display()))?;
+        } else if !parent.is_dir() {
+            // A link into a folder that is not there yet — a sync folder on a
+            // new machine, a dotfiles checkout not cloned — is a promise that
+            // the file will arrive. Making the folder and a default file in it
+            // would put a conflict where the real one is about to land.
+            anyhow::bail!(
+                "{} links to {}, whose folder does not exist",
+                path.display(),
+                target.display()
+            );
+        }
     }
 
-    let tmp = temp_path(path);
+    let tmp = temp_path(&target);
+    let installed = install(&tmp, &target, contents);
+    if installed.is_err() {
+        // Best effort, and quietly: a temporary that will not go either is no
+        // reason to report anything but the failure that left it there.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    installed
+}
+
+/// Write `contents` to `tmp`, flush it, and rename it over `target`.
+///
+/// Split out of [`write_atomic`] so that every way this can fail passes
+/// through one place on the way out, which is where the temporary is removed.
+fn install(tmp: &Path, target: &Path, contents: &str) -> Result<()> {
+    use std::io::Write;
 
     // Scoped so the file is closed before the rename. Windows refuses to rename
     // over an open file, and this runs there.
     {
-        let mut file =
-            std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        // The reason first, then the file: a status bar cuts the end off a long
+        // message, and a temporary's path beside a read-only target — a config
+        // linked into /nix/store — is long enough that only the path survived.
+        let mut file = create_temp(tmp, target)
+            .map_err(|e| anyhow::anyhow!("{e}: cannot write beside {}", target.display()))?;
+        carry_permissions_across(target, &file);
         file.write_all(contents.as_bytes())
-            .with_context(|| format!("writing {}", tmp.display()))?;
+            .map_err(|e| anyhow::anyhow!("{e}: cannot write {}", target.display()))?;
         file.sync_all()
-            .with_context(|| format!("flushing {} to disk", tmp.display()))?;
+            .map_err(|e| anyhow::anyhow!("{e}: cannot flush {} to disk", target.display()))?;
     }
 
-    carry_permissions_across(path, &tmp);
-
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("replacing {} with {}", path.display(), tmp.display()))?;
-
-    Ok(())
+    std::fs::rename(tmp, target)
+        .map_err(|e| anyhow::anyhow!("{e}: cannot replace {}", target.display()))
 }
 
-/// Give the replacement the permissions the original had.
+/// The folder `path` is in, as a path that can be asked about.
+///
+/// `Path::parent` gives `""` for a bare name such as `mirador.toml`. That
+/// means the working directory, but it is not a path to anything — `is_dir`
+/// says no — so `--config mirador.toml`, linking to a sibling by a bare name,
+/// was refused as a link into a folder that does not exist.
+fn folder_of(path: &Path) -> Option<&Path> {
+    path.parent().map(|parent| {
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
+    })
+}
+
+/// Symbolic links followed before a write gives up: the figure Linux allows.
+const MAX_LINKS: usize = 40;
+
+/// The file a write to `path` has to land in, past any symlinks it names.
+///
+/// Only the last component needs following. A rename resolves the directories
+/// in a path as any other call does; it is only the final name that it
+/// replaces instead.
+///
+/// Followed by hand rather than with `canonicalize`, for two reasons. A link to
+/// a file not written yet does not canonicalize — there is nothing at the end
+/// of it to find — and a dotfiles checkout made ready before the first run is
+/// exactly that. And on Windows `canonicalize` turns every path into its
+/// `\\?\` form, which would then appear in the error messages for files that
+/// were never links at all.
+///
+/// Anything that is not a link — a file, a directory, nothing at all — ends
+/// the walk where it stands, and whatever is wrong with it is left for the
+/// write to report. A chain that never ends is refused: following it for ever
+/// would hang the dashboard, and putting a file over one of its links would
+/// quietly undo whatever it was set up for.
+fn resolve(path: &Path) -> Result<PathBuf> {
+    let mut at = path.to_path_buf();
+    // One more look than there are links allowed: after the fortieth link the
+    // walk still has to see that what it reached is not a link.
+    for _ in 0..=MAX_LINKS {
+        let Ok(link) = std::fs::read_link(&at) else {
+            return Ok(at);
+        };
+        // A relative link is read from the directory the link is in.
+        at = match at.parent() {
+            Some(dir) => dir.join(link),
+            None => link,
+        };
+    }
+    anyhow::bail!("{} leads through too many symbolic links", path.display())
+}
+
+/// Open the temporary, already no wider than the original it will replace.
 ///
 /// A rename puts a *new* file in place, created with whatever the umask says —
 /// usually 0644. Somebody who ran `chmod 600` on their task list did so on
 /// purpose, and had it silently widened to world-readable the next time they
 /// added a task. Tasks and notes hold whatever the user decided to write down.
+///
+/// The mode is given to the file as it is made, and that is the point. It used
+/// to be copied on after the write and the flush, so for as long as those took
+/// the whole task list sat in a file anyone could read — and anyone who opened
+/// it then could go on reading after the mode was tightened, since permission
+/// is checked when a file is opened and never again.
+///
+/// Unix only, as [`carry_permissions_across`] is, and for the same reason.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn create_temp(tmp: &Path, original: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    // `create_new`, so the mode below is the mode the file is born with. An
+    // open of a name that already exists keeps that file's old mode — and the
+    // name can exist: a write killed before its rename leaves its temporary,
+    // and a later process can be given the same id. That leftover is ours to
+    // remove; anything else in the way is reported.
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    if let Ok(existing) = std::fs::metadata(original) {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(existing.permissions().mode() & 0o7777);
+    }
+    match options.open(tmp) {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(tmp)?;
+            options.open(tmp)
+        }
+        opened => opened,
+    }
+}
+
+/// Give the temporary exactly the permissions the original had.
+///
+/// [`create_temp`] made it with the original's mode, but through the umask,
+/// which only takes bits away, so a task list made group-writable on purpose
+/// would come back narrowed. This puts them back, and does it while the file is
+/// still empty, so it can only ever widen the file as far as the original was.
 ///
 /// Best effort: a failure here is not a reason to abandon a save that is
 /// otherwise fine, and the alternative — refusing to write — loses the data the
@@ -69,14 +200,10 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 /// Unix only. Windows inherits an ACL from the containing directory rather than
 /// carrying a mode on the file, so there is nothing of the same shape to copy.
 #[cfg_attr(not(unix), allow(unused_variables))]
-fn carry_permissions_across(from: &Path, to: &Path) {
+fn carry_permissions_across(from: &Path, to: &std::fs::File) {
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(existing) = std::fs::metadata(from) {
-            let mode = existing.permissions().mode();
-            let _ = std::fs::set_permissions(to, std::fs::Permissions::from_mode(mode));
-        }
+    if let Ok(existing) = std::fs::metadata(from) {
+        let _ = to.set_permissions(existing.permissions());
     }
 }
 
@@ -116,26 +243,27 @@ fn temp_path(path: &Path) -> std::path::PathBuf {
     path.with_file_name(name)
 }
 
-/// Record the outcome of a save where the caller cannot handle a failure.
-///
-/// The three data stores all keep the reason for the last failed save so their
-/// panel can render it. Swallowing the error is deliberate — a read-only disk
-/// must not take the dashboard down — but swallowing it *silently* is not: an
-/// edit that never reached the disk is exactly what the user needs told.
 /// A `.bak` name beside `path` that nothing is using yet.
 ///
 /// Numbered rather than overwritten, so a second reset does not destroy what
 /// the first one preserved. Lived in `config` while the config was the only
 /// thing ever set aside; it belongs here now that state and the data files use
 /// it too, because "do not lose the old file" is this module's whole job.
+///
+/// A name is taken if *anything* has it, a link included, and a link is asked
+/// about as itself. A backup can be a link — [`move_aside`] moves one as it
+/// stands — and once the file at its end was gone, `exists` followed it, found
+/// nothing, and called the name free: the next reset then copied the config
+/// through the old backup into whatever folder it pointed at.
 pub(crate) fn free_backup_path(path: &Path) -> std::path::PathBuf {
+    let taken = |candidate: &Path| std::fs::symlink_metadata(candidate).is_ok();
     let first = path.with_extension("toml.bak");
-    if !first.exists() {
+    if !taken(&first) {
         return first;
     }
     for n in 2..1000 {
         let candidate = path.with_extension(format!("toml.bak.{n}"));
-        if !candidate.exists() {
+        if !taken(&candidate) {
             return candidate;
         }
     }
@@ -151,10 +279,17 @@ pub(crate) fn free_backup_path(path: &Path) -> std::path::PathBuf {
 /// be *gone* from where mirador looks — but "gone" and "destroyed" are not the
 /// same thing, and this program does not destroy a task list. The same reason
 /// `write_atomic` exists.
+///
+/// A symlink is moved as itself, which is the one place in this module a link
+/// is not followed, and on purpose: the link is what puts the file where
+/// mirador looks, so setting the link aside is setting the file aside, and the
+/// file at the end of it is left exactly as it was. That holds for a link
+/// whose file is missing too, so the question is asked of the link and not
+/// through it: left standing, it is what the next launch would write through.
 pub fn move_aside(path: &Path) -> Result<Option<std::path::PathBuf>> {
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) => return Ok(None),
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => anyhow::bail!("could not check whether {} exists: {e}", path.display()),
     }
 
@@ -164,6 +299,12 @@ pub fn move_aside(path: &Path) -> Result<Option<std::path::PathBuf>> {
     Ok(Some(to))
 }
 
+/// Record the outcome of a save where the caller cannot handle a failure.
+///
+/// The three data stores all keep the reason for the last failed save so their
+/// panel can render it. Swallowing the error is deliberate — a read-only disk
+/// must not take the dashboard down — but swallowing it *silently* is not: an
+/// edit that never reached the disk is exactly what the user needs told.
 pub fn report(result: Result<()>, last_error: &mut Option<String>) {
     *last_error = match result {
         Ok(()) => None,
@@ -360,18 +501,23 @@ mod tests {
         );
     }
 
+    /// Every temporary still sitting in `dir`.
+    fn leftovers(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "tmp"))
+            .map(|path| path.display().to_string())
+            .collect()
+    }
+
     #[test]
     fn no_temp_file_is_left_behind() {
         let dir = TempDir::new("tidy");
         let path = dir.join("notes.toml");
         write_atomic(&path, "x").unwrap();
-        let leftovers: Vec<_> = std::fs::read_dir(&dir.0)
-            .unwrap()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|path| path.extension().is_some_and(|ext| ext == "tmp"))
-            .map(|path| path.display().to_string())
-            .collect();
-        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+        let left = leftovers(&dir.0);
+        assert!(left.is_empty(), "left behind: {left:?}");
     }
 
     #[test]
@@ -424,6 +570,254 @@ mod tests {
         assert!(
             format!("{err:#}").contains("occupied"),
             "the error must name the path: {err:#}"
+        );
+
+        // The temporary was written in full before the rename refused it, so
+        // this is the failure that leaves the most behind. A failed save is
+        // tried again on the next keystroke under a fresh name, so a leftover
+        // here is one more file beside the user's data for every key pressed
+        // while the fault lasts.
+        let left = leftovers(&dir.0);
+        assert!(left.is_empty(), "a failed save left behind: {left:?}");
+    }
+
+    /// Whether `path` is still a link rather than a file put where one was.
+    #[cfg(unix)]
+    fn is_link(path: &Path) -> bool {
+        std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+    }
+
+    /// A config or task list symlinked into a dotfiles repository or a synced
+    /// folder is an ordinary way to keep one. A rename replaces whatever has
+    /// the name, so writing to the link replaced the *link*: the first layout
+    /// change put a regular file where it had been, and the copy under version
+    /// control silently stopped hearing about anything after that.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_through_a_symlink_lands_in_the_file_it_points_at() {
+        let dir = TempDir::new("symlink");
+        let (config, dotfiles) = (dir.join("config"), dir.join("dotfiles"));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&dotfiles).unwrap();
+
+        let real = dotfiles.join("mirador.toml");
+        let link = config.join("config.toml");
+        std::fs::write(&real, "before").unwrap();
+        // Relative, as `ln -s` is usually given one: it has to be read from the
+        // link's own directory, not from wherever mirador was started.
+        std::os::unix::fs::symlink("../dotfiles/mirador.toml", &link).unwrap();
+
+        write_atomic(&link, "after").expect("saves");
+
+        assert!(is_link(&link), "the link was replaced by a regular file");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "after");
+
+        // Written beside the file it replaces, which is what keeps the rename
+        // on one file system, and gone from both directories once it landed.
+        let left = [leftovers(&config), leftovers(&dotfiles)].concat();
+        assert!(left.is_empty(), "left behind: {left:?}");
+    }
+
+    /// A link set up before the file it names exists — a dotfiles checkout
+    /// made ready ahead of the first run — is followed rather than replaced,
+    /// through as many links as there are, as any other write to it would be.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_file_not_yet_written_is_followed_rather_than_replaced() {
+        let dir = TempDir::new("dangling");
+        let real = dir.join("real.toml");
+        let (near, far) = (dir.join("near.toml"), dir.join("far.toml"));
+        std::os::unix::fs::symlink(&real, &near).unwrap();
+        std::os::unix::fs::symlink("near.toml", &far).unwrap();
+
+        write_atomic(&far, "first run").expect("saves");
+
+        assert!(is_link(&near) && is_link(&far), "a link was replaced");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "first run");
+    }
+
+    /// Two links naming each other lead nowhere. Following them for ever would
+    /// hang the dashboard on a save, and giving up by putting a regular file
+    /// over one of them would quietly undo whatever they were set up for.
+    #[cfg(unix)]
+    #[test]
+    fn a_loop_of_symlinks_is_refused_and_left_alone() {
+        let dir = TempDir::new("loop");
+        let (a, b) = (dir.join("a.toml"), dir.join("b.toml"));
+        std::os::unix::fs::symlink("b.toml", &a).unwrap();
+        std::os::unix::fs::symlink("a.toml", &b).unwrap();
+
+        let err = write_atomic(&a, "x").expect_err("there is nowhere to write");
+        assert!(
+            format!("{err:#}").contains("a.toml"),
+            "the error must name the path: {err:#}"
+        );
+        assert!(is_link(&a) && is_link(&b), "a link was replaced");
+        let left = leftovers(&dir.0);
+        assert!(left.is_empty(), "left behind: {left:?}");
+    }
+
+    /// What the umask does to a file made with the default 0666.
+    #[cfg(unix)]
+    fn umask_result(dir: &TempDir) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        let probe = dir.join("probe");
+        let mode = std::fs::File::create(&probe)
+            .and_then(|f| f.metadata())
+            .map(|m| m.permissions().mode() & 0o777)
+            .unwrap();
+        let _ = std::fs::remove_file(&probe);
+        mode
+    }
+
+    /// Carrying the mode across *after* the write left the whole task list in
+    /// a file the umask had made world-readable for as long as the write and
+    /// the flush took — and anyone who opened it then could go on reading it
+    /// after the mode was tightened, because permission is checked when a
+    /// file is opened and not again. The temporary has to be born private.
+    ///
+    /// Asserted as "no bit the original lacks", and skipped where the umask
+    /// already makes a plain `File::create` that private: there the test could
+    /// not tell the fix from its absence, and saying so beats passing.
+    #[cfg(unix)]
+    #[test]
+    fn the_temporary_is_born_as_private_as_the_original() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("born");
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, "before").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if umask_result(&dir) & !0o600 == 0 {
+            eprintln!("skipped: this umask already creates files 0600 or tighter");
+            return;
+        }
+
+        // Straight from the creation, before anything is written into it or
+        // done to it afterwards: the mode it has here is the mode it had when
+        // the first byte of the task list arrived.
+        let tmp = temp_path(&path);
+        let file = create_temp(&tmp, &path).expect("creates");
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(mode & !0o600, 0, "the temporary was created {mode:o}");
+    }
+
+    /// Created with the original's mode, the temporary is still put through
+    /// the umask, which can only take bits away. A file made wider on purpose
+    /// has to stay that way, not quietly narrow. 0666 is used because every
+    /// umask but 000 strips something from it, so the restore always has work
+    /// to do — a 0664 file passed without it wherever the umask was 002.
+    #[cfg(unix)]
+    #[test]
+    fn a_permission_the_umask_would_remove_is_carried_across_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("umask");
+        if umask_result(&dir) == 0o666 {
+            eprintln!("skipped: a umask of 000 strips nothing to restore");
+            return;
+        }
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, "before").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+        write_atomic(&path, "after").expect("saves");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o666, "the file came back {mode:o}");
+    }
+
+    /// A link into a folder that does not exist yet is a file that has not
+    /// arrived — a sync folder on a new machine. Making the folder would put a
+    /// default file where the real one is about to land.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_a_missing_folder_is_refused_rather_than_built() {
+        let dir = TempDir::new("missing-folder");
+        let link = dir.join("config.toml");
+        std::os::unix::fs::symlink("Sync/not-yet/mirador.toml", &link).unwrap();
+
+        let err = write_atomic(&link, "x").expect_err("must refuse");
+        assert!(format!("{err:#}").contains("does not exist"), "{err:#}");
+        assert!(!dir.join("Sync").exists(), "the folder was created");
+        assert!(is_link(&link), "the link was replaced");
+    }
+
+    /// A temporary left by a write that was killed before its rename, at the
+    /// name a later write is given, is removed and remade rather than reopened
+    /// with whatever mode it had.
+    #[cfg(unix)]
+    #[test]
+    fn a_leftover_temporary_is_remade_with_the_originals_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("leftover");
+        let path = dir.join("todos.toml");
+        std::fs::write(&path, "before").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let tmp = dir.join("leftover.tmp");
+        std::fs::write(&tmp, "stale").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let file = create_temp(&tmp, &path).expect("creates");
+        let mode = file.metadata().unwrap().permissions().mode() & 0o777;
+        let len = file.metadata().unwrap().len();
+        drop(file);
+        assert_eq!(
+            (mode & !0o600, len),
+            (0, 0),
+            "reopened at {mode:o}, {len} bytes"
+        );
+    }
+
+    /// `--config mirador.toml` is a bare name, and `Path::parent` calls the
+    /// folder it is in `""` — which is the working directory, but is not a
+    /// path to anything, so `is_dir` says no. A link given that way, to a
+    /// sibling named the same way, was refused as having no folder at all.
+    #[test]
+    fn a_bare_name_is_in_the_working_directory() {
+        let folder = folder_of(Path::new("a"));
+        assert_eq!(folder, Some(Path::new(".")));
+        assert!(
+            folder.is_some_and(Path::is_dir),
+            "{folder:?} is not a folder"
+        );
+        assert_eq!(folder_of(Path::new("cfg/a")), Some(Path::new("cfg")));
+    }
+
+    /// A backup can be a link: a reset moves a linked file aside as the link.
+    /// Once the file it points at was gone, `exists` followed the link, found
+    /// nothing, and called the name free — so the next reset copied the config
+    /// through it, into the reader's dotfiles or onto an error.
+    #[cfg(unix)]
+    #[test]
+    fn a_backup_that_is_a_dangling_link_is_not_a_free_name() {
+        let dir = TempDir::new("bak-dangling");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "current").unwrap();
+        std::os::unix::fs::symlink("dotfiles/mirador.toml", dir.join("config.toml.bak")).unwrap();
+
+        assert_eq!(free_backup_path(&path), dir.join("config.toml.bak.2"));
+    }
+
+    /// A link whose file is missing is still what puts that file where
+    /// mirador looks: left standing, the next launch writes through it. A
+    /// factory reset has to set it aside like anything else it finds there.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_is_moved_aside_as_itself() {
+        let dir = TempDir::new("aside-dangling");
+        let path = dir.join("todos.toml");
+        std::os::unix::fs::symlink("Sync/todos.toml", &path).unwrap();
+
+        let moved = move_aside(&path)
+            .expect("no error")
+            .expect("the link was there to move");
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "the link is still where mirador looks"
+        );
+        assert_eq!(
+            std::fs::read_link(&moved).unwrap(),
+            Path::new("Sync/todos.toml")
         );
     }
 }

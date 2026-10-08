@@ -251,6 +251,20 @@ impl Config {
     /// defaults written by the first, which is the one outcome this whole
     /// function exists to prevent.
     pub fn reset(path: &Path) -> Result<Option<PathBuf>> {
+        // A config that is a link — into a dotfiles repository, say — is moved
+        // aside as itself, the way a factory reset moves it: the backup is the
+        // link, the file it points at is left exactly as it was, and the
+        // defaults go into a new file of their own. Copying through the link
+        // and writing the defaults back through it put shipped defaults into
+        // the reader's repository, with their curated copy outside it.
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            // A link whose file is missing is moved too, so the defaults never
+            // go through it.
+            let to = crate::store::move_aside(path)?;
+            crate::store::write_atomic(path, DEFAULT_CONFIG)
+                .with_context(|| format!("writing default config to {}", path.display()))?;
+            return Ok(to);
+        }
         let backup = match path.try_exists() {
             Ok(true) => {
                 let to = crate::store::free_backup_path(path);
@@ -606,6 +620,74 @@ fn expand_tilde(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    /// A config that is a link into a dotfiles repository is reset by moving
+    /// the link aside, not by writing the defaults through it: the curated file
+    /// stays as it was, the backup is the link to it, and the defaults land in a
+    /// file of their own.
+    #[cfg(unix)]
+    #[test]
+    fn a_reset_leaves_the_file_a_linked_config_points_at_alone() {
+        let dir = std::env::temp_dir().join(format!("mirador-reset-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
+        std::fs::create_dir_all(dir.join("cfg")).unwrap();
+        std::fs::write(dir.join("dotfiles/mirador.toml"), "# my curated config\n").unwrap();
+        let path = dir.join("cfg/config.toml");
+        std::os::unix::fs::symlink("../dotfiles/mirador.toml", &path).unwrap();
+
+        let backup = Config::reset(&path).expect("resets").expect("a backup");
+
+        let curated = std::fs::read_to_string(dir.join("dotfiles/mirador.toml")).unwrap();
+        assert_eq!(
+            curated, "# my curated config\n",
+            "the linked file was overwritten"
+        );
+        assert!(
+            std::fs::symlink_metadata(&backup)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same, for a link whose file has gone: the repository is there but
+    /// the curated file was moved or deleted. The link is set aside all the
+    /// same, so the defaults land in a file of their own rather than being
+    /// written through it into the repository.
+    #[cfg(unix)]
+    #[test]
+    fn a_reset_sets_aside_a_linked_config_whose_file_is_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("mirador-reset-dangling-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("dotfiles")).unwrap();
+        std::fs::create_dir_all(dir.join("cfg")).unwrap();
+        let path = dir.join("cfg/config.toml");
+        std::os::unix::fs::symlink("../dotfiles/mirador.toml", &path).unwrap();
+
+        let backup = Config::reset(&path).expect("resets");
+
+        assert!(
+            !dir.join("dotfiles/mirador.toml").exists(),
+            "the defaults were written through the link"
+        );
+        let backup = backup.expect("the link was set aside");
+        assert_eq!(
+            std::fs::read_link(&backup).unwrap(),
+            Path::new("../dotfiles/mirador.toml")
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DEFAULT_CONFIG);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     /// The list a factory reset works from. What is *absent* is the load-bearing
