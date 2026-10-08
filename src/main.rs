@@ -561,6 +561,12 @@ fn run() -> Result<()> {
     let _ = execute!(std::io::stdout(), DisableBracketedPaste);
     let _ = execute!(std::io::stdout(), DisableFocusChange);
     ratatui::restore();
+    // Said here rather than on the bar because the bar has gone: the last
+    // write happens on the way out. Still a clean quit, so the exit status
+    // stays zero — the config is as it was, and only the change is lost.
+    if let Some(report) = app.exit_report() {
+        eprintln!("{report}");
+    }
     result
 }
 

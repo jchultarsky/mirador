@@ -289,9 +289,19 @@ pub struct App {
     last_resize: Option<Instant>,
     /// Whether the layout has been changed since it was last written.
     layout_dirty: bool,
-    /// Why the last layout write failed, if it did. Shown in the picker: a
-    /// change you made that silently did not persist is the worst outcome here.
+    /// Why the last layout write failed, if it did. Shown in the picker and
+    /// on the bar: a change you made that silently did not persist is the
+    /// worst outcome here. Set by [`App::write_layout`] and by nothing else,
+    /// so the alert that reads it is true whenever it is lit.
     layout_error: Option<String>,
+    /// Why the last layout change was refused, if it was — the last panel,
+    /// or a layout the panels would not build from, already put back.
+    /// Nothing changed and nothing is unsaved, so it is said in the picker
+    /// and not on the bar, and it goes when the picker closes. It used to
+    /// share `layout_error`, which put "The layout could not be saved" on
+    /// the bar for a save nobody attempted, until some later layout change
+    /// happened to succeed.
+    layout_notice: Option<String>,
     /// Where to write remembered preferences, once someone asks for that.
     /// `None` in tests, which is what keeps them off a real user's file.
     state_path: Option<PathBuf>,
@@ -367,6 +377,7 @@ impl App {
             last_resize: None,
             layout_dirty: false,
             layout_error: None,
+            layout_notice: None,
             state_path: None,
             saved_state: UiState::default(),
             baseline: UiState::default(),
@@ -594,29 +605,47 @@ impl App {
 
             dirty |= self.tick_panels();
             dirty |= self.collect_events();
-
-            // Resizes are batched rather than written per keystroke —
-            // `Ctrl+arrow` auto-repeats, and rewriting the config on every
-            // repeat would be absurd — but they are not batched all the way to
-            // exit any more. Closing the terminal window is a normal way to
-            // stop a dashboard you leave open all day, and it never reaches the
-            // code below: the process is signalled and the pending resize is
-            // gone. This settles once the repeats stop, which is the earliest
-            // moment the write is not wasted.
-            //
-            // Deliberately not a signal handler. The only thing at risk is this
-            // one write, `SIGKILL` cannot be caught anyway, and the terminal
-            // does not need restoring when the terminal is what went away.
-            if self.layout_dirty
-                && self
-                    .last_resize
-                    .is_some_and(|at| at.elapsed() >= RESIZE_SETTLE)
-            {
-                self.write_layout();
-                self.last_resize = None;
-            }
+            self.write_settled_resize();
         }
 
+        self.finish();
+        Ok(())
+    }
+
+    /// Write a resize once the key has stopped repeating.
+    ///
+    /// Resizes are batched rather than written per keystroke — `Ctrl+arrow`
+    /// auto-repeats, and rewriting the config on every repeat would be absurd
+    /// — but they are not batched all the way to exit any more. Closing the
+    /// terminal window is a normal way to stop a dashboard you leave open all
+    /// day, and it never reaches [`App::finish`]: the process is signalled and
+    /// the pending resize is gone. This settles once the repeats stop, which
+    /// is the earliest moment the write is not wasted.
+    ///
+    /// Deliberately not a signal handler. The only thing at risk is this one
+    /// write, `SIGKILL` cannot be caught anyway, and the terminal does not
+    /// need restoring when the terminal is what went away.
+    ///
+    /// Not while arrange mode is open. A resize made inside the mode is part
+    /// of the arrangement, which Keep writes and Esc puts back. Settling it
+    /// anyway wrote the file behind the mode's back, so Esc restored the
+    /// screen and left the config resized for the next launch. A resize made
+    /// before the mode opened is still dirty after Esc and settles here once
+    /// the mode has closed.
+    fn write_settled_resize(&mut self) {
+        if self.arranging.is_none()
+            && self.layout_dirty
+            && self
+                .last_resize
+                .is_some_and(|at| at.elapsed() >= RESIZE_SETTLE)
+        {
+            self.write_layout();
+            self.last_resize = None;
+        }
+    }
+
+    /// Shut the panels down and write whatever is still unwritten.
+    fn finish(&mut self) {
         for slot in &mut self.slots {
             slot.panel.shutdown();
         }
@@ -624,7 +653,6 @@ impl App {
         // key — and because Ctrl+C reaches here too.
         self.persist_preferences();
         self.write_layout();
-        Ok(())
     }
 
     /// Remember preferences to `path` from now on.
@@ -657,7 +685,16 @@ impl App {
         // The theme is the shell's, not any panel's, so it is reported here —
         // but reported the same way, unconditionally, so invariant 17 holds for
         // it too and picking your config's own theme back retracts the entry.
-        current.theme.clone_from(&self.config.theme.name);
+        //
+        // While the theme picker is open the live theme is only a preview, so
+        // the one reported is the theme it opened on. Otherwise every arrow
+        // key wrote the file, and a dashboard closed mid-browse came back in
+        // a theme nobody chose.
+        let committed = self
+            .theme_picker
+            .as_ref()
+            .map_or(&self.config.theme, |(_, original)| original);
+        current.theme.clone_from(&committed.name);
         current.only_changes_from(&self.baseline)
     }
 
@@ -905,6 +942,16 @@ impl App {
     /// printable key stream they did before bracketed paste was enabled; it is
     /// dispatched straight to the capturing panel so pasted `q` cannot become
     /// a global quit command.
+    ///
+    /// The veto is asked again before every key, and the paste ends when it
+    /// lapses. A newline is Enter, and Enter commits a one-line form: what
+    /// follows it would otherwise reach the panel as commands, which in the
+    /// task list means a second line beginning `a` opens another task and
+    /// one beginning `dy` deletes the first. The rest is dropped instead.
+    ///
+    /// A delete confirmation captures input too, and nothing here can tell
+    /// it from a form, so the panels that ask one claim a paste themselves
+    /// and drop it: typed in, a paste beginning with `y` was the answer.
     fn handle_paste(&mut self, text: &str) -> bool {
         self.show_update_hint = false;
         self.watch.mark_seen();
@@ -927,13 +974,12 @@ impl App {
         if slot.panel.handle_paste(text) == crate::panel::KeyOutcome::Consumed {
             return true;
         }
-        if !slot.panel.captures_input() {
-            return false;
-        }
-
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut used = false;
         for character in text.chars() {
+            if !slot.panel.captures_input() {
+                break;
+            }
             let code = match character {
                 '\n' => KeyCode::Enter,
                 '\t' => KeyCode::Tab,
@@ -1083,7 +1129,6 @@ impl App {
                 // better to fall back to.
                 let _ = self.rebuild_panels();
                 self.layout_dirty = before.was_dirty;
-                self.layout_error = None;
             }
             return;
         }
@@ -1144,21 +1189,23 @@ impl App {
 
         // Focus follows the panel by name, so the moved panel keeps the
         // highlight wherever it lands and nothing here has to chase it.
-        if let Err(e) = self.rebuild_panels() {
+        // A move builds no new panel, and only building one can fail, so this
+        // is a guard rather than a path: the layout is put back, and arrange
+        // mode, which draws no picker, has nowhere to say more.
+        if self.rebuild_panels().is_err() {
             self.config.layout = before;
             let _ = self.rebuild_panels();
-            self.layout_error = Some(format!("{e:#}"));
             return;
         }
-        self.layout_error = None;
         self.layout_dirty = true;
     }
 
     /// Move the row the focused panel sits in, up or down.
     ///
     /// Shares `move_focused`'s recovery: a layout the panels cannot be rebuilt
-    /// from is put back and reported, rather than leaving the dashboard in a
-    /// state the config cannot describe.
+    /// from is put back, silently, rather than leaving the dashboard in a
+    /// state the config cannot describe. See the comment in the body for why
+    /// there is nothing to say.
     fn move_focused_row(&mut self, down: bool) {
         let Some(&(row, _)) = self.positions.get(self.focus) else {
             return;
@@ -1171,13 +1218,14 @@ impl App {
         // Focus follows the panel by name, as it does for a panel move, so the
         // highlight stays on whatever the reader was moving even though every
         // panel in the row changed its flat index.
-        if let Err(e) = self.rebuild_panels() {
+        // A move builds no new panel, and only building one can fail, so this
+        // is a guard rather than a path: the layout is put back, and arrange
+        // mode, which draws no picker, has nowhere to say more.
+        if self.rebuild_panels().is_err() {
             self.config.layout = before;
             let _ = self.rebuild_panels();
-            self.layout_error = Some(format!("{e:#}"));
             return;
         }
-        self.layout_error = None;
         self.layout_dirty = true;
     }
 
@@ -1191,6 +1239,7 @@ impl App {
             crate::picker::Action::Toggle(name) => self.toggle_widget(&name),
             crate::picker::Action::Close => {
                 self.picker = None;
+                self.layout_notice = None;
                 // Written on close rather than on every toggle: someone trying
                 // three arrangements should cost one write, not three, and the
                 // dialog is a natural commit point.
@@ -1242,7 +1291,9 @@ impl App {
                 self.theme_picker = None;
                 // The live theme is already the chosen one, so there is nothing
                 // to apply — only to record. Written here rather than on every
-                // cursor move, so browsing the list costs no writes.
+                // cursor move, so browsing the list costs no writes: while the
+                // dialog is open, `collect_preferences` reports the theme it
+                // opened on, and closing it is what lets this one through.
                 self.persist_preferences();
             }
             crate::theme_picker::Action::Cancel => {
@@ -1273,7 +1324,7 @@ impl App {
             if !self.config.layout.remove_widget(widget) {
                 // The last panel. An empty layout is rejected at startup, so
                 // allowing this would write a config that cannot be opened.
-                self.layout_error = Some("at least one panel has to stay".into());
+                self.layout_notice = Some("at least one panel has to stay".into());
                 return;
             }
         } else {
@@ -1285,11 +1336,11 @@ impl App {
             // the toggle, not to leave the dashboard in pieces.
             self.config.layout = before;
             let _ = self.rebuild_panels();
-            self.layout_error = Some(format!("{e:#}"));
+            self.layout_notice = Some(format!("{e:#}"));
             return;
         }
 
-        self.layout_error = None;
+        self.layout_notice = None;
         self.layout_dirty = true;
     }
 
@@ -1325,6 +1376,25 @@ impl App {
             }
             Err(e) => self.layout_error = Some(format!("{e:#}")),
         }
+    }
+
+    /// Why the layout could not be written, if the last attempt failed.
+    ///
+    /// For `main`, after [`App::run`] has returned and the terminal is back.
+    /// The write on the way out is the last chance to keep a resize made a
+    /// moment before quitting, and when it fails there is no status bar left
+    /// to say so. Dropping it there was the one place [`App::write_layout`]'s
+    /// promise not to swallow a failure did not hold.
+    pub fn unsaved_layout(&self) -> Option<&str> {
+        self.layout_error.as_deref()
+    }
+
+    /// The line `main` prints after restoring the terminal, if a layout change
+    /// was lost on the way out. Built here so its wording is tested; `main`
+    /// only prints it.
+    pub fn exit_report(&self) -> Option<String> {
+        self.unsaved_layout()
+            .map(|why| format!("mirador: the layout could not be saved — {why}"))
     }
 
     /// Write layout changes to `path` from now on.
@@ -1510,6 +1580,14 @@ impl App {
         if self.show_help {
             self.show_help = false;
             return true;
+        }
+
+        // A shell dialog owns the keyboard while it is open, and the mouse
+        // with it. None of them reads the pointer, so the event goes nowhere:
+        // offered to the panels it fell through the dialog, and a click moved
+        // focus to a panel beneath and selected a row nobody could see.
+        if self.picker.is_some() || self.theme_picker.is_some() || self.keymap_dialog.is_some() {
+            return had_hint;
         }
 
         // A panel in a text-entry or modal state gets the same absolute veto
@@ -1736,7 +1814,10 @@ impl App {
                 area,
                 &self.config.theme,
                 |name| self.config.layout.places(name),
-                self.layout_error.as_deref(),
+                // What was just refused, or else why the last write failed.
+                self.layout_notice
+                    .as_deref()
+                    .or(self.layout_error.as_deref()),
             );
         }
     }
@@ -4561,7 +4642,320 @@ mod tests {
              config that cannot be opened again"
         );
         assert_eq!(app.slots.len(), 1);
-        assert!(app.layout_error.is_some(), "and it says why");
+        let rows = drawn(&mut app, 120, 30).join("\n");
+        assert!(
+            rows.contains("at least one panel has to stay"),
+            "and the picker says why:\n{rows}"
+        );
+
+        // A refusal changes nothing and leaves nothing unsaved, so it belongs
+        // to the dialog and goes with it. On the bar it read "The layout could
+        // not be saved", which was false, and stayed lit until some later
+        // layout change happened to succeed.
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.picker.is_none());
+        assert!(
+            app.alert().is_none(),
+            "a refusal is not a failed save: {:?}",
+            app.alert().map(|alert| alert.text)
+        );
+        let bar = status_bar_at(&mut app, 120);
+        assert!(!bar.contains('⚠'), "and the bar is calm: {bar}");
+    }
+
+    /// A paste into a one-line form arrives as keys, and the first newline
+    /// commits the form. Whatever follows it is no longer typing: it used to
+    /// reach the task list as commands, so a second line beginning with `a`
+    /// opened a new task, a space marked one done and `dy` deleted it.
+    #[test]
+    fn a_paste_stops_at_the_newline_that_closes_a_one_line_form() {
+        let dir = std::env::temp_dir().join(format!("mirador-paste-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("todos.toml");
+        // Empty rather than absent, so the store does not seed examples.
+        std::fs::write(&file, "").unwrap();
+        let mut config = config_with(&["todo"]);
+        config.todo.file = Some(file.clone());
+        let mut app = App::new(config).unwrap();
+
+        app.handle_key(key(KeyCode::Char('a')));
+        assert!(app.focus_captures_input(), "the task form is open");
+        assert!(app.handle_paste("Buy milk\nand eggs\n"));
+
+        let titles: Vec<String> = crate::task::TaskStore::load(&file)
+            .unwrap()
+            .tasks()
+            .iter()
+            .map(|task| task.title.clone())
+            .collect();
+        assert_eq!(
+            titles,
+            ["Buy milk"],
+            "the first line is the task; the rest is not a command"
+        );
+        assert!(
+            !app.focus_captures_input(),
+            "and the list is back, not a second form"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A paste is text, and a delete confirmation takes no text. The shell
+    /// types a paste no panel claims into a capturing one key by key, so a
+    /// paste beginning with `y` answered the question it landed on: `d` on a
+    /// task, then a paste of "yesterday's notes", and the task was gone —
+    /// the one action in these panels with no undo. Each of the three that
+    /// ask now claims the paste and does nothing with it.
+    #[test]
+    fn a_paste_never_answers_a_delete_confirmation() {
+        /// Ask to delete the one item, paste `y`, and check it is still there
+        /// and the question is still waiting for a key.
+        fn ask_then_paste(app: &mut App, which: &str, items: &dyn Fn() -> usize) {
+            assert_eq!(items(), 1, "{which}: one item to begin with");
+            app.handle_key(key(KeyCode::Char('d')));
+            assert!(app.focus_captures_input(), "{which}: the question is open");
+            app.handle_paste("y");
+            assert_eq!(items(), 1, "{which}: a pasted `y` deleted the item");
+            assert!(
+                app.focus_captures_input(),
+                "{which}: and the question is still waiting for a key"
+            );
+            app.handle_key(key(KeyCode::Char('n')));
+            assert!(!app.focus_captures_input(), "{which}: `n` still answers it");
+            assert_eq!(items(), 1, "{which}: and keeps the item");
+        }
+        fn type_in(app: &mut App, text: &str) {
+            app.handle_key(key(KeyCode::Char('a')));
+            for c in text.chars() {
+                app.handle_key(key(KeyCode::Char(c)));
+            }
+            app.handle_key(key(KeyCode::Enter));
+        }
+
+        let dir = std::env::temp_dir().join(format!("mirador-confirm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Empty rather than absent, so neither store seeds its examples.
+        let tasks = dir.join("todos.toml");
+        let notes = dir.join("notes.toml");
+        std::fs::write(&tasks, "").unwrap();
+        std::fs::write(&notes, "").unwrap();
+        let mut config = config_with(&["todo"]);
+        config.todo.file = Some(tasks.clone());
+        let mut app = App::new(config).unwrap();
+        type_in(&mut app, "Doomed");
+        ask_then_paste(&mut app, "tasks", &|| {
+            crate::task::TaskStore::load(&tasks).unwrap().tasks().len()
+        });
+
+        let mut config = config_with(&["notes"]);
+        config.notes.file = Some(notes.clone());
+        let mut app = App::new(config).unwrap();
+        type_in(&mut app, "Doomed");
+        ask_then_paste(&mut app, "notes", &|| {
+            crate::note::NoteStore::load(&notes).unwrap().notes().len()
+        });
+
+        // `build` would reach Yahoo, so the stocks panel goes in by hand, on
+        // a canned source, over a calculator that reads nothing.
+        let watchlist = dir.join("watchlist.toml");
+        std::fs::write(&watchlist, "symbols = [\"AAPL\"]\n").unwrap();
+        let mut app = App::new(config_with(&["calculator"])).unwrap();
+        app.slots[0].panel = Box::new(
+            crate::widgets::stocks::StocksPanel::offline(
+                crate::config::StocksConfig {
+                    refresh_secs: 86_400,
+                    ..crate::config::StocksConfig::default()
+                },
+                watchlist.clone(),
+            )
+            .unwrap(),
+        );
+        ask_then_paste(&mut app, "stocks", &|| {
+            crate::quote::Watchlist::load(&watchlist, &[])
+                .unwrap()
+                .symbols()
+                .len()
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Previewing is not choosing. Every arrow key in the theme picker used to
+    /// write `state.toml`, so the comment on Accept was untrue and a dashboard
+    /// killed mid-browse came back in a theme nobody picked.
+    #[test]
+    fn browsing_themes_writes_nothing_until_one_is_chosen() {
+        let dir = std::env::temp_dir().join(format!("mirador-browse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        let config = config_with(&["clocks"]);
+        let baseline = crate::state::UiState::from_config(&config);
+        let mut app = App::new(config).unwrap();
+        app.remember_preferences_at(path.clone(), crate::state::UiState::default(), baseline);
+
+        app.handle_key(key(KeyCode::Char('t')));
+        let mut previewed = Vec::new();
+        for _ in 0..2 {
+            app.handle_key(key(KeyCode::Down));
+            // What the run loop does after every key.
+            app.persist_preferences();
+            previewed.push(app.config.theme.name.clone());
+        }
+        assert!(
+            previewed.iter().all(Option::is_some) && previewed[0] != previewed[1],
+            "two different themes were on screen: {previewed:?}"
+        );
+        assert!(
+            !path.exists(),
+            "browsing wrote {:?}",
+            std::fs::read_to_string(&path).unwrap_or_default()
+        );
+
+        app.handle_key(key(KeyCode::Enter));
+        app.persist_preferences();
+        let chosen = previewed[1].clone().unwrap();
+        let written = std::fs::read_to_string(&path).expect("Enter records the choice");
+        assert!(
+            written.contains(&chosen),
+            "the theme chosen is the one written: {written}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Arrange mode is a commit point: Keep writes and Esc puts everything
+    /// back. A resize inside it used to start the settle timer anyway, so a
+    /// pause before Esc left the file holding widths the screen had undone.
+    #[test]
+    fn a_resize_inside_arrange_mode_waits_for_the_mode_to_close() {
+        let dir = std::env::temp_dir().join(format!("mirador-settle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "[layout]\nrows = [\n  { height = 1, panels = [\n    { widget = \"clocks\",   width = 50 },\n    { widget = \"calendar\", width = 50 },\n  ] },\n]\n";
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        let mut app = App::new(toml::from_str(text).unwrap()).unwrap();
+        app.write_layout_to(path.clone());
+        let settled = || Instant::now().checked_sub(RESIZE_SETTLE * 2);
+
+        app.handle_key(key(KeyCode::Char('m')));
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        assert_ne!(widths(&app), [50, 50], "the resize happened");
+        app.last_resize = settled();
+        app.write_settled_resize();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "a resize inside the mode is part of the arrangement"
+        );
+
+        app.handle_key(key(KeyCode::Esc));
+        app.write_settled_resize();
+        assert_eq!(widths(&app), [50, 50], "Esc put the widths back");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "and the file never left them"
+        );
+
+        // The control: outside the mode the same resize settles to the file,
+        // so the silence above is the guard and not a timer that never fires.
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.last_resize = settled();
+        app.write_settled_resize();
+        assert_ne!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "outside the mode a settled resize is written"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The write on the way out is the last chance to keep a resize made just
+    /// before `q`. When it fails there is no bar left to show it on, so it is
+    /// handed back for `main` to print once the terminal is restored.
+    #[test]
+    fn a_layout_that_cannot_be_written_on_the_way_out_is_handed_back() {
+        let dir = std::env::temp_dir().join(format!("mirador-exit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Loads, but `layout_edit` only rewrites the `rows = [ … ]` form.
+        let sections = "[[layout.rows]]\nheight = 1\n[[layout.rows.panels]]\nwidget = \"clocks\"\nwidth = 50\n[[layout.rows.panels]]\nwidget = \"calendar\"\nwidth = 50\n";
+        let path = dir.join("config.toml");
+        std::fs::write(&path, sections).unwrap();
+        let mut app = App::new(toml::from_str(sections).unwrap()).unwrap();
+        app.write_layout_to(path.clone());
+
+        assert_eq!(app.unsaved_layout(), None, "nothing to report yet");
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.finish();
+
+        let report = app
+            .exit_report()
+            .expect("the failed write on the way out is not dropped");
+        assert!(
+            report.starts_with("mirador: the layout could not be saved — ")
+                && report.contains("rows = ["),
+            "it says what was lost and why: {report}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), sections);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Keys go to an open shell dialog and nowhere else, and so does the
+    /// mouse now. A click under the panel picker used to move focus to the
+    /// panel beneath and select a row nobody could see, and the wheel
+    /// scrolled lists behind the key map.
+    #[test]
+    fn an_open_dialog_keeps_the_mouse_from_the_panels_beneath_it() {
+        use ratatui::crossterm::event::MouseButton;
+        // Its name, how to open it, and how to tell it is still open.
+        type Dialog = (&'static str, fn(&mut App), fn(&App) -> bool);
+
+        let (config, _dir) = two_lists("dialog");
+        let mut app = App::new(config).unwrap();
+        drawn(&mut app, 120, 30);
+        let todo = app.slots[1].area.expect("the tasks panel was drawn");
+        let click = at(
+            MouseEventKind::Down(MouseButton::Left),
+            todo.x + 6,
+            todo.y + 4,
+        );
+        let wheel = at(MouseEventKind::ScrollDown, todo.x + 6, todo.y + 4);
+
+        let dialogs: [Dialog; 3] = [
+            (
+                "panel picker",
+                |app| app.handle_key(key(KeyCode::Char('w'))),
+                |app| app.picker.is_some(),
+            ),
+            (
+                "theme picker",
+                |app| app.handle_key(key(KeyCode::Char('t'))),
+                |app| app.theme_picker.is_some(),
+            ),
+            ("key map", open_key_map, |app| app.keymap_dialog.is_some()),
+        ];
+        for (name, open, is_open) in dialogs {
+            open(&mut app);
+            assert!(is_open(&app), "the {name} opened");
+            assert!(
+                !app.handle_mouse(wheel),
+                "the wheel reached the list under the {name}"
+            );
+            app.handle_mouse(click);
+            assert_eq!(app.focus, 0, "a click under the {name} moved focus");
+            assert!(is_open(&app), "and the {name} is still open");
+            app.handle_key(key(KeyCode::Esc));
+            assert!(!is_open(&app), "Esc closed the {name}");
+        }
+
+        // The control: with nothing open, the same click lands.
+        app.handle_mouse(click);
+        assert_eq!(app.focus, 1, "without a dialog the click focuses the list");
     }
 
     #[test]

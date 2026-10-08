@@ -1108,6 +1108,12 @@ impl Panel for NotesPanel {
 
     fn handle_paste(&mut self, text: &str) -> KeyOutcome {
         self.status = None;
+        // Claimed and dropped at the delete confirmation. A paste nobody
+        // claims is typed in key by key, and one beginning with `y` would
+        // answer the question and delete the note.
+        if matches!(self.mode, Mode::ConfirmDelete { .. }) {
+            return KeyOutcome::Consumed;
+        }
         let Mode::Edit(form) = &mut self.mode else {
             return KeyOutcome::Ignored;
         };

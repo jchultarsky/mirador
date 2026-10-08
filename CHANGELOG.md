@@ -64,6 +64,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those figures, and nothing ever did: the readout takes its colour from the
   graph's ramp, so it warms with the load instead. A config that sets them
   still loads. A new config leaves them out.
+- **A paste of several lines into a one-line form adds one task and nothing
+  else.** A newline in a paste is Enter, and Enter saves the task, after
+  which the rest of the paste reached the task list as commands: pasting
+  `Buy milk` and `and eggs` added "Buy milk", then `a` opened a new task and
+  "nd eggs" became a second one, and a line beginning with a space or `dy`
+  would have marked a task done or deleted it. The paste now stops where the
+  form closes. The stocks panel's symbol prompt had the same fault.
+- **A paste no longer answers a delete confirmation.** With a task, a note
+  or a symbol waiting on `y` to be deleted, a paste was typed in as keys,
+  so one beginning with `y` deleted it. The question now ignores a paste and
+  waits for a key.
+- **Browsing themes no longer remembers them.** Every arrow key in the `t`
+  picker wrote the theme under the cursor to `state.toml`, so a dashboard
+  closed mid-browse opened next time in a theme nobody chose. Only Enter
+  records one now.
+- **Esc in arrange mode undoes a resize made in it.** A `Ctrl+arrow` resize
+  inside the mode was written to the config three quarters of a second
+  later, so Esc put the widths back on screen and the next launch brought
+  the resize back. Resizes made in the mode are now kept or discarded with
+  the rest of the arrangement.
+- **Refusing to switch off the last panel no longer says the layout could
+  not be saved.** The refusal was reported as a failed save on the status
+  bar, where it stayed after the picker closed until some later layout
+  change succeeded. It is said in the picker, and goes when the picker
+  does.
+- **A layout change that cannot be saved as mirador quits is reported.**
+  A resize made just before `q` is written on the way out, and when that
+  write failed nothing said so. mirador now prints why once the terminal is
+  restored.
+- **Clicks and the mouse wheel stay out of panels behind an open dialog.**
+  With the panel picker, the theme picker or the key map open, a click
+  moved focus to the panel beneath it and selected a row nobody could see,
+  and the wheel scrolled lists behind it. The dialogs take the mouse the
+  way they take the keyboard.
 
 ## [1.19.2] - 2026-10-07
 
