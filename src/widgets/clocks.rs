@@ -400,12 +400,17 @@ impl ClocksPanel {
                     Some(index) => self.zones.edit(index, label, value),
                     None => self.zones.add(label, value),
                 };
-                if applied {
-                    self.asking = None;
-                    self.editing = None;
-                    self.reload();
-                } else if let Some(prompt) = self.asking.as_mut() {
-                    prompt.reject("that clock is already on the panel");
+                match applied {
+                    Ok(()) => {
+                        self.asking = None;
+                        self.editing = None;
+                        self.reload();
+                    }
+                    Err(refused) => {
+                        if let Some(prompt) = self.asking.as_mut() {
+                            prompt.reject(refused.why());
+                        }
+                    }
                 }
             }
             crate::prompt::Outcome::Submitted(answer) => {
@@ -423,8 +428,8 @@ impl ClocksPanel {
                     Some(index) => self.zones.edit(index, label, timezone),
                     None => self.zones.add(label, timezone),
                 };
-                if !applied {
-                    prompt.reject("that clock is already on the panel");
+                if let Err(refused) = applied {
+                    prompt.reject(refused.why());
                     return;
                 }
                 self.asking = None;
@@ -2138,6 +2143,62 @@ mod tests {
 
         assert!(panel.asking.is_some(), "the prompt stays open to be fixed");
         assert_eq!(labels(&panel), before, "and nothing was added");
+    }
+
+    /// `Label = Zone` with nothing after the `=` names no zone, and the panel
+    /// said "that clock is already on the panel": `Zones` refused a blank
+    /// zone and a repeated one with the same `false`, and the prompt could
+    /// only phrase it one way. Both dialogs, because both took the answer.
+    #[test]
+    fn a_label_with_no_zone_is_refused_for_that_and_not_as_a_duplicate() {
+        let (mut panel, _guard) = panel_from_named(
+            "a_label_with_no_zone_is_refu",
+            ClocksConfig {
+                zones: vec![zone("Home", "local"), zone("UTC", "UTC")],
+                ..ClocksConfig::default()
+            },
+        );
+        let complaint = |panel: &ClocksPanel| {
+            use ratatui::Terminal;
+            use ratatui::backend::TestBackend;
+            let theme = crate::config::Config::default().theme;
+            let prompt = panel.asking.as_ref().expect("the prompt stays open");
+            let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+            terminal
+                .draw(|frame| prompt.render(frame, frame.area(), &theme))
+                .unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            buffer
+                .content()
+                .iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+        };
+
+        press(&mut panel, KeyCode::Char('a'));
+        for c in "Somewhere =".chars() {
+            press(&mut panel, KeyCode::Char(c));
+        }
+        let before = labels(&panel);
+        press(&mut panel, KeyCode::Enter);
+        let screen = complaint(&panel);
+        assert!(screen.contains("name a zone"), "add: {screen}");
+        assert!(!screen.contains("already"), "add: {screen}");
+        assert_eq!(labels(&panel), before, "and nothing was added");
+
+        press(&mut panel, KeyCode::Esc);
+        press(&mut panel, KeyCode::Char('e'));
+        // Whatever the selected clock pre-filled, replaced by a bare label.
+        for _ in 0..40 {
+            press(&mut panel, KeyCode::Backspace);
+        }
+        for c in "Elsewhere =".chars() {
+            press(&mut panel, KeyCode::Char(c));
+        }
+        press(&mut panel, KeyCode::Enter);
+        let screen = complaint(&panel);
+        assert!(screen.contains("name a zone"), "edit: {screen}");
+        assert!(!screen.contains("already"), "edit: {screen}");
     }
 
     /// Picking from the list names the clock after the city you recognised,

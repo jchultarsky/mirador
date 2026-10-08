@@ -209,6 +209,10 @@ struct State {
     /// Where the window ended: events from here on were not read at all, so
     /// the next read finding one there has not found anything new.
     built_until: Option<jiff::Timestamp>,
+    /// The file this was read from. Set by the reader rather than looked up
+    /// by the panel, because a read already under way when `f` swaps the path
+    /// still lands afterwards, and it describes the calendar it read.
+    source: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -254,6 +258,10 @@ pub struct AgendaPanel {
     /// announcing it logged the next instance of every repeating meeting as
     /// having appeared, every night.
     known_until: Option<jiff::Timestamp>,
+    /// The file `known` was read from. A read of any other — another calendar,
+    /// chosen with `f` — has nothing to have changed *from*, and is no more
+    /// news than the first read at startup.
+    known_from: Option<PathBuf>,
     /// Events waiting to be drained by the watch log.
     pending: Vec<crate::watch::Event>,
     /// What the reader thread had published at the last tick.
@@ -328,6 +336,7 @@ impl AgendaPanel {
             asking: None,
             known: None,
             known_until: None,
+            known_from: None,
             pending: Vec::new(),
             shown: State::default(),
         }
@@ -389,7 +398,11 @@ impl AgendaPanel {
             .collect();
 
         let horizon = self.known_until.take();
-        if let Some(known) = self.known.take() {
+        let known = self
+            .known
+            .take()
+            .filter(|_| self.known_from == state.source);
+        if let Some(known) = known {
             for event in &state.events {
                 // Past the last window: out of sight then, not absent.
                 if horizon.is_some_and(|until| event.start.timestamp() >= until) {
@@ -410,9 +423,13 @@ impl AgendaPanel {
         }
         self.known = Some(current);
         self.known_until = state.built_until;
+        self.known_from.clone_from(&state.source);
     }
 
     /// Point the panel at a different calendar and read it now.
+    ///
+    /// Its first read is as quiet as startup's, which is decided by
+    /// `known_from` when the read lands rather than by clearing anything here.
     pub fn set_path(&mut self, to: PathBuf) {
         match self.path.lock() {
             Ok(mut guard) => *guard = to,
@@ -432,6 +449,7 @@ impl AgendaPanel {
                 read_at: guard.read_at,
                 built_for: guard.built_for,
                 built_until: guard.built_until,
+                source: guard.source.clone(),
             },
             Err(poisoned) => {
                 let guard = poisoned.into_inner();
@@ -442,6 +460,7 @@ impl AgendaPanel {
                     read_at: guard.read_at,
                     built_for: guard.built_for,
                     built_until: guard.built_until,
+                    source: guard.source.clone(),
                 }
             }
         }
@@ -575,8 +594,9 @@ fn read_loop(
             .ok()
             .and_then(|d| ical::local_midnight(d, &tz));
 
+        let source = current_path(path);
         let next = match (from, until) {
-            (Some(from), Some(until)) => match read_calendar(&current_path(path)) {
+            (Some(from), Some(until)) => match read_calendar(&source) {
                 Ok(text) => {
                     let calendar = ical::parse(&text, &tz, &from, &until);
                     State {
@@ -586,6 +606,7 @@ fn read_loop(
                         read_at: Some(Instant::now()),
                         built_for: Some(today),
                         built_until: Some(until.timestamp()),
+                        source: Some(source),
                     }
                 }
                 // A missing file is the unconfigured case, not a failure.
@@ -1832,6 +1853,55 @@ mod tests {
         assert!(
             logged[0].starts_with("Dentist appeared"),
             "an event added inside the window is still news: {logged:?}"
+        );
+    }
+
+    /// Pointing the panel at another calendar with `f` is a first read of
+    /// that calendar, and has to be as quiet as startup. It was compared
+    /// against the old calendar's events, so every event in the new file was
+    /// logged as having "appeared in your calendar". Clearing what was known
+    /// when the path changes is not enough on its own: a read of the old file
+    /// already under way lands after the swap, becomes the baseline, and the
+    /// new calendar is then compared against it all the same.
+    #[test]
+    fn another_calendar_is_read_as_quietly_as_the_first() {
+        let wed = date(2026, 10, 7);
+        let until = wed.at(0, 0, 0, 0).to_zoned(tz()).unwrap().timestamp() + Span::new().hours(72);
+        let read = |file: &str, events: Vec<ical::Event>| State {
+            events,
+            built_for: Some(wed),
+            built_until: Some(until),
+            source: Some(PathBuf::from(file)),
+            ..State::default()
+        };
+        let logged = |panel: &AgendaPanel| -> Vec<String> {
+            panel.pending.iter().map(|e| e.text.clone()).collect()
+        };
+        let mut panel = idle_panel();
+
+        panel.shown = read("home.ics", vec![event(wed, 9, "Standup", false)]);
+        panel.note_new_entries();
+        panel.set_path(PathBuf::from("work.ics"));
+        // The read that was under way when the path changed.
+        panel.shown = read("home.ics", vec![event(wed, 9, "Standup", false)]);
+        panel.note_new_entries();
+        let work = vec![
+            event(wed, 10, "Planning", false),
+            event(wed, 14, "Review", false),
+        ];
+        panel.shown = read("work.ics", work.clone());
+        panel.note_new_entries();
+        assert!(logged(&panel).is_empty(), "{:?}", logged(&panel));
+
+        let mut more = work;
+        more.push(event(wed, 16, "Retro", false));
+        panel.shown = read("work.ics", more);
+        panel.note_new_entries();
+        let logged = logged(&panel);
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        assert!(
+            logged[0].starts_with("Retro appeared"),
+            "the new calendar's own additions are still news: {logged:?}"
         );
     }
 
