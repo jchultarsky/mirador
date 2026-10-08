@@ -658,10 +658,13 @@ mod tests {
                 })
                 .unwrap();
             let buf = terminal.backend().buffer().clone();
+            // The text on screen, without the news panel's link escapes: a
+            // linked cell's symbol is never blank, so the space after a word
+            // that fills its row read as text lost past the edge.
             (0..height)
                 .map(|y| {
                     (0..width)
-                        .map(|x| buf[(x, y)].symbol().to_string())
+                        .map(|x| crate::link::without_links(buf[(x, y)].symbol()))
                         .collect()
                 })
                 .collect()

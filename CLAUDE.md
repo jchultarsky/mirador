@@ -1260,10 +1260,13 @@ layout hurt.
   at `todo` and stopped. What caught the second one was screenshotting the
   *rendered README* and seeing the two drawings near each other — `┤4 open├`
   over `4 open` in one and `┤1├` over `1 note` in the next. Its row is now
-  reserved only for an active search or the two cases where the border stops
-  carrying the count (an empty panel, and a failed save taking the counter for
-  `unsaved!`), so a calm panel gives the row to the list and the note it points
-  at. Same footprint trade as the markets row, taken for the same reason.
+  reserved only for an active search or a failed save taking the counter for
+  `unsaved!`, so a calm panel gives the row to the list and the note it points
+  at. An empty panel has no counter either, and kept the row for `no notes`
+  until its message said `No notes yet` straight beneath it — the count twice
+  again, in a row the message needed; the tasks panel's sort order over an
+  empty list went the same way. Same footprint trade as the markets row, taken
+  for the same reason.
   `the_note_count_is_shown_once_and_by_the_border`.
 
   The general lesson is about the docs rather than the code: **a static drawing

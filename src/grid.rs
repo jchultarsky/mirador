@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
@@ -189,8 +190,22 @@ fn break_lines(text: &str, width: usize, mut emit: impl FnMut(Range<usize>)) {
                 start = cursor;
                 used = 0;
             }
+            // A row a break has just begun does not start with whitespace: it
+            // is the break, however much of it there is (see
+            // [`taken_by_a_break`]). `split_inclusive` hands the first space
+            // of a run over with the word before it and each further one as a
+            // word of its own, so two spaces after a full stop, met at a
+            // break, stood on a row by themselves or indented the next:
+            // `wrap("ab  cdef", 3)` drew a blank row between the words.
+            // Whitespace at the start of a line no break began is the
+            // author's, and keeps its cells.
+            let begins_a_broken_row = emitted_here && start == cursor;
             cursor += word.len();
             used += w;
+            if begins_a_broken_row {
+                start += taken_by_a_break(&line[start..cursor]);
+                used = walked_width(&line[start..cursor]);
+            }
 
             // A single word longer than the row breaks inside itself, rather
             // than running off the edge.
@@ -216,7 +231,17 @@ fn break_lines(text: &str, width: usize, mut emit: impl FnMut(Range<usize>)) {
                 }
                 emit(start..cut);
                 (any, emitted_here) = (true, true);
-                start = cut;
+                // A word exactly as wide as the row leaves only the space
+                // after it, and that space is the break. Carried over, it
+                // indented the next row by a cell or, when the next word did
+                // not fit beside it, stood on a row of its own: `wrap("abcde
+                // fghij", 5)` drew a blank row between the two words. A cut
+                // can also land just before whitespace that is not a word's
+                // last character — an ideographic space in unspaced Japanese,
+                // a no-break space — and that is taken too. Any spaces after
+                // the word are words of their own, and the check above takes
+                // them as they arrive.
+                start = cut + taken_by_a_break(&line[cut..cursor]);
                 used = walked_width(&line[start..cursor]);
             }
         }
@@ -235,6 +260,69 @@ fn break_lines(text: &str, width: usize, mut emit: impl FnMut(Range<usize>)) {
     // An empty string has no lines at all, and still occupies one row.
     if !any {
         emit(0..0);
+    }
+}
+
+/// The bytes at the head of `text` that a break takes rather than carrying
+/// to the row it begins: whole glyphs of whitespace, so a mark joined to a
+/// space stays with it.
+///
+/// Whitespace means everything `char::is_whitespace` calls it, the no-break
+/// and ideographic spaces and the tab included, and not only U+0020. A
+/// no-break space forbids a break *at* itself, and [`break_lines`] never
+/// chooses one there: it breaks only at U+0020, or inside a word too long for
+/// its row. So the rule meets a no-break space only where a row has already
+/// ended beside it, and carried over it is the gap the rule exists to remove —
+/// `wrap("Done.\u{a0} Next one", 5)` drew a blank row after `Done.`, and
+/// `今日は晴れ\u{3000}明日は雨` at ten cells indented its second row by two.
+fn taken_by_a_break(text: &str) -> usize {
+    glyphs(text)
+        .find(|(_, glyph)| !glyph.chars().all(char::is_whitespace))
+        .map_or(text.len(), |(at, _)| at)
+}
+
+/// Which characters a prefix of text about to be wrapped can leave out, for
+/// a panel that shows only its first few rows and must not read the rest.
+///
+/// A prefix measured by a budget of cells assumes that what it reads, rows
+/// draw. Whitespace a break takes draws nothing, so a run of it would spend
+/// the budget on padding, and the value after the padding would be lost with
+/// rows to spare: a plugin's `Battery`, a hundred spaces and `80%` would draw
+/// `Battery` alone in a panel with a row left. A run wider than the row
+/// always holds a break, and the break takes everything in the run after it
+/// (see [`taken_by_a_break`]), so a run kept only to just past the row's
+/// width wraps as the whole run does.
+pub(crate) struct WrapSource {
+    width: usize,
+    run: usize,
+}
+
+impl WrapSource {
+    /// For rows `width` cells wide.
+    pub(crate) fn new(width: usize) -> Self {
+        Self { width, run: 0 }
+    }
+
+    /// Whether the wrap needs `c`, the text's next character: every one but
+    /// the whitespace past the first `width + 1` cells of a run. A line break
+    /// ends a run, and is always needed.
+    pub(crate) fn needs(&mut self, c: char) -> bool {
+        if c == '\n' || !c.is_whitespace() {
+            self.run = 0;
+            return true;
+        }
+        if self.run > self.width {
+            return false;
+        }
+        self.run += char_width(c);
+        true
+    }
+
+    /// The cells of what [`Self::needs`] keeps that one row can use up: the
+    /// row's own `width`, and as much again and two more for the run a break
+    /// after it takes. A budget of this many a row fills them all.
+    pub(crate) fn row_cells(width: usize) -> usize {
+        width.saturating_mul(2).saturating_add(2)
     }
 }
 
@@ -349,6 +437,28 @@ pub fn wrapped(text: &str, width: u16) -> String {
         out.push_str(&text[row]);
     });
     out
+}
+
+/// `text` wrapped into `area`, keeping the rows that fit and ending the last
+/// of them in `…` when anything did not — or when the caller already cut the
+/// text short (`abridged`), since rows that fill the pane look finished
+/// either way (invariant 19). Ready for a `Paragraph` given no `Wrap`; see
+/// [`wrapped`].
+///
+/// This is the mechanism for prose in a region of several rows. [`truncate`]
+/// is for a region of one: handed a taller one, it keeps the first row and
+/// leaves the rest blank, so a sentence that had the room is cut anyway.
+pub fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
+    let width = usize::from(area.width);
+    let height = usize::from(area.height);
+    let mut lines = wrap(text, width);
+    if lines.len() > height || abridged {
+        lines.truncate(height);
+        if let Some(last) = lines.last_mut() {
+            *last = truncate(&format!("{}…", last.trim_end()), width);
+        }
+    }
+    lines.join("\n")
 }
 
 /// Rows that `text` occupies once word-wrapped to `width` cells.
@@ -896,24 +1006,46 @@ mod tests {
             "blank\n\nline in the middle",
             "\nblank line first",
             "\n\n",
+            // A run of spaces at a break, which the break takes whole.
+            "Done.  Next one.   And   another",
+            "ab  cdef   ",
+            // Whitespace that is not U+0020, which a break takes too.
+            "Done.\u{a0} Next\u{a0}\u{a0}one \u{a0} \u{a0}and\u{a0}",
+            "今日は晴れ\u{3000}明日は雨\u{3000}\u{3000}です\u{3000}",
+            "tab\t \tand\t\tcr\r \r\n\u{2003}em\u{2003} space",
+            " \u{301}mark on a space  \u{3000}\u{301}",
         ];
         let corpus = samples
             .iter()
             .map(ToString::to_string)
             .chain(crashing_corpus());
         for text in corpus {
-            for width in 1..40u16 {
+            for width in 1..40u8 {
                 let rows = wrap(&text, usize::from(width));
                 assert_eq!(
                     u16::try_from(rows.len()).unwrap(),
-                    wrapped_height(&text, width),
+                    wrapped_height(&text, u16::from(width)),
                     "{text:?} at {width}"
                 );
                 assert_eq!(
-                    wrapped(&text, width),
+                    wrapped(&text, u16::from(width)),
                     rows.join("\n"),
                     "{text:?} at {width}"
                 );
+                // Styled, the same rows, but for one glyph wider than its row,
+                // which `wrap_line` collapses to an ellipsis on purpose.
+                // One span, since `Line::from` a `&str` drops its newlines.
+                let line = Line::from(Span::raw(text.as_str()));
+                let styled: Vec<String> = wrap_line(&line, width.into())
+                    .iter()
+                    .map(|row| row.spans.iter().map(|s| s.content.as_ref()).collect())
+                    .collect();
+                assert_eq!(styled.len(), rows.len(), "{text:?} at {width}");
+                for (styled, row) in styled.iter().zip(&rows) {
+                    if walked_width(row) <= usize::from(width) {
+                        assert_eq!(styled, row, "{text:?} at {width}");
+                    }
+                }
             }
         }
     }
@@ -933,6 +1065,77 @@ mod tests {
         assert_eq!(wrap("a\n\nb", 4), ["a", "", "b"]);
         assert_eq!(wrap("", 4), [""]);
         assert_eq!(wrap("\n", 4), [""]);
+    }
+
+    /// A word exactly as wide as the row was measured with the space after
+    /// it, so it took the over-long path and was broken before that space —
+    /// which was then carried to the next row. Where the next word fitted
+    /// beside it the row came out indented by a cell; where it did not, the
+    /// space stood on a row of its own, a blank line in the middle of a
+    /// sentence. Found by the empty-state sweeps, at the widths where `tasks`
+    /// or `notes` is the whole row.
+    #[test]
+    fn a_word_that_fills_the_row_leaves_its_space_behind() {
+        assert_eq!(wrap("abcde fghij", 5), ["abcde", "fghij"]);
+        assert_eq!(wrap("abcde fgh", 5), ["abcde", "fgh"]);
+        assert_eq!(wrap("abcde ", 5), ["abcde"]);
+        assert_eq!(
+            wrap("No tasks yet. Press", 5),
+            ["No ", "tasks", "yet. ", "Press"]
+        );
+        assert_eq!(wrapped_height("abcde fghij", 5), 2);
+
+        // Two spaces after a full stop are ordinary in a typed note and in a
+        // headline, and only the first belongs to the word before them: each
+        // further space arrives as a word of its own. The first fix took the
+        // one space and left the rest to stand on a row by themselves, or to
+        // indent the next. The break takes the whole run, wherever it falls —
+        // inside a word too long for its row, or between two words.
+        assert_eq!(wrap("abcde  fghij", 5), ["abcde", "fghij"]);
+        assert_eq!(wrap("Done.  Next one", 5), ["Done.", "Next ", "one"]);
+        assert_eq!(wrap("abcde  fgh", 5), ["abcde", "fgh"]);
+        assert_eq!(wrap("ab  cdef", 3), ["ab ", "cde", "f"]);
+        assert_eq!(wrap("ab   ", 3), ["ab "]);
+        assert_eq!(wrapped_height("abcde  fghij", 5), 2);
+        assert_eq!(wrapped_height("ab  cdef", 3), 3);
+
+        // Whitespace is not only U+0020. A no-break space typed for the second
+        // space after a full stop (`&#160;` in a feed), an ideographic space
+        // in Japanese, which has no other spaces for a row to break at, and a
+        // tab each stood on a row of their own or indented the next.
+        assert_eq!(wrap("Done.\u{a0} Next one", 5), ["Done.", "Next ", "one"]);
+        assert_eq!(wrap("abcde\u{a0}fgh", 5), ["abcde", "fgh"]);
+        assert_eq!(
+            wrap("今日は晴れ\u{3000}明日は雨", 10),
+            ["今日は晴れ", "明日は雨"]
+        );
+        assert_eq!(wrap("今日は晴れ\u{3000}", 10), ["今日は晴れ"]);
+        assert_eq!(wrap("abcd \t efgh", 5), ["abcd ", "efgh"]);
+        assert_eq!(wrap("abcde \u{3000}fgh", 5), ["abcde", "fgh"]);
+        assert_eq!(wrapped_height("今日は晴れ\u{3000}", 10), 1);
+        // A mark joined to a space is a glyph that draws, and stays.
+        assert_eq!(wrap("abcde \u{301}fg", 5), ["abcde", "\u{301}fg"]);
+
+        // Spaces no break produced are the author's, and keep their cells: an
+        // indent at the start of a line, and a line of nothing else.
+        assert_eq!(wrap("  ab\n  cd", 5), ["  ab", "  cd"]);
+        assert_eq!(wrap("\u{3000}ab\n\tcd", 5), ["\u{3000}ab", "\tcd"]);
+        assert_eq!(wrap("a\n   \nb", 5), ["a", "   ", "b"]);
+        assert_eq!(wrap("a\n\nb", 5), ["a", "", "b"]);
+
+        // Styled text breaks in the same places, its spans intact.
+        for spans in [
+            vec![Span::raw("abcde "), Span::raw("fghij")],
+            vec![Span::raw("abcde  "), Span::raw("fghij")],
+            vec![Span::raw("abcde "), Span::raw(" fghij")],
+        ] {
+            let line = Line::from(spans);
+            let rows: Vec<String> = wrap_line(&line, 5)
+                .iter()
+                .map(|row| row.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect();
+            assert_eq!(rows, ["abcde", "fghij"], "{line:?}");
+        }
     }
 
     /// A glyph wider than the whole line fits nowhere, so "take as many

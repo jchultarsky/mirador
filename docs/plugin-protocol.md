@@ -222,11 +222,15 @@ tab is refused too; tab expansion is the plugin's job. Mirador rejects
 control characters rather than allowing an escape sequence to reach the real
 terminal. The host word-wraps logical lines by terminal display width,
 preserves span styles, clips to the available height, and replaces a glyph
-that cannot fit even one whole cell-width with an ellipsis. Ratatui is never
-asked to wrap plugin text. Rendering also budgets each frame's text at 16
-bytes per interior cell (clamped between 256 bytes and 1 MiB), so a line
-unusually dense in multi-byte text — combining marks, ZWJ emoji — can be
-truncated at that budget before any other bound is reached.
+that cannot fit even one whole cell-width with an ellipsis. Whitespace where a
+row breaks, of any kind, is not carried to the row the break begins. Ratatui
+is never asked to wrap plugin text. Rendering also budgets each line's text at
+16 bytes per cell of the rows it may fill and one row more, each row counted
+twice over to allow for the whitespace a break takes (clamped between 256
+bytes and 1 MiB), so a line unusually dense in multi-byte text — combining
+marks, ZWJ emoji — or padded with thousands of spaces can be truncated at that
+budget before any other bound is reached. A line truncated before it fills
+its rows ends in an ellipsis.
 
 Cursor coordinates are zero-based viewport coordinates relative to the panel
 interior. A cursor outside that rectangle is suppressed, not clamped to the

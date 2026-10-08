@@ -567,6 +567,16 @@ impl StocksPanel {
         self.status = Some((message.into(), false));
     }
 
+    /// What an empty board says: the key `[stocks.keys]` gave `add`, and no
+    /// offer when it gave none. One place, because the height cap is measured
+    /// from it as well as the board drawing it.
+    fn empty_hint(&self) -> String {
+        match self.keys.keys(StocksAction::Add).first() {
+            Some(key) => format!("No symbols yet. Press `{key}` to add one."),
+            None => "No symbols yet.".to_string(),
+        }
+    }
+
     fn handle_list_key(&mut self, key: KeyEvent) -> KeyOutcome {
         let Some(action) = self.keys.action(key) else {
             return KeyOutcome::Ignored;
@@ -1014,6 +1024,24 @@ impl Panel for StocksPanel {
         // is a panel that collapses rather than one that is merely too tall.
         // Same shape as `glyphs::width_of` overflowing at ten thousand
         // characters: unreachable in practice, one line to close.
+        //
+        // An empty board is not a board of no rows: it says how to fill it,
+        // in the header's row and under it, and that hint wraps. It is
+        // complete at the rows it takes where its widest word sets the width
+        // — narrower, a word is broken whatever the height; wider, it needs
+        // fewer. Capped at the header alone, it was given one row in a row of
+        // bounded panels, and below 37 cells it could never say its key.
+        if self.watchlist.symbols().is_empty() {
+            let hint = self.empty_hint();
+            let widest = hint
+                .split(' ')
+                .map(crate::grid::display_width)
+                .max()
+                .unwrap_or(1);
+            let rows =
+                crate::grid::wrapped_height(&hint, u16::try_from(widest).unwrap_or(u16::MAX));
+            return Some(rows.saturating_add(FRAME_HEIGHT));
+        }
         let rows = u16::try_from(self.watchlist.symbols().len()).unwrap_or(u16::MAX);
         Some(rows.saturating_add(1).saturating_add(FRAME_HEIGHT))
     }
@@ -1107,12 +1135,22 @@ impl Panel for StocksPanel {
         .split(area);
 
         if self.watchlist.symbols().is_empty() {
+            // Prose in a board of several rows, so wrapped into them, and the
+            // last row says so if they run out (invariant 19). It went to the
+            // terminal at full length, which at the 26 cells the shipped
+            // layout gives this panel stopped just after the key it names.
+            // Cut to one row instead, it would lose that key at 20 cells over
+            // rows left blank. The header's row is the hint's too, since
+            // there are no columns to head: given only the rows under it,
+            // the top row stood blank while the hint was cut beneath.
+            let board = Rect {
+                height: rows[0].height + rows[1].height,
+                ..rows[0]
+            };
             frame.render_widget(
-                Paragraph::new(Span::styled(
-                    "No symbols yet. Press `a` to add one.",
-                    Style::default().fg(theme.muted),
-                )),
-                rows[1],
+                Paragraph::new(crate::grid::fitted_rows(&self.empty_hint(), board, false))
+                    .style(Style::default().fg(theme.muted)),
+                board,
             );
             if let Some(status) = status {
                 frame.render_widget(Paragraph::new(status), rows[2]);
@@ -2187,5 +2225,142 @@ mod tests {
             let (mut p, _g) = panel("keymap", &["AAPL"]);
             p.handle_key(event)
         });
+    }
+
+    /// An empty board says how to fill it, and the key it names is the one
+    /// `[stocks.keys]` gave `add`. It said `a` whatever the table said, so a
+    /// reader who had moved `add` was told to press a key that did nothing;
+    /// with `add` unbound there is no key to name and the hint goes.
+    #[test]
+    fn an_empty_board_names_the_add_key_it_has() {
+        let board = |keys: &str| {
+            let (mut p, _g) = panel("empty-keys", &[]);
+            let config: crate::config::Config =
+                toml::from_str(&format!("[stocks.keys]\n{keys}")).expect("a config");
+            p.set_keys(&config);
+            screen(&mut p, 60, 6)
+        };
+        let moved = board("add = \"n\"");
+        assert!(moved.contains("Press `n` to add one."), "{moved}");
+        assert!(!moved.contains("`a`"), "{moved}");
+
+        let unbound = board("add = []");
+        assert!(unbound.contains("No symbols yet."), "{unbound}");
+        assert!(!unbound.contains("Press"), "{unbound}");
+
+        let default = board("");
+        assert!(
+            default.contains("No symbols yet. Press `a` to add one."),
+            "{default}"
+        );
+    }
+
+    /// Invariant 19 for the empty board: the hint arrives whole wherever the
+    /// panel has the rows for it, and otherwise its last row ends in `…`.
+    ///
+    /// It went to the terminal at its natural width, so at the 26 cells the
+    /// shipped layout gives the panel it stopped just after the key it names,
+    /// with nothing to say so. One row ending in `…` would be honest and still
+    /// wrong, because the board is several rows tall: at 20x8 that reads `No
+    /// symbols yet. Pre…` over six blank rows, the key the hint exists to name
+    /// gone. Swept over height as well as width, since a cut along the height
+    /// is the one a width sweep cannot see.
+    ///
+    /// The room is every row, the header's included: an empty board draws no
+    /// header, and when the hint was given only the rows under it the top row
+    /// stood blank while the hint was cut beneath — `No symbols yet.…` at
+    /// 20x2, which the whole hint fills exactly at 20x3. A calm empty board
+    /// has no status row, so nothing else takes one.
+    /// `StocksPanel::offline` is always seeded, which is why the silent-clip
+    /// sweep never drew this row.
+    #[test]
+    fn an_empty_board_says_its_whole_hint_where_it_has_the_rows() {
+        let whole = "No symbols yet. Press `a` to add one.";
+        // The longest word; narrower, a word is broken and the rows cannot
+        // be joined back into the sentence.
+        let longest = 7;
+        let (mut p, _g) = panel("empty-cut", &[]);
+        let (mut cut, mut wrapped) = (0, 0);
+        for height in 1..=10u16 {
+            for width in 4..=48u16 {
+                let rows = crate::widgets::testing::screen(&mut p, width, height);
+                let board: Vec<&str> = rows
+                    .iter()
+                    .map(String::as_str)
+                    .take_while(|row| !row.is_empty())
+                    .collect();
+                assert!(!board.is_empty(), "at {width}x{height}: {rows:#?}");
+                let said = board.join(" ");
+                let room = usize::from(height);
+                let needed = usize::from(crate::grid::wrapped_height(whole, width));
+                if needed > room {
+                    cut += 1;
+                    assert!(said.ends_with('…'), "at {width}x{height}: {rows:#?}");
+                    assert_eq!(board.len(), room, "at {width}x{height}: {rows:#?}");
+                } else if width >= longest {
+                    assert_eq!(said, whole, "at {width}x{height}: {rows:#?}");
+                    wrapped += usize::from(needed > 1);
+                }
+            }
+        }
+        assert!(cut > 0, "the sweep reached a size that cuts the hint");
+        assert!(wrapped > 0, "the sweep reached a size that wraps it");
+        let shipped = crate::widgets::testing::screen(&mut p, 26, 8);
+        assert_eq!(
+            shipped[0..2].join(" "),
+            whole,
+            "at the shipped 26 cells: {shipped:#?}"
+        );
+    }
+
+    /// An empty board's height cap is where its hint stops gaining anything,
+    /// which is not where a board of no symbols would be complete.
+    ///
+    /// The cap was the board's, a header and no rows, so it gave an empty
+    /// watchlist one row inside its frame: in a row of panels that are all
+    /// bounded the hint could never have more, and below 37 cells it read
+    /// `No symbols yet.…` however tall the screen. The hint is complete at the
+    /// rows it takes where its widest word sets the width — narrower, a word
+    /// is broken whatever the height, and wider it needs fewer — so that is
+    /// the cap. Both halves are pinned: whole at the cap at every width from
+    /// that word up, and the cap not a row more than the narrowest of them
+    /// fills. Swept with the add key moved to a longer name as well, since
+    /// the cap is measured from whatever the hint says.
+    #[test]
+    fn an_empty_boards_height_cap_leaves_room_for_its_whole_hint() {
+        for (keys, whole) in [
+            ("", "No symbols yet. Press `a` to add one."),
+            (
+                "add = \"ctrl+backspace\"",
+                "No symbols yet. Press `Ctrl+Backspace` to add one.",
+            ),
+        ] {
+            let (mut p, _g) = panel("empty-cap", &[]);
+            let config: crate::config::Config =
+                toml::from_str(&format!("[stocks.keys]\n{keys}")).expect("a config");
+            p.set_keys(&config);
+            let cap = p.max_height().expect("stocks bounds its height");
+            let interior = cap - FRAME_HEIGHT;
+            let longest = whole
+                .split(' ')
+                .map(crate::grid::display_width)
+                .max()
+                .and_then(|cells| u16::try_from(cells).ok())
+                .expect("a word");
+            assert_eq!(
+                crate::grid::wrapped_height(whole, longest),
+                interior,
+                "the cap is the hint's height at its widest word, {longest} cells"
+            );
+            for width in longest..=60 {
+                let rows = crate::widgets::testing::screen(&mut p, width, interior);
+                let said: Vec<&str> = rows
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|row| !row.is_empty())
+                    .collect();
+                assert_eq!(said.join(" "), whole, "at {width}x{interior}: {rows:#?}");
+            }
+        }
     }
 }

@@ -19,7 +19,7 @@ use ratatui::widgets::{
 use crate::config::TodoConfig;
 use crate::dateinput::parse_due;
 use crate::frame::{Binding, centred};
-use crate::grid::{Column, Grid};
+use crate::grid::{Column, Grid, WrapSource, fitted_rows};
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{KeyOutcome, Panel, RenderContext};
 use crate::task::{DueState, Priority, SortMode, Task, TaskStore};
@@ -189,7 +189,7 @@ pub const ACTIONS: &[Meta<TodoAction>] = &[
         label: "cycle priority",
         primary: false,
         joins: false,
-        about: "lower the selected task's priority, round to the top",
+        about: "lower the task's priority, wrapping to high",
     },
     Meta {
         action: TodoAction::PriorityPrevious,
@@ -198,7 +198,7 @@ pub const ACTIONS: &[Meta<TodoAction>] = &[
         label: "cycle priority",
         primary: false,
         joins: true,
-        about: "raise the selected task's priority, round to the bottom",
+        about: "raise the task's priority, wrapping to none",
     },
     Meta {
         action: TodoAction::Sort,
@@ -1311,8 +1311,15 @@ impl Panel for TodoPanel {
         // and vertical space to spare.
         let show_columns = !self.view.is_empty() && area.height >= 5;
 
+        // Over an empty list with no filter and no failed save, the summary
+        // has only the sort order of nothing to say, and the list's message
+        // says the rest — so the message gets its row. `by smart` over `No
+        // tasks yet. Press…` cut the key it names to keep a sort mode.
+        let show_summary =
+            !(self.view.is_empty() && self.filter.is_empty() && self.store.last_error.is_none());
+
         let rows = Layout::vertical([
-            Constraint::Length(1),                         // summary
+            Constraint::Length(u16::from(show_summary)),   // summary
             Constraint::Length(u16::from(show_columns)),   // column header
             Constraint::Min(1),                            // list
             Constraint::Length(u16::from(show_notes) * 2), // notes preview
@@ -1320,7 +1327,9 @@ impl Panel for TodoPanel {
         ])
         .split(area);
 
-        frame.render_widget(Paragraph::new(self.header(theme, rows[0].width)), rows[0]);
+        if show_summary {
+            frame.render_widget(Paragraph::new(self.header(theme, rows[0].width)), rows[0]);
+        }
 
         // Recorded every pass so a click maps to the rows actually on screen,
         // and cleared when there are none rather than left pointing at a stale
@@ -1338,14 +1347,19 @@ impl Panel for TodoPanel {
                     n => format!("{n} days"),
                 };
                 format!("Nothing due in the next {days}; {} later.", self.beyond)
+            } else if let Some(key) = self.keys.keys(TodoAction::Add).first() {
+                // The key `[todo.keys]` gave `add`, and no offer when it
+                // gave none.
+                format!("No tasks yet. Press `{key}` to add one.")
             } else {
-                "No tasks yet. Press `a` to add one.".to_string()
+                "No tasks yet.".to_string()
             };
+            // Prose in a list of several rows, so wrapped into them, and the
+            // last row says so if they run out (invariant 19). Cut to one
+            // row, it lost the key it names at 20 cells over blank rows.
             frame.render_widget(
-                Paragraph::new(Span::styled(
-                    crate::grid::truncate(&message, usize::from(rows[2].width)),
-                    Style::default().fg(theme.muted),
-                )),
+                Paragraph::new(fitted_rows(&message, rows[2], false))
+                    .style(Style::default().fg(theme.muted)),
                 rows[2],
             );
         } else {
@@ -1429,13 +1443,35 @@ impl Panel for TodoPanel {
             //
             // No cache is needed here because this preview does not scroll, so
             // the first few rows are the only rows. A wrapped row holds at most
-            // `width` characters, so `height * width` of them is always enough
-            // to fill the pane — an over-estimate, which is what makes it safe.
-            let budget = usize::from(rows[3].height).saturating_mul(usize::from(rows[3].width));
-            let enough = notes
-                .char_indices()
-                .nth(budget)
-                .map_or(notes, |(at, _)| &notes[..at]);
+            // `width` characters of its own, and a break after it takes a run
+            // of whitespace that draws nothing. Spent from the budget whole,
+            // padding would use it up and cut a word after it to `R…` with a
+            // row to spare, so a run is kept only as far as the wrap needs and
+            // each row is allowed that too (see `WrapSource`).
+            // `height` rows of it is always enough to fill the pane — an
+            // over-estimate, which is what makes it safe. What is left out is
+            // still read, so the read stops at sixteen characters for each the
+            // budget allows, and a note of nothing but spaces cannot make every
+            // frame walk the whole of it.
+            let width = usize::from(rows[3].width);
+            let budget = usize::from(rows[3].height).saturating_mul(WrapSource::row_cells(width));
+            let mut source = WrapSource::new(width);
+            let (mut enough, mut kept, mut cut) = (String::new(), 0usize, false);
+            for (read, c) in notes.chars().enumerate() {
+                if read == budget.saturating_mul(16) {
+                    cut = true;
+                    break;
+                }
+                if !source.needs(c) {
+                    continue;
+                }
+                if kept == budget {
+                    cut = true;
+                    break;
+                }
+                enough.push(c);
+                kept += 1;
+            }
             // A note longer than the pane keeps the rows that fit and says it
             // was cut on the last of them (invariant 19). Handing every row to
             // the `Paragraph` let it drop the rest in silence, so the seeded
@@ -1443,7 +1479,7 @@ impl Panel for TodoPanel {
             // A note cut by the budget above is abridged too, even when its
             // rows happen to fill the pane exactly.
             frame.render_widget(
-                Paragraph::new(fitted_rows(enough, rows[3], enough.len() < notes.len()))
+                Paragraph::new(fitted_rows(&enough, rows[3], cut))
                     .style(Style::default().fg(theme.muted)),
                 rows[3],
             );
@@ -1500,24 +1536,6 @@ impl Panel for TodoPanel {
     fn shutdown(&mut self) {
         self.store.save_reporting();
     }
-}
-
-/// `text` wrapped into `area`, keeping the rows that fit and ending the last
-/// of them in `…` when anything did not — or when the caller already cut the
-/// text short (`abridged`), since rows that fill the pane look finished
-/// either way (invariant 19). Wrapped by `grid`, never by ratatui; see
-/// `grid::wrapped`.
-fn fitted_rows(text: &str, area: Rect, abridged: bool) -> String {
-    let width = usize::from(area.width);
-    let height = usize::from(area.height);
-    let mut lines = crate::grid::wrap(text, width);
-    if lines.len() > height || abridged {
-        lines.truncate(height);
-        if let Some(last) = lines.last_mut() {
-            *last = truncate(&format!("{}…", last.trim_end()), width);
-        }
-    }
-    lines.join("\n")
 }
 
 /// Placeholder text for an empty, unfocused field.
@@ -2256,6 +2274,50 @@ mod tests {
         );
     }
 
+    /// The preview reads only as much of a note as its rows can show. A run of
+    /// spaces at a break draws nothing, since the break takes it, so a budget
+    /// that counted every space as something a row draws would be used up by
+    /// padding and cut the words after it short with a row to spare: at 20
+    /// cells `Call Bob.`, thirty spaces and `Re: invoice` would draw `R…`
+    /// where the whole note fits.
+    #[test]
+    fn a_note_padded_with_spaces_still_shows_what_follows() {
+        const HEIGHT: u16 = 12;
+        let (mut p, _dir) = panel("preview-padding");
+        let mut task = Task::new(0, "Call Bob", p.today);
+        task.id = p.store.add(task.clone());
+        p.refresh_view();
+
+        let (mut cut, mut whole) = (0, 0);
+        for padding in [30, 100, 300] {
+            let note = format!("Call Bob.{}Re: invoice", " ".repeat(padding));
+            task.notes = Some(note.clone());
+            assert!(p.store.update(task.clone()));
+            for width in 8..=60u16 {
+                let screen = screen_of(&mut p, width, HEIGHT);
+                let rows: Vec<&str> = screen.lines().collect();
+                let preview = [
+                    rows[usize::from(HEIGHT) - 3].trim_end(),
+                    rows[usize::from(HEIGHT) - 2].trim_end(),
+                ];
+                let wrapped = crate::grid::wrap(&note, usize::from(width));
+                assert_eq!(preview[0], wrapped[0].trim_end(), "{padding} at {width}");
+                if wrapped.len() > 2 {
+                    cut += 1;
+                    assert!(preview[1].ends_with('…'), "{padding} at {width}:\n{screen}");
+                } else {
+                    whole += 1;
+                    let second = wrapped.get(1).map_or("", |row| row.trim_end());
+                    assert_eq!(preview[1], second, "{padding} at {width}:\n{screen}");
+                }
+            }
+        }
+        assert!(
+            cut > 0 && whole > 0,
+            "the sweep must reach both a cut and a whole note: cut {cut}, whole {whole}"
+        );
+    }
+
     #[test]
     fn adding_a_task_through_the_form_persists_it() {
         let (mut p, _dir) = panel("add");
@@ -2638,5 +2700,75 @@ mod tests {
             }
         }
         assert!(cut > 0, "the sweep reached a width that cuts a placeholder");
+    }
+
+    /// An empty list says how to add the first task, with the key
+    /// `[todo.keys]` gave `add` — it said `a` whatever the table said — and
+    /// without the offer when `add` is unbound.
+    #[test]
+    fn an_empty_list_names_the_add_key_it_has() {
+        let text = |keys: &str| {
+            let (mut panel, _g) = panel("empty-keys");
+            let config: crate::config::Config =
+                toml::from_str(&format!("[todo.keys]\n{keys}")).expect("a config");
+            panel.set_keys(&config);
+            screen_of(&mut panel, 60, 12)
+        };
+        let moved = text("add = \"z\"");
+        assert!(moved.contains("Press `z` to add one."), "{moved}");
+        assert!(!moved.contains("`a`"), "{moved}");
+
+        let unbound = text("add = []");
+        assert!(unbound.contains("No tasks yet."), "{unbound}");
+        assert!(!unbound.contains("Press"), "{unbound}");
+
+        assert!(text("").contains("No tasks yet. Press `a` to add one."));
+    }
+
+    /// Invariant 19 for the empty list: its message arrives whole wherever
+    /// the list has the rows for it, and otherwise its last row ends in `…`.
+    /// It was cut to one row with an `…` in a list several rows tall, so at
+    /// 20 cells it read `No tasks yet. Press…` over blank rows and the key it
+    /// names was gone. Swept over height as well as width, since a cut along
+    /// the height is the one a width sweep cannot see. The room starts at
+    /// row 0: a sweep that started under it approved `by smart` over `No
+    /// tasks yet. Press…` at 20x3.
+    #[test]
+    fn an_empty_lists_message_is_whole_where_it_has_the_rows() {
+        let whole = "No tasks yet. Press `a` to add one.";
+        // The longest word; narrower, a word is broken and the rows cannot
+        // be joined back into the sentence.
+        let longest = 5;
+        let (mut panel, _g) = panel("empty-cut");
+        let (mut cut, mut wrapped) = (0, 0);
+        for height in 2..=10u16 {
+            for width in 4..=48u16 {
+                let screen = screen_of(&mut panel, width, height);
+                let rows: Vec<&str> = screen.lines().map(str::trim_end).collect();
+                // The status is the last row, and the list, with no column
+                // header over an empty view, is every row above it. Row 0
+                // included: a summary there said `by smart`, the sort order
+                // of nothing, and took a row the key needed.
+                let room = usize::from(height - 1);
+                let lines: Vec<&str> = rows[..room]
+                    .iter()
+                    .copied()
+                    .take_while(|row| !row.is_empty())
+                    .collect();
+                assert!(!lines.is_empty(), "at {width}x{height}: {rows:#?}");
+                let said = lines.join(" ");
+                let needed = usize::from(crate::grid::wrapped_height(whole, width));
+                if needed > room {
+                    cut += 1;
+                    assert!(said.ends_with('…'), "at {width}x{height}: {rows:#?}");
+                    assert_eq!(lines.len(), room, "at {width}x{height}: {rows:#?}");
+                } else if width >= longest {
+                    assert_eq!(said, whole, "at {width}x{height}: {rows:#?}");
+                    wrapped += usize::from(needed > 1);
+                }
+            }
+        }
+        assert!(cut > 0, "the sweep reached a size that cuts the message");
+        assert!(wrapped > 0, "the sweep reached a size that wraps it");
     }
 }

@@ -1203,7 +1203,7 @@ pub const ARRANGE_ACTIONS: &[Meta<ArrangeAction>] = &[
         label: "move",
         primary: true,
         joins: false,
-        about: "move the panel up a row, or past the top into a new one",
+        about: "move up a row; past the top, a new row",
     },
     Meta {
         action: ArrangeAction::MoveDown,
@@ -1212,7 +1212,7 @@ pub const ARRANGE_ACTIONS: &[Meta<ArrangeAction>] = &[
         label: "move",
         primary: true,
         joins: true,
-        about: "move the panel down a row, or past the bottom into a new one",
+        about: "move down a row; past the bottom, a new row",
     },
     Meta {
         action: ArrangeAction::RowUp,
@@ -1258,7 +1258,7 @@ pub const ARRANGE_ACTIONS: &[Meta<ArrangeAction>] = &[
         label: "pick panel",
         primary: false,
         joins: false,
-        about: "pick the next panel to move, without leaving the mode",
+        about: "pick the next panel, staying in the mode",
     },
     Meta {
         action: ArrangeAction::FocusPrevious,
@@ -1267,7 +1267,7 @@ pub const ARRANGE_ACTIONS: &[Meta<ArrangeAction>] = &[
         label: "pick panel",
         primary: false,
         joins: true,
-        about: "pick the previous panel to move, without leaving the mode",
+        about: "pick the previous panel, staying in the mode",
     },
 ];
 

@@ -18,19 +18,143 @@
 //! broken that mirador refuses to start.
 //!
 //! The dialog's own keys are fixed. A key map that could lose the key that
-//! closes the key map is the trap invariant 2 exists to rule out.
+//! closes the key map is the trap invariant 2 exists to rule out. They are
+//! declared all the same, in [`ACTIONS`], so the keys it reads and the keys
+//! its footer offers come from one table, as the pickers' do — and never
+//! from the config.
 
 use std::path::Path;
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
+use crate::frame::Binding;
 use crate::grid::{Column, Grid};
-use crate::keymap::{Action, Key, Keymap, Listed};
+use crate::keymap::{Action, Key, Keymap, Listed, Meta, PanelKeymap};
 use crate::theme::Theme;
+
+/// What the dialog's own keys do. Esc is not here: it always closes, as Esc
+/// backs out of everything, and the reset question reads its own answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialogAction {
+    Reload,
+    Defaults,
+    Close,
+    Down,
+    Up,
+    PageDown,
+    PageUp,
+    First,
+    Last,
+}
+
+const NONE: KeyModifiers = KeyModifiers::NONE;
+
+/// The dialog's actions and their keys, which are also the only keys they
+/// have: this table is laid over nothing. `q` closes it as it closes both
+/// pickers.
+const ACTIONS: &[Meta<DialogAction>] = &[
+    Meta {
+        action: DialogAction::Reload,
+        name: "reload",
+        defaults: &[(KeyCode::Char('r'), NONE)],
+        label: "reload",
+        primary: true,
+        joins: false,
+        about: "read every key table from the config again",
+    },
+    Meta {
+        action: DialogAction::Defaults,
+        name: "defaults",
+        defaults: &[(KeyCode::Char('d'), NONE)],
+        label: "defaults",
+        primary: true,
+        joins: false,
+        about: "put every key back to its default, after asking",
+    },
+    Meta {
+        action: DialogAction::Close,
+        name: "close",
+        defaults: &[(KeyCode::Char('q'), NONE)],
+        label: "close",
+        // The footer offers Esc for this instead, under this label: Esc
+        // closes too, and is the one key every dialog keeps.
+        primary: false,
+        joins: false,
+        about: "close the key map",
+    },
+    Meta {
+        action: DialogAction::Down,
+        name: "down",
+        defaults: &[(KeyCode::Down, NONE), (KeyCode::Char('j'), NONE)],
+        label: "scroll",
+        primary: false,
+        joins: false,
+        about: "scroll down a line",
+    },
+    Meta {
+        action: DialogAction::Up,
+        name: "up",
+        defaults: &[(KeyCode::Up, NONE), (KeyCode::Char('k'), NONE)],
+        label: "scroll",
+        primary: false,
+        joins: true,
+        about: "scroll up a line",
+    },
+    Meta {
+        action: DialogAction::PageDown,
+        name: "page_down",
+        defaults: &[(KeyCode::PageDown, NONE)],
+        label: "page",
+        primary: false,
+        joins: false,
+        about: "scroll down a page",
+    },
+    Meta {
+        action: DialogAction::PageUp,
+        name: "page_up",
+        defaults: &[(KeyCode::PageUp, NONE)],
+        label: "page",
+        primary: false,
+        joins: true,
+        about: "scroll up a page",
+    },
+    Meta {
+        action: DialogAction::First,
+        name: "first",
+        defaults: &[(KeyCode::Home, NONE)],
+        label: "first",
+        primary: false,
+        joins: false,
+        about: "scroll to the top",
+    },
+    Meta {
+        action: DialogAction::Last,
+        name: "last",
+        defaults: &[(KeyCode::End, NONE)],
+        label: "last",
+        primary: false,
+        joins: true,
+        about: "scroll to the foot",
+    },
+];
+
+/// The dialog's keys, with Esc's hint beside them under `close`'s label.
+/// Built from [`ACTIONS`] alone: no `[key_map.keys]` exists to read.
+fn keys() -> PanelKeymap<DialogAction> {
+    let close = ACTIONS
+        .iter()
+        .find(|meta| meta.action == DialogAction::Close)
+        .expect("close is in the table");
+    PanelKeymap::defaults("key_map", ACTIONS).with_fixed(&[Binding::owned(
+        crate::frame::ESC,
+        close.label,
+        true,
+    )])
+}
 
 /// What a keypress asked the shell to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,9 +183,13 @@ pub const COLUMNS: &[Column] = &[
     Column::flex("does", 5).drops_below(64),
 ];
 
-/// The widest the dialog draws. Wide enough for every column at ordinary
-/// terminal widths; wider would only stretch the explanations.
-const WIDTH: u16 = 84;
+/// The widest the dialog draws: wide enough that every explanation arrives
+/// whole in its column, which at 96 cells inside the frame is 44.
+/// `every_explanation_arrives_whole_at_the_dialogs_widest` holds the two
+/// together, so a longer explanation is shortened rather than cut. A
+/// narrower terminal still gets a narrower dialog, and the explanations an
+/// `…` where they no longer fit.
+const WIDTH: u16 = 100;
 
 /// The key table: a header, the shell's keys, then each panel's under the
 /// heading of the table its keys are written in, since that heading is the
@@ -137,7 +265,7 @@ struct Notice {
 }
 
 /// An open key map.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct KeymapDialog {
     /// First line of the body on screen.
     scroll: u16,
@@ -148,6 +276,20 @@ pub struct KeymapDialog {
     /// Asking whether to reset; the next key answers.
     confirming: bool,
     notice: Option<Notice>,
+    keys: PanelKeymap<DialogAction>,
+}
+
+impl Default for KeymapDialog {
+    fn default() -> Self {
+        Self {
+            scroll: 0,
+            overflow: 0,
+            viewport: 0,
+            confirming: false,
+            notice: None,
+            keys: keys(),
+        }
+    }
 }
 
 impl KeymapDialog {
@@ -196,21 +338,29 @@ impl KeymapDialog {
             return Request::None;
         }
 
+        if key.code == KeyCode::Esc {
+            return Request::Close;
+        }
+        // Looked up by the key alone, whatever is held with it, which is how
+        // this dialog has always read its keys: declaring them changed where
+        // they are written, not which presses reach them.
+        let Some(action) = self.keys.action(Key::new(key.code, NONE)) else {
+            return Request::None;
+        };
         let page = self.viewport.max(1);
-        let scroll = match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return Request::Close,
-            KeyCode::Char('r') => return Request::Reload,
-            KeyCode::Char('d') => {
+        let scroll = match action {
+            DialogAction::Close => return Request::Close,
+            DialogAction::Reload => return Request::Reload,
+            DialogAction::Defaults => {
                 self.confirming = true;
                 return Request::None;
             }
-            KeyCode::Down | KeyCode::Char('j') => self.scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => self.scroll.saturating_sub(1),
-            KeyCode::PageDown => self.scroll.saturating_add(page),
-            KeyCode::PageUp => self.scroll.saturating_sub(page),
-            KeyCode::Home => 0,
-            KeyCode::End => self.overflow,
-            _ => return Request::None,
+            DialogAction::Down => self.scroll.saturating_add(1),
+            DialogAction::Up => self.scroll.saturating_sub(1),
+            DialogAction::PageDown => self.scroll.saturating_add(page),
+            DialogAction::PageUp => self.scroll.saturating_sub(page),
+            DialogAction::First => 0,
+            DialogAction::Last => self.overflow,
         };
         self.scroll = scroll.min(self.overflow);
         Request::None
@@ -303,12 +453,15 @@ impl KeymapDialog {
     /// While the reset question is open, the keys it takes instead. Every key
     /// answers it, so the dialog's own keys and the arrows are all a no, and
     /// offering them said each did what it does the rest of the time.
+    ///
+    /// Otherwise the primary keys of [`ACTIONS`], then Esc: the hints come
+    /// from the table the keys are read from, so the two cannot disagree.
     fn footer(&self, theme: &Theme, width: u16) -> Line<'static> {
         let key_style = Style::default().fg(theme.key).add_modifier(Modifier::BOLD);
         let muted = Style::default().fg(theme.muted);
-        let hint = |key: &'static str, action: &str| {
+        let hint = |key: &str, action: &str| {
             vec![
-                Span::styled(key, key_style),
+                Span::styled(key.to_string(), key_style),
                 Span::styled(format!(" {action}"), muted),
             ]
         };
@@ -324,11 +477,13 @@ impl KeymapDialog {
                 };
                 parts.push(hint(arrows, "more"));
             }
-            parts.extend([
-                hint("r", "reload"),
-                hint("d", "defaults"),
-                hint(crate::frame::ESC, "close"),
-            ]);
+            parts.extend(
+                self.keys
+                    .bindings()
+                    .iter()
+                    .filter(|binding| binding.primary)
+                    .map(|binding| hint(&binding.key, &binding.action)),
+            );
             parts
         };
         crate::grid::assemble(
@@ -518,8 +673,10 @@ mod tests {
     fn every_listed_action_name_fits_its_column_whole() {
         let panels = panel_keys("");
         let theme = Theme::default();
+        // Inside the frame, which is the width the dialog draws its lines at.
+        let width = WIDTH - crate::frame::FRAME_WIDTH;
         let text: Vec<String> = KeymapDialog::new()
-            .lines(&Keymap::default(), &panels, None, &theme, WIDTH)
+            .lines(&Keymap::default(), &panels, None, &theme, width)
             .iter()
             .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
@@ -597,6 +754,50 @@ mod tests {
         dialog.handle_key(key(KeyCode::Char('d')));
         assert_eq!(dialog.handle_key(key(KeyCode::Esc)), Request::None);
         assert_eq!(dialog.handle_key(key(KeyCode::Esc)), Request::Close);
+    }
+
+    /// Every key the dialog acts on is one [`ACTIONS`] declares, or Esc, and
+    /// every key it declares does something. The keys used to be matched by
+    /// hand beside a footer and a README written by hand, and `q` closed the
+    /// dialog with neither of them saying so.
+    #[test]
+    fn every_key_the_dialog_acts_on_is_one_it_declares() {
+        let declared = PanelKeymap::defaults("key_map", ACTIONS);
+        let mut codes: Vec<KeyCode> = (' '..='~').map(KeyCode::Char).collect();
+        codes.extend([
+            KeyCode::Esc,
+            KeyCode::Enter,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Backspace,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::F(5),
+        ]);
+        for code in codes {
+            let mut dialog = KeymapDialog::new();
+            // Mid-scroll, so a scroll key in either direction moves it.
+            dialog.overflow = 20;
+            dialog.viewport = 4;
+            dialog.scroll = 10;
+            let request = dialog.handle_key(key(code));
+            let acted = request != Request::None || dialog.scroll != 10 || dialog.is_confirming();
+            let ours = code == KeyCode::Esc || declared.action(Key::new(code, NONE)).is_some();
+            assert_eq!(acted, ours, "{code:?} acts: {acted}, declared: {ours}");
+        }
+        assert_eq!(
+            KeymapDialog::new().handle_key(key(KeyCode::Char('q'))),
+            Request::Close,
+            "q closes the key map, as it closes both pickers"
+        );
     }
 
     #[test]
@@ -712,5 +913,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The explanation is the column that says what a key does, and at the
+    /// dialog's widest it arrived as `move the panel down a row, or pas…`
+    /// — nineteen of them cut, at a width where nothing was squeezing them,
+    /// so no terminal was wide enough to read them whole. Drawn on a screen
+    /// wider than the cap, every one has to be on it in full: the cap and the
+    /// longest explanation are held to each other here, so a longer one
+    /// fails rather than arriving with an `…` on every screen.
+    #[test]
+    fn every_explanation_arrives_whole_at_the_dialogs_widest() {
+        let rows = drawn(
+            &mut KeymapDialog::new(),
+            &Keymap::default(),
+            WIDTH + 40,
+            400,
+        );
+        let panels = panel_keys("");
+        let cut: Vec<(&str, &str)> = Action::LISTED
+            .iter()
+            .map(|action| ("keys", action.about()))
+            .chain(panels.iter().flat_map(|(widget, listing)| {
+                listing.iter().map(move |listed| (*widget, listed.about))
+            }))
+            .filter(|(_, about)| !rows.iter().any(|row| row.contains(about)))
+            .collect();
+        assert!(
+            cut.is_empty(),
+            "{} cut at the dialog's widest: {cut:#?}",
+            cut.len()
+        );
     }
 }

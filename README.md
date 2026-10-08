@@ -1019,14 +1019,17 @@ and the help overlay show the keys you chose.
 **Press `?` twice** for the key map: every one of these actions with the key it
 has now, its default, and what it does, with the keys you changed picked out,
 followed by each panel's table under its heading.
-It also says which file to edit, and it has three keys of its own:
+It also says which file to edit, and it has keys of its own:
 
 - `r` reloads `[keys]` and the panels' tables, so you can edit the config in
   another pane and try the result without restarting. A mistake is shown in
   the dialog and the keys you had stay in force.
 - `d` puts every key back to its default, after asking. Your key lines are
   commented out rather than deleted, with a line above them saying when.
-- `Esc` closes it.
+- `Esc` or `q` closes it, as they close the two pickers.
+
+These keys, and the arrows that scroll it, are the dialog's own and no table
+moves them, so the dialog that changes your keys can always be closed.
 
 If a mistake in a key table stops mirador starting, the error says so, and
 `mirador --reset-keys` does the same reset from the command line.
