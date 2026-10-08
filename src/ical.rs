@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 
 use jiff::civil::{Date, DateTime, Time, Weekday};
 use jiff::tz::TimeZone;
-use jiff::{Span, Timestamp, Zoned};
+use jiff::{Span, Timestamp, Unit, Zoned};
 
 /// One occurrence of an event, resolved to the local timezone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,9 +61,16 @@ impl Event {
 #[derive(Debug, Default)]
 pub struct Calendar {
     pub events: Vec<Event>,
-    /// Events that parsed far enough to be counted but not to be shown, with
-    /// the reason. Surfaced rather than swallowed: a calendar quietly missing
-    /// half its entries is worse than one that says it could not read them.
+    /// What could not be shown, one reason each: an event that parsed far
+    /// enough to be counted but not to be shown, or the note that the file ran
+    /// past [`MAX_LINES`] and the rest went unread.
+    ///
+    /// The agenda panel shows how many there are — `2 entries could not be
+    /// read` — and not what they say. That is enough to keep a calendar missing
+    /// entries from looking merely empty, which is the point: one quietly
+    /// missing half its entries is worse than one that says so. It is not
+    /// enough to say which entries or why, and a calendar cut short at the line
+    /// limit reads as one more entry rather than as everything past the cut.
     pub skipped: Vec<String>,
 }
 
@@ -114,9 +121,9 @@ pub fn parse(text: &str, tz: &TimeZone, from: &Zoned, until: &Zoned) -> Calendar
 /// RFC 5545 folds at 75 octets, so a maximally-folded 10MB calendar holds about
 /// 138,000 lines and a typical one perhaps 300,000. This admits every real
 /// calendar that fits under the byte cap and holds the `Vec` itself to under
-/// 10MB. Hitting it is reported rather than swallowed, on the same principle as
-/// `Calendar::skipped`: a calendar quietly missing half its entries is worse than
-/// one that says it could not read them.
+/// 10MB. Hitting it adds a line to [`Calendar::skipped`], so the agenda counts
+/// it among the entries it could not read: the reader is told something is
+/// missing, though not that it is everything past this line.
 const MAX_LINES: usize = 400_000;
 
 /// Undo RFC 5545 line folding.
@@ -275,8 +282,8 @@ fn event_from(block: &[&str], tz: &TimeZone) -> Result<Option<Parsed>, String> {
             continue;
         };
         match property.name.to_ascii_uppercase().as_str() {
-            "SUMMARY" => summary = Some(unescape(property.value)),
-            "LOCATION" => location = Some(unescape(property.value)),
+            "SUMMARY" => summary = Some(clip(unescape(property.value))),
+            "LOCATION" => location = Some(clip(unescape(property.value))),
             "DTSTART" => start = Some(moment(&property, tz)?),
             "DTEND" => end = Some(moment(&property, tz)?.0),
             "DURATION" => duration = parse_duration(property.value),
@@ -445,6 +452,24 @@ fn parse_duration(value: &str) -> Option<Span> {
     Some(if negative { -span } else { span })
 }
 
+/// The longest `SUMMARY` or `LOCATION` kept, in characters.
+///
+/// The agenda draws a summary on every frame — cloned, joined to its place,
+/// measured for width — and again for the status bar's alert, so an unbounded
+/// one is unbounded work sixty times a minute. Folding lets a single property
+/// run to the whole 10MB the panel admits, and nothing else here bounds it.
+/// `feed` keeps a headline to the same figure for the same reason; a real
+/// summary is a few dozen characters, and the panel shows forty-odd cells.
+const MAX_TEXT: usize = 400;
+
+/// Keep the first [`MAX_TEXT`] characters, cut on a character boundary.
+fn clip(text: String) -> String {
+    if text.chars().count() <= MAX_TEXT {
+        return text;
+    }
+    text.chars().take(MAX_TEXT).collect()
+}
+
 /// Undo the four escapes RFC 5545 defines for TEXT values.
 fn unescape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -472,10 +497,17 @@ pub enum Recurrence {
         freq: Freq,
         interval: i32,
         count: Option<u32>,
-        until: Option<Timestamp>,
-        /// Weekdays, for `FREQ=WEEKLY;BYDAY=MO,WE`. Empty means "the same
-        /// weekday as the start".
+        until: Option<Until>,
+        /// Weekdays, from `BYDAY`. A weekly rule falls on each of them, as in
+        /// `FREQ=WEEKLY;BYDAY=MO,WE`; a daily rule falls only on them, as in
+        /// "every weekday". Empty means the start's own weekday for a weekly
+        /// rule, and every day for a daily one.
         weekdays: Vec<Weekday>,
+        /// The day a week starts on, from `WKST`; Monday when not given. It
+        /// decides which listed days share a week, which matters once a weekly
+        /// rule skips weeks: every other week of `SU,MO` is a different pair of
+        /// days when weeks start on Sunday.
+        week_start: Weekday,
     },
     /// The rule used a part this parser does not implement. Only the event's
     /// own start is produced — see the note on [`Recurrence::expand`].
@@ -490,23 +522,43 @@ pub enum Freq {
     Yearly,
 }
 
+/// Where a rule stops, in the form the file wrote it.
+///
+/// RFC 5545 makes `UNTIL` inclusive, and only the form ending in `Z` names an
+/// instant. A date, or a date-time without the `Z`, is on the rule's own clock.
+/// Reading both as UTC put the end of an all-day series on the evening before
+/// its last day for everyone west of Greenwich, so the last occurrence was lost
+/// there and kept east of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Until {
+    /// `…Z`: the same moment everywhere.
+    Instant(Timestamp),
+    /// A date-time with no zone, on the rule's own clock.
+    Floating(DateTime),
+    /// A date: every occurrence on that day, in the rule's own zone, counts.
+    Day(Date),
+}
+
 impl Recurrence {
     /// Parse an `RRULE` value, or report that it is outside the subset.
     ///
     /// The parts handled are `FREQ`, `INTERVAL`, `COUNT`, `UNTIL` and — for
-    /// weekly rules — `BYDAY` without an ordinal prefix. `WKST` is accepted and
-    /// ignored, because it only matters for the parts we do not support.
+    /// daily and weekly rules — `BYDAY` without an ordinal prefix — and
+    /// `WKST`, the day a week starts on, which decides how a weekly rule that
+    /// skips weeks groups its listed days.
     ///
     /// Anything else is [`Recurrence::Unsupported`]. That includes `BYSETPOS`,
-    /// `BYMONTHDAY`, `BYMONTH` and an ordinal `BYDAY` such as `1MO`, all of
-    /// which *narrow* the set of occurrences — so guessing without them would
-    /// put meetings on screen that are not happening.
+    /// `BYMONTHDAY`, `BYMONTH`, an ordinal `BYDAY` such as `1MO`, and any
+    /// `BYDAY` on a monthly or yearly rule, all of which change the set of
+    /// occurrences — so guessing without them would put meetings on screen that
+    /// are not happening.
     fn parse(value: &str) -> Self {
         let mut freq = None;
         let mut interval = 1i32;
         let mut count = None;
         let mut until = None;
         let mut weekdays = Vec::new();
+        let mut week_start = Weekday::Monday;
 
         for part in value.split(';') {
             let Some((key, val)) = part.split_once('=') else {
@@ -533,18 +585,18 @@ impl Recurrence {
                     Err(_) => return Self::Unsupported,
                 },
                 "UNTIL" => {
-                    let stamp = parse_datetime(val)
-                        .and_then(|dt| dt.to_zoned(TimeZone::UTC).ok())
-                        .map(|z| z.timestamp())
-                        .or_else(|| {
-                            parse_date(val)
-                                .and_then(|d| {
-                                    d.to_datetime(Time::midnight()).to_zoned(TimeZone::UTC).ok()
-                                })
-                                .map(|z| z.timestamp())
-                        });
-                    match stamp {
-                        Some(stamp) => until = Some(stamp),
+                    let end = match parse_datetime(val) {
+                        Some(civil) if val.ends_with('Z') => civil
+                            .to_zoned(TimeZone::UTC)
+                            .ok()
+                            .map(|z| Until::Instant(z.timestamp())),
+                        Some(civil) => Some(Until::Floating(civil)),
+                        // A date, or a date-time whose time is broken: the
+                        // date it carries, which is the part still readable.
+                        None => parse_date(val).map(Until::Day),
+                    };
+                    match end {
+                        Some(end) => until = Some(end),
                         None => return Self::Unsupported,
                     }
                 }
@@ -558,18 +610,27 @@ impl Recurrence {
                         }
                     }
                 }
-                "WKST" => {}
+                "WKST" => match weekday(val) {
+                    Some(day) => week_start = day,
+                    None => return Self::Unsupported,
+                },
                 _ => return Self::Unsupported,
             }
         }
 
         match freq {
+            // `BYDAY` fills out a weekly rule and narrows a daily one. On a
+            // monthly or yearly rule it means every listed weekday of the month
+            // or year; ignored, it put a Mondays-only rule on the 3rd of each
+            // month, whatever day that was.
+            Some(Freq::Monthly | Freq::Yearly) if !weekdays.is_empty() => Self::Unsupported,
             Some(freq) => Self::Every {
                 freq,
                 interval,
                 count,
                 until,
                 weekdays,
+                week_start,
             },
             None => Self::Unsupported,
         }
@@ -593,10 +654,17 @@ impl Recurrence {
         // The rule repeats in its own zone (see `moment`); the reader sees each
         // occurrence in theirs.
         let reader = from.time_zone().clone();
-        let length: Option<Span> = event
-            .end
-            .as_ref()
-            .map(|end| end.timestamp() - event.start.timestamp());
+        // An all-day event lasts whole days, and a day the clocks change on is
+        // 23 or 25 hours long: measured in seconds, a repeat that fell on one
+        // ended at 01:00 or 23:00 and was still in progress into the next day.
+        // jiff adds days to a zoned time on the calendar, keeping midnight.
+        let length: Option<Span> = event.end.as_ref().map(|end| {
+            event
+                .all_day
+                .then(|| event.start.until((Unit::Day, end)).ok())
+                .flatten()
+                .unwrap_or_else(|| end.timestamp() - event.start.timestamp())
+        });
 
         let occurrence = |start: Zoned| -> Option<Event> {
             if skip.contains(&start.timestamp()) {
@@ -622,6 +690,7 @@ impl Recurrence {
             count,
             until: rule_until,
             weekdays,
+            week_start,
         } = self
         else {
             // `Once` and `Unsupported` agree here, for different reasons.
@@ -634,8 +703,33 @@ impl Recurrence {
         let time = event.start.time();
         let tz = event.start.time_zone().clone();
         let last_day = until.with_time_zone(tz.clone()).date();
+        // A rule with `COUNT` has to count every occurrence before the window
+        // to know how many are left, so it starts at the start; `COUNT` bounds
+        // it. One without can start just short of the window.
+        let first = match count {
+            Some(_) => 0,
+            None => first_step(
+                origin,
+                *freq,
+                *interval,
+                length,
+                &from.with_time_zone(tz.clone()),
+            ),
+        };
 
-        for step in 0..MAX_STEPS {
+        // RFC 5545: "The DTSTART property value always counts as the first
+        // occurrence." A rule whose listed weekdays leave out the day it was
+        // set up on would never produce that day, so it is produced here and
+        // spends one of `COUNT`, as the RFC has it.
+        if !weekdays.is_empty()
+            && !weekdays.contains(&event.start.weekday())
+            && count.is_none_or(|limit| limit > 0)
+        {
+            produced += 1;
+            out.extend(occurrence(event.start.clone()));
+        }
+
+        for step in first..first.saturating_add(MAX_STEPS) {
             // Measured from the origin each time, never from the previous
             // occurrence. jiff constrains a date that does not exist to the
             // end of its month, so 31 January plus a month is 28 February —
@@ -644,50 +738,34 @@ impl Recurrence {
             let Some(cursor) = nth_step(origin, *freq, *interval, step) else {
                 break;
             };
-            if cursor > last_day {
+            // A weekly rule with BYDAY fills out the cursor's whole week, from
+            // its Monday, and the cursor is on the start's weekday: stopping
+            // when the cursor passed the window lost the listed days earlier
+            // in that week that were still inside it.
+            let reaches_back_to = if *freq == Freq::Weekly && !weekdays.is_empty() {
+                cursor.saturating_sub(Span::new().days(into_week(cursor.weekday(), *week_start)))
+            } else {
+                cursor
+            };
+            if reaches_back_to > last_day {
                 break;
             }
-            // RFC 5545 §3.3.10: an instance on a date that does not exist —
-            // the 31st of a short month, 29 February outside a leap year — is
-            // ignored and not counted. jiff's constrained date is how one
-            // shows itself: the day of the month came back different. Both
-            // days are in the rule's own zone, which is what keeps an event on
-            // the 1st in UTC from being read as the 31st in New York and losing
-            // every short month.
-            if matches!(freq, Freq::Monthly | Freq::Yearly) && cursor.day() != origin.day() {
-                continue;
-            }
 
-            // For a weekly rule with BYDAY, the cursor names a week and each
-            // listed weekday in it is an occurrence. Offsets are taken from
-            // Monday so the set is produced in calendar order regardless of
-            // which day the event started on.
-            let days: Vec<Date> = if *freq == Freq::Weekly && !weekdays.is_empty() {
-                let cursor_offset = i64::from(cursor.weekday().to_monday_zero_offset());
-                let mut days: Vec<Date> = weekdays
-                    .iter()
-                    .filter_map(|w| {
-                        let delta = i64::from(w.to_monday_zero_offset()) - cursor_offset;
-                        cursor.checked_add(Span::new().days(delta)).ok()
-                    })
-                    .collect();
-                days.sort_unstable();
-                days.dedup();
-                days
-            } else {
-                vec![cursor]
-            };
-
-            for day in days {
-                if day < event.start.date() {
+            for day in days_at(*freq, weekdays, *week_start, origin, cursor) {
+                if day < origin {
                     continue;
                 }
-                let Ok(start) = day.to_datetime(time).to_zoned(tz.clone()) else {
+                let civil = day.to_datetime(time);
+                let Ok(start) = civil.to_zoned(tz.clone()) else {
                     continue;
                 };
-                if let Some(limit) = rule_until
-                    && start.timestamp() > *limit
-                {
+                let past = match rule_until {
+                    None => false,
+                    Some(Until::Instant(limit)) => start.timestamp() > *limit,
+                    Some(Until::Floating(limit)) => civil > *limit,
+                    Some(Until::Day(limit)) => day > *limit,
+                };
+                if past {
                     return out;
                 }
                 if let Some(limit) = count
@@ -704,6 +782,57 @@ impl Recurrence {
 
         out
     }
+}
+
+/// The days one step of a rule falls on, in the rule's own zone, in order.
+///
+/// `cursor` is the step's date, from [`nth_step`]; `origin` is the start's.
+/// The result may still include days before the start, from the first week of
+/// a weekly rule, and the caller drops those.
+fn days_at(
+    freq: Freq,
+    weekdays: &[Weekday],
+    week_start: Weekday,
+    origin: Date,
+    cursor: Date,
+) -> Vec<Date> {
+    match freq {
+        // BYDAY narrows a daily rule: "every weekday" is
+        // `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR`. A day not listed is not an
+        // occurrence and does not spend `COUNT`.
+        Freq::Daily if !weekdays.is_empty() && !weekdays.contains(&cursor.weekday()) => Vec::new(),
+        // RFC 5545 §3.3.10: an instance on a date that does not exist — the
+        // 31st of a short month, 29 February outside a leap year — is ignored
+        // and not counted. jiff's constrained date is how one shows itself: the
+        // day of the month came back different. Both days are in the rule's own
+        // zone, which is what keeps an event on the 1st in UTC from being read
+        // as the 31st in New York and losing every short month.
+        Freq::Monthly | Freq::Yearly if cursor.day() != origin.day() => Vec::new(),
+        // For a weekly rule with BYDAY, the cursor names a week and each listed
+        // weekday in it is an occurrence. Offsets are taken from the rule's
+        // week start (`WKST`, Monday by default) so the set is produced in
+        // calendar order, and grouped into weeks as the rule's author meant.
+        Freq::Weekly if !weekdays.is_empty() => {
+            let cursor_offset = i64::from(into_week(cursor.weekday(), week_start));
+            let mut days: Vec<Date> = weekdays
+                .iter()
+                .filter_map(|w| {
+                    let delta = i64::from(into_week(*w, week_start)) - cursor_offset;
+                    cursor.checked_add(Span::new().days(delta)).ok()
+                })
+                .collect();
+            days.sort_unstable();
+            days.dedup();
+            days
+        }
+        _ => vec![cursor],
+    }
+}
+
+/// How many days into a week starting on `week_start` the weekday `day` falls,
+/// 0 to 6.
+fn into_week(day: Weekday, week_start: Weekday) -> i8 {
+    (day.to_monday_zero_offset() - week_start.to_monday_zero_offset()).rem_euclid(7)
 }
 
 /// The date `step` intervals after `origin`, or `None` once the rule has run
@@ -732,11 +861,62 @@ fn nth_step(origin: Date, freq: Freq, interval: i32, step: usize) -> Option<Date
     origin.checked_add(span.ok()?).ok()
 }
 
+/// The step to begin expanding a rule without `COUNT` from: the last one that
+/// could still be showing when the window opens, give or take a step.
+///
+/// Expansion began at `DTSTART`, and [`MAX_STEPS`] is counted from where it
+/// begins, so a daily rule written more than about eleven years ago spent every
+/// step before reaching today and drew nothing — no event, no count, nothing
+/// said. Since [`nth_step`] measures from the origin, the step that lands just
+/// short of the window can be worked out rather than walked to: how many whole
+/// intervals fit between the origin and the earliest start that still overlaps
+/// `from`. A day's margin for the clock and one step back for the arithmetic
+/// cost a few wasted steps; starting late would cost an occurrence.
+///
+/// `from` is in the rule's own zone, like `origin`. Anything that cannot be
+/// worked out starts at the origin, which is what happened before.
+fn first_step(
+    origin: Date,
+    freq: Freq,
+    interval: i32,
+    length: Option<Span>,
+    from: &Zoned,
+) -> usize {
+    // An occurrence is shown if it ends after the window opens.
+    let earliest = match length {
+        Some(span) => from.checked_sub(span).ok(),
+        None => Some(from.clone()),
+    };
+    let Some(target) = earliest.and_then(|z| z.date().checked_sub(Span::new().days(1)).ok()) else {
+        return 0;
+    };
+    if target <= origin {
+        return 0;
+    }
+    let unit = match freq {
+        Freq::Daily | Freq::Weekly => Unit::Day,
+        Freq::Monthly => Unit::Month,
+        Freq::Yearly => Unit::Year,
+    };
+    let Ok(gap) = origin.until((unit, target)) else {
+        return 0;
+    };
+    let units = match freq {
+        Freq::Daily => i64::from(gap.get_days()),
+        Freq::Weekly => i64::from(gap.get_days()) / 7,
+        Freq::Monthly => i64::from(gap.get_months()),
+        Freq::Yearly => i64::from(gap.get_years()),
+    };
+    usize::try_from(units / i64::from(interval) - 1).unwrap_or(0)
+}
+
 /// Most steps a single rule may take while expanding.
 ///
 /// Bounds a malformed rule with a tiny interval and no `COUNT` or `UNTIL`,
 /// which would otherwise spin for as long as the window is wide — on the
-/// reader thread, where nothing would notice.
+/// reader thread, where nothing would notice. Counted from where expansion
+/// begins: just short of the window for a rule without `COUNT` (see
+/// [`first_step`]), and `DTSTART` for one with, which `COUNT` bounds as well.
 const MAX_STEPS: usize = 4_000;
 
 /// The two-letter weekday codes, without an ordinal prefix.
@@ -1039,7 +1219,8 @@ mod tests {
             lines.len()
         );
 
-        // And the reader is told, rather than quietly losing the rest.
+        // And it lands in `skipped`, which the agenda counts, rather than
+        // quietly losing the rest.
         let calendar = parse(&text, &tz, &from, &until);
         assert!(
             calendar.skipped.iter().any(|s| s.contains("more than")),
@@ -1424,17 +1605,28 @@ END:VEVENT",
     }
 
     /// A broken time in `UNTIL` falls back to the date it carries, read the way
-    /// this parser reads a date-only `UNTIL` — midnight UTC at its start — so a
-    /// broken rule ends early rather than running on. A time the `.ics` gets
-    /// wrong in `EXDATE` is ignored like any other unreadable exception.
+    /// a date-only `UNTIL` is read: through the end of that day, on the rule's
+    /// own clock. It was midnight UTC as that day began, which ended the rule a
+    /// day early in New York and on the day itself in Tokyo. A time the `.ics`
+    /// gets wrong in `EXDATE` is ignored like any other unreadable exception.
     #[test]
     fn a_broken_time_in_until_ends_the_rule_at_its_date() {
-        let c = parse_all(
-            "BEGIN:VEVENT\r\nDTSTART:20260601T090000\r\n\
-             RRULE:FREQ=DAILY;UNTIL=20260610T250000Z\r\nSUMMARY:x\r\nEND:VEVENT",
-        );
-        let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
-        assert_eq!(days, (1..=9).collect::<Vec<i8>>());
+        for zone in ["America/New_York", "Asia/Tokyo"] {
+            let tz = TimeZone::get(zone).expect("a zone every tzdb has");
+            let from = local_midnight(date(2026, 1, 1), &tz).unwrap();
+            let to = local_midnight(date(2030, 1, 1), &tz).unwrap();
+            let c = parse(
+                &wrap(
+                    "BEGIN:VEVENT\r\nDTSTART:20260601T090000\r\n\
+                     RRULE:FREQ=DAILY;UNTIL=20260610T250000Z\r\nSUMMARY:x\r\nEND:VEVENT",
+                ),
+                &tz,
+                &from,
+                &to,
+            );
+            let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+            assert_eq!(days, (1..=10).collect::<Vec<i8>>(), "read in {zone}");
+        }
     }
 
     /// RFC 5545 §3.3.10: an instance that falls on a date which does not exist
@@ -1634,6 +1826,271 @@ END:VEVENT",
         );
         assert!(!c.events.is_empty(), "skipped: {:?}", c.skipped);
         assert!(c.events.len() <= 4_000, "the cap did not hold");
+    }
+
+    /// Expansion is capped at `MAX_STEPS` steps, and they were counted from
+    /// `DTSTART`: a daily rule begun more than about eleven years ago spent all
+    /// four thousand before reaching today and drew nothing, with nothing said.
+    /// A rule without `COUNT` now starts just short of the window and keeps its
+    /// step — every other day stays every other day — and one with `COUNT`
+    /// still counts from its start, so it ends when it ended.
+    #[test]
+    fn a_rule_that_began_long_ago_still_reaches_the_window() {
+        let (from, to) = window((2026, 10, 7), (2026, 10, 14));
+        let days_of = |start: &str, rule: &str| -> Vec<i8> {
+            let c = parse(
+                &wrap(&format!(
+                    "BEGIN:VEVENT\r\nDTSTART:{start}\r\nRRULE:{rule}\r\nSUMMARY:x\r\nEND:VEVENT"
+                )),
+                &tz(),
+                &from,
+                &to,
+            );
+            c.events.iter().map(|e| e.start.day()).collect()
+        };
+        assert_eq!(
+            days_of("20100101T090000", "FREQ=DAILY"),
+            vec![7, 8, 9, 10, 11, 12, 13]
+        );
+        // 7 October 2026 is 6,123 days after 1 January 2010, an odd number.
+        assert_eq!(
+            days_of("20100101T090000", "FREQ=DAILY;INTERVAL=2"),
+            vec![8, 10, 12]
+        );
+        // 6 January 1930 is a Monday, about five thousand weeks back.
+        assert_eq!(
+            days_of("19300106T090000", "FREQ=WEEKLY;BYDAY=MO,TH"),
+            vec![8, 12]
+        );
+        // Over five thousand months back, on the 7th.
+        assert_eq!(days_of("16000107T090000", "FREQ=MONTHLY"), vec![7]);
+        assert_eq!(
+            days_of("20100101T090000", "FREQ=DAILY;COUNT=100"),
+            Vec::<i8>::new(),
+            "a hundred days from 2010 were over in 2010"
+        );
+    }
+
+    /// `FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR` is how Thunderbird writes "every
+    /// weekday". `BYDAY` was read only on weekly rules, so this one ran every
+    /// day, weekends included: meetings the calendar does not have. On a daily
+    /// rule it narrows, and a day not listed does not spend `COUNT`.
+    #[test]
+    fn every_weekday_is_a_daily_rule_that_skips_the_weekend() {
+        let (from, to) = window((2026, 10, 1), (2026, 11, 1));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART:20261009T090000\r\n\
+                 RRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=5\r\nSUMMARY:x\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        // 9 October 2026 is a Friday.
+        let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+        assert_eq!(days, vec![9, 12, 13, 14, 15]);
+    }
+
+    /// RFC 5545: "The DTSTART property value always counts as the first
+    /// occurrence." A weekday rule started on a Saturday, or a Mondays rule
+    /// started on a Wednesday, still happens on the day it was set up, and
+    /// that day spends one of `COUNT`. Narrowing by `BYDAY` had dropped it.
+    #[test]
+    fn the_start_counts_as_the_first_occurrence_whatever_byday_lists() {
+        let (from, to) = window((2026, 10, 1), (2026, 11, 1));
+        for (rule, start, want) in [
+            // 10 October 2026 is a Saturday.
+            (
+                "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=3",
+                "20261010T090000",
+                vec![10, 12, 13],
+            ),
+            // 7 October 2026 is a Wednesday.
+            (
+                "FREQ=WEEKLY;BYDAY=MO;COUNT=3",
+                "20261007T090000",
+                vec![7, 12, 19],
+            ),
+        ] {
+            let c = parse(
+                &wrap(&format!(
+                    "BEGIN:VEVENT\r\nDTSTART:{start}\r\nRRULE:{rule}\r\nSUMMARY:x\r\nEND:VEVENT"
+                )),
+                &tz(),
+                &from,
+                &to,
+            );
+            let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+            assert_eq!(days, want, "{rule}");
+        }
+    }
+
+    /// `WKST` decides which week a listed day falls in, and that matters once
+    /// a weekly rule skips weeks: every other week of `SU,MO` from a Sunday is
+    /// that Sunday and the next day when weeks start on Sunday, and the Sunday
+    /// and the Monday *before* it when they start on Monday. An ordinary
+    /// fortnightly meeting written with `WKST=SU`, as Outlook, Google and Apple
+    /// write them, expands exactly as it would without it.
+    #[test]
+    fn a_skipping_weekly_rule_groups_its_days_by_its_own_week_start() {
+        let (from, to) = window((2026, 10, 1), (2026, 11, 30));
+        let days = |rule: &str, start: &str| -> Vec<i8> {
+            let c = parse(
+                &wrap(&format!(
+                    "BEGIN:VEVENT\r\nDTSTART:{start}\r\nRRULE:{rule}\r\nSUMMARY:x\r\nEND:VEVENT"
+                )),
+                &tz(),
+                &from,
+                &to,
+            );
+            c.events.iter().map(|e| e.start.day()).collect()
+        };
+        // 4 October 2026 is a Sunday.
+        assert_eq!(
+            days(
+                "FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=SU;COUNT=4",
+                "20261004T090000"
+            ),
+            vec![4, 5, 18, 19]
+        );
+        assert_eq!(
+            days(
+                "FREQ=WEEKLY;INTERVAL=2;BYDAY=SU,MO;WKST=MO;COUNT=4",
+                "20261004T090000"
+            ),
+            vec![4, 12, 18, 26]
+        );
+        // 6 October 2026 is a Tuesday: a fortnightly Tuesday and Thursday
+        // meeting is the same whichever day the week starts on.
+        for wkst in ["SU", "MO"] {
+            assert_eq!(
+                days(
+                    &format!("FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,TH;WKST={wkst};COUNT=4"),
+                    "20261006T090000"
+                ),
+                vec![6, 8, 20, 22],
+                "WKST={wkst}"
+            );
+        }
+    }
+
+    /// RFC 5545 makes `UNTIL` inclusive, and only a value ending in `Z` is an
+    /// instant: a date, or a date-time without the `Z`, is on the rule's own
+    /// clock. Both were read as UTC, which put the end of a series on the
+    /// evening before its last day for everyone west of Greenwich — the last
+    /// occurrence was lost in New York and kept in Tokyo. Google writes the end
+    /// of an all-day series as a bare date.
+    #[test]
+    fn until_without_a_z_is_read_on_the_rules_own_clock_and_keeps_its_last_day() {
+        for zone in ["America/New_York", "Asia/Tokyo", "UTC"] {
+            let tz = TimeZone::get(zone).expect("a zone every tzdb has");
+            let from = local_midnight(date(2026, 5, 1), &tz).unwrap();
+            let to = local_midnight(date(2026, 7, 1), &tz).unwrap();
+            for (start, until) in [
+                ("DTSTART;VALUE=DATE:20260601", "20260603"),
+                ("DTSTART:20260601T090000", "20260603T090000"),
+            ] {
+                let c = parse(
+                    &wrap(&format!(
+                        "BEGIN:VEVENT\r\n{start}\r\nRRULE:FREQ=DAILY;UNTIL={until}\r\n\
+                         SUMMARY:x\r\nEND:VEVENT"
+                    )),
+                    &tz,
+                    &from,
+                    &to,
+                );
+                let days: Vec<_> = c.events.iter().map(|e| e.start.day()).collect();
+                assert_eq!(days, vec![1, 2, 3], "{start} until {until}, read in {zone}");
+            }
+        }
+    }
+
+    /// A weekly rule with `BYDAY` fills out the week its cursor lands in, and
+    /// the cursor is on the start's weekday. Expansion stopped once the cursor
+    /// passed the window, so a Wednesday rule that also meets on Mondays lost
+    /// the Monday at the window's far end: that week's Wednesday was outside
+    /// the window and its Monday was not.
+    #[test]
+    fn a_weekly_rule_keeps_the_listed_days_early_in_its_last_week() {
+        let (from, to) = window((2026, 8, 5), (2026, 8, 11));
+        let c = parse(
+            &wrap(
+                "BEGIN:VEVENT\r\nDTSTART:20260805T090000\r\n\
+                 RRULE:FREQ=WEEKLY;BYDAY=MO,WE\r\nSUMMARY:x\r\nEND:VEVENT",
+            ),
+            &tz(),
+            &from,
+            &to,
+        );
+        // 5 August 2026 is a Wednesday, and the window ends as Tuesday begins.
+        let days: Vec<_> = c.events.iter().map(|e| e.start.date()).collect();
+        assert_eq!(days, vec![date(2026, 8, 5), date(2026, 8, 10)]);
+    }
+
+    /// An all-day event lasts whole days, and a day the clocks change on is 23
+    /// or 25 hours long. Measured in seconds, an all-day repeat that fell on
+    /// one ended at 01:00 or 23:00 rather than midnight — still in progress an
+    /// hour into the next day, or over before its own day was.
+    #[test]
+    fn an_all_day_repeat_ends_at_midnight_across_a_clock_change() {
+        // New York's clocks go forward on 8 March 2026 and back on 1 November.
+        let (from, to) = window((2026, 2, 1), (2026, 12, 1));
+        for (first, next) in [("20260301", "20260302"), ("20261025", "20261026")] {
+            let c = parse(
+                &wrap(&format!(
+                    "BEGIN:VEVENT\r\nDTSTART;VALUE=DATE:{first}\r\nDTEND;VALUE=DATE:{next}\r\n\
+                     RRULE:FREQ=WEEKLY;COUNT=3\r\nSUMMARY:x\r\nEND:VEVENT"
+                )),
+                &tz(),
+                &from,
+                &to,
+            );
+            assert_eq!(c.events.len(), 3, "skipped: {:?}", c.skipped);
+            for event in &c.events {
+                let end = event.end.as_ref().expect("an end");
+                assert_eq!(
+                    (end.date(), end.hour(), end.minute()),
+                    (event.start.date().tomorrow().unwrap(), 0, 0),
+                    "the day that began at {}",
+                    event.start
+                );
+            }
+        }
+    }
+
+    /// A summary is drawn on every frame — cloned, joined to its place,
+    /// measured — and again for the status bar's alert, and folding lets one
+    /// property run to the whole 10MB the agenda admits. Clipped where it is
+    /// read, as `feed` clips a headline, and on a character boundary.
+    #[test]
+    fn a_summary_or_location_is_clipped_where_it_is_read() {
+        let long = "日".repeat(1_000_000);
+        let c = parse_all(&format!(
+            "BEGIN:VEVENT\r\nDTSTART:20260801T140000\r\nSUMMARY:{long}\r\n\
+             LOCATION:{long}\r\nEND:VEVENT"
+        ));
+        let event = &c.events[0];
+        let location = event.location.as_deref().unwrap_or_default();
+        // Counts first, so a failure does not print three megabytes.
+        assert_eq!(event.summary.chars().count(), MAX_TEXT, "summary");
+        assert_eq!(location.chars().count(), MAX_TEXT, "location");
+        assert!(
+            event
+                .summary
+                .chars()
+                .chain(location.chars())
+                .all(|c| c == '日')
+        );
+
+        // A real one is left alone.
+        let real = "Quarterly planning with the platform team, design, and anyone free";
+        let c = parse_all(&format!(
+            "BEGIN:VEVENT\r\nDTSTART:20260801T140000\r\nSUMMARY:{real}\r\n\
+             LOCATION:{real}\r\nEND:VEVENT"
+        ));
+        assert_eq!(c.events[0].summary, real);
+        assert_eq!(c.events[0].location.as_deref(), Some(real));
     }
 
     #[test]

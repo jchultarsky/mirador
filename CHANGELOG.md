@@ -98,6 +98,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moved focus to the panel beneath it and selected a row nobody could see,
   and the wheel scrolled lists behind it. The dialogs take the mouse the
   way they take the keyboard.
+- **"Every weekday" no longer meets at weekends.** Thunderbird writes it as a
+  daily rule naming Monday to Friday, and the agenda read the weekdays only
+  on weekly rules, so it showed the meeting on Saturday and Sunday too. A
+  daily rule now falls only on the days it names. A daily or weekly rule
+  naming weekdays also shows the day it was set up, which the standard
+  counts as the first occurrence whatever the rule names. A weekly rule that
+  skips weeks groups its days by the week start it gives, so a fortnightly
+  Sunday-and-Monday meeting from a calendar whose weeks start on Sunday
+  lands on the right pair. A monthly or yearly rule
+  naming weekdays, which means every such weekday of the month or year, is
+  outside what the agenda reads and shows only its first occurrence, rather
+  than one on the same date each month whatever day that was.
+- **A repeating event's last day is no longer lost west of Greenwich.** An
+  end date written without a time, as Google writes the end of an all-day
+  series, or a time without a zone, was read as UTC, so in the Americas the
+  series ended the evening before its last day. Both are now read on the
+  event's own clock and include that day, wherever you are. A broken time in
+  the end date, which falls back to the date it carries, now keeps that day
+  too.
+- **A weekly event on several days keeps the early ones at the end of the
+  agenda.** A rule meeting on Mondays and Wednesdays that began on a
+  Wednesday dropped the Monday on the agenda's last day.
+- **A daily event set up more than about eleven years ago appears again,**
+  if it repeats without a set number of occurrences. Expanding a rule walked
+  from its first occurrence and gave up after four thousand steps, so an old
+  daily reminder never reached today and vanished without a word. Such a rule
+  now starts just short of the days on show. One with a count still walks
+  from the start, since it has to count, and four thousand steps remains its
+  reach.
+- **A repeating all-day event ends at midnight on the day the clocks
+  change.** Its length was measured in hours, so the occurrence on a 23-hour
+  day ran to 01:00 the next morning, still in progress, and the one on a
+  25-hour day ended at 23:00.
+- **One enormous event title no longer slows the dashboard.** A calendar's
+  title and location are drawn on every frame, and line folding let either
+  run to the whole 10MB the agenda reads; both are now kept to 400
+  characters, far more than the panel shows.
 
 ## [1.19.2] - 2026-10-07
 
