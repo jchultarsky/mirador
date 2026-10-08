@@ -334,7 +334,13 @@ impl std::fmt::Debug for App {
 impl App {
     /// Build every panel named in the layout, in row-major order.
     pub fn new(config: Config) -> Result<Self> {
-        let (slots, positions) = Self::build_slots(&config)?;
+        let built = Self::build_slots(&config)?;
+        Self::around(config, built)
+    }
+
+    /// The shell around panels already built: key tables, gradients and a
+    /// dashboard in its opening state.
+    fn around(config: Config, (slots, positions): Built) -> Result<Self> {
         let (keymap, _) = crate::keymap::KeyTables::from_config(&config)
             .check()
             .map_err(anyhow::Error::msg)?;
@@ -1713,6 +1719,39 @@ impl App {
     #[cfg(test)]
     fn picker_row(&self) -> Option<usize> {
         self.picker.as_ref().map(crate::picker::Picker::selected)
+    }
+
+    /// The dashboard `config` lays out, from panels already built rather than
+    /// through `widgets::build` — which, under test, refuses the weather,
+    /// markets and news panels, because each starts a fetch thread that goes
+    /// straight to the network. A test wanting the whole default dashboard
+    /// hands over the offline panels instead.
+    ///
+    /// Each layout entry takes the first unused panel of its widget, in the
+    /// row-major order `new` builds in. An entry with none to take is an
+    /// error, as a panel that will not build is to `new`, and panels nothing
+    /// in the layout takes are dropped.
+    #[cfg(test)]
+    pub fn with_panels(config: Config, mut panels: Vec<(&str, Box<dyn Panel>)>) -> Result<Self> {
+        let mut slots = Vec::new();
+        let mut positions = Vec::new();
+        for (row_index, row) in config.layout.rows.iter().enumerate() {
+            for (column_index, entry) in row.panels.iter().enumerate() {
+                let index = panels
+                    .iter()
+                    .position(|(widget, _)| *widget == entry.widget)
+                    .with_context(|| format!("no `{}` panel was supplied", entry.widget))?;
+                let (_, panel) = panels.remove(index);
+                slots.push(Slot {
+                    widget: entry.widget.clone(),
+                    panel,
+                    last_tick: None,
+                    area: None,
+                });
+                positions.push((row_index, column_index));
+            }
+        }
+        Self::around(config, (slots, positions))
     }
 
     /// Test-only access to the private render pass.

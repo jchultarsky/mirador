@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists the words it takes, as it already did for the two `units` keys. Case
   still does not matter for these three, so every value a panel actually
   read still loads; only a word it was ignoring is refused.
+- **The test suite no longer reaches the network or your data directory.** It
+  is documented as never touching the network, and that had stopped being true
+  a second time: the weather and news panels start a fetch thread as they are
+  built, and two tests built every widget, so each run asked Open-Meteo for a
+  forecast and read the three shipped news feeds. Those tests, and almost
+  every one that built a dashboard, also found the task list, notes,
+  watchlist and world clocks in mirador's own data directory — reading your
+  tasks, and on a machine that had none of the others yet, writing them there
+  from the default config, after which your `[clocks].zones` and
+  `[stocks].symbols` would never have been read, since a list seeds only
+  while its file is missing. Under `cfg(test)` the three panels with a fetch
+  thread are refused rather than built, the tests build them offline, and the
+  data directory is one of the test run's own. No effect on the shipped
+  binary.
 
 ### Fixed
 
