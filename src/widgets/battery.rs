@@ -512,22 +512,11 @@ impl BatteryPanel {
     /// A desktop, or a battery the platform will not show us. Say which,
     /// centred, and stop: an empty meter would read as a broken one.
     fn draw_empty(&self, frame: &mut Frame, area: Rect, theme: &crate::theme::Theme) {
-        let muted = theme.muted;
         let (first, second) = match &self.error {
             Some(why) => ("No battery readable", why.as_str()),
             None => ("No battery", "Mains powered"),
         };
-        let top = area.y + area.height.saturating_sub(2) / 2;
-        for (i, text) in [first, second].into_iter().enumerate() {
-            let y = top + u16::try_from(i).unwrap_or(0);
-            if y < area.y + area.height {
-                let text = crate::grid::truncate(text, usize::from(area.width));
-                frame.render_widget(
-                    Paragraph::new(Span::styled(text, Style::default().fg(muted))).centered(),
-                    Rect::new(area.x, y, area.width, 1),
-                );
-            }
-        }
+        crate::chart::draw_notice(frame, area, theme, &[first, second]);
     }
 }
 
@@ -572,6 +561,7 @@ fn detail_parts(reading: Reading, muted: Style) -> Vec<Vec<Span<'static>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chart::screen;
 
     fn reading(charge_pct: u16, flow: Flow, remaining: Option<u64>) -> Reading {
         Reading {
@@ -586,38 +576,6 @@ mod tests {
 
     fn panel(reading: Option<Reading>) -> BatteryPanel {
         BatteryPanel::with_reading(BatteryConfig::default(), reading)
-    }
-
-    fn screen(panel: &mut BatteryPanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     #[test]

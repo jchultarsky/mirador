@@ -17,10 +17,14 @@
 //! The same gradient also colours the numeric readout, so a hot CPU turns red
 //! in the number and the graph at the same instant.
 
+use std::collections::VecDeque;
+
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
 
 /// Number of entries in a baked gradient: one per percentage point.
 const STEPS: usize = 101;
@@ -195,7 +199,10 @@ fn level(value: f64, low: f64, high: f64, bias: f64, floor: usize) -> usize {
 /// A history graph rendered with braille cells.
 #[derive(Debug)]
 pub struct BrailleGraph<'a> {
-    data: &'a [u64],
+    /// The samples, oldest first, as two runs read one after the other —
+    /// the two halves a `VecDeque` keeps its ring in. A plain slice is the
+    /// first run with an empty second.
+    data: (&'a [u64], &'a [u64]),
     max: u64,
     gradient: &'a Gradient,
     track_style: Style,
@@ -205,10 +212,41 @@ impl<'a> BrailleGraph<'a> {
     /// A graph of `data` scaled to `max`, coloured by `gradient`.
     pub fn new(data: &'a [u64], max: u64, gradient: &'a Gradient) -> Self {
         Self {
-            data,
+            data: (data, &[]),
             max,
             gradient,
             track_style: Style::default(),
+        }
+    }
+
+    /// A graph of a panel's history, read where it lies.
+    ///
+    /// Every history in the program is a `VecDeque` (`samples::push_bounded`),
+    /// and each panel used to copy the whole of it into a `Vec` on every frame
+    /// to hand `new` a slice — a copy sized by `[<panel>].history`, which
+    /// nothing bounds above, where the graph reads at most two samples a
+    /// cell. This borrows the deque's two halves instead, so a frame costs
+    /// what is on screen and nothing for what is behind it.
+    pub fn of_history(history: &'a VecDeque<u64>, max: u64, gradient: &'a Gradient) -> Self {
+        Self {
+            data: history.as_slices(),
+            max,
+            gradient,
+            track_style: Style::default(),
+        }
+    }
+
+    /// How many samples there are, across both runs.
+    fn len(&self) -> usize {
+        self.data.0.len() + self.data.1.len()
+    }
+
+    /// The sample at `index`, counting from the oldest across both runs.
+    fn sample(&self, index: usize) -> Option<u64> {
+        let (head, tail) = self.data;
+        match index.checked_sub(head.len()) {
+            None => head.get(index).copied(),
+            Some(index) => tail.get(index).copied(),
         }
     }
 
@@ -249,14 +287,16 @@ impl<'a> BrailleGraph<'a> {
             }
         }
 
-        if self.data.is_empty() || self.max == 0 {
+        let len = self.len();
+        if len == 0 || self.max == 0 {
             return;
         }
 
-        // Two samples per cell, right-aligned to the newest data.
+        // Two samples per cell, right-aligned to the newest data. Only the
+        // last `capacity` are ever read, by index, so nothing is copied.
         let capacity = width * 2;
-        let start = self.data.len().saturating_sub(capacity);
-        let visible = &self.data[start..];
+        let start = len.saturating_sub(capacity);
+        let visible = len - start;
 
         // A single row cannot encode magnitude vertically, so widen the
         // rounding bias to keep small values visible.
@@ -277,7 +317,7 @@ impl<'a> BrailleGraph<'a> {
                 // Fill from the right so the newest sample sits at the edge,
                 // which is where the eye goes on a scrolling graph.
                 let cell_from_right = width - 1 - col;
-                let Some(end) = visible.len().checked_sub(cell_from_right * 2) else {
+                let Some(end) = visible.checked_sub(cell_from_right * 2) else {
                     // No data this far back; leave the track showing.
                     continue;
                 };
@@ -288,7 +328,7 @@ impl<'a> BrailleGraph<'a> {
                 // second — drew every sample too high. Hundredths of a per
                 // cent, so the result is below 10,001 and converts exactly.
                 let pct = |index: Option<usize>| -> Option<f64> {
-                    let raw = *visible.get(index?)?;
+                    let raw = self.sample(start + index?)?;
                     let basis_points =
                         u128::from(raw.min(self.max)) * 10_000 / u128::from(self.max);
                     Some(f64::from(u32::try_from(basis_points).unwrap_or(10_000)) / 100.0)
@@ -312,12 +352,84 @@ impl<'a> BrailleGraph<'a> {
     }
 }
 
-/// A horizontal bar meter.
-///
-/// The gradient is indexed by each cell's *position*, not by the value, so a
-/// bar at 40% shows the cool end of the ramp and a bar at 95% runs the whole
-/// way to hot. The unfilled tail keeps the same glyph in the track colour, so
-/// the meter's footprint never changes as the value moves.
+/// `part` as a whole percentage of `whole`, saturating at 100 and reading `0`
+/// for a whole of zero — a machine reporting no memory or a volume reporting
+/// no size reads as nothing used rather than dividing by zero. The product is
+/// taken in `u128`, so the widest inputs cannot overflow it.
+pub fn percent(part: u64, whole: u64) -> u16 {
+    if whole == 0 {
+        return 0;
+    }
+    // At most 100 by the `min`, so the conversion cannot fail.
+    u16::try_from(u128::from(part.min(whole)) * 100 / u128::from(whole)).unwrap_or(100)
+}
+
+/// Lines of muted prose centred in `area`, for a panel with nothing else to
+/// draw — no disks, no battery, no sensors. Each line is ellipsised to the
+/// width, so a narrow panel shows a marked cut rather than the terminal's
+/// silent one (invariant 19), and an empty line keeps its row without
+/// drawing anything. Lines past the bottom of the area are not drawn.
+pub fn draw_notice<S: AsRef<str>>(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &crate::theme::Theme,
+    lines: &[S],
+) {
+    let count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+    let top = area.y + area.height.saturating_sub(count) / 2;
+    let style = Style::default().fg(theme.muted);
+    for (y, text) in (top..area.bottom()).zip(lines) {
+        let text = text.as_ref();
+        if text.is_empty() {
+            continue;
+        }
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                crate::grid::truncate(text, usize::from(area.width)),
+                style,
+            ))
+            .centered(),
+            Rect::new(area.x, y, area.width, 1),
+        );
+    }
+}
+
+/// What a panel draws at `width` by `height`, one string a row with the
+/// trailing blanks trimmed, drawn in the default theme with the panel
+/// focused. The monitor panels' tests read their faces through this.
+#[cfg(test)]
+pub(crate) fn screen(panel: &mut dyn crate::panel::Panel, width: u16, height: u16) -> Vec<String> {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let config = crate::config::Config::default();
+    let gradients = config.theme.gradients();
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| {
+            panel.render(
+                frame,
+                frame.area(),
+                crate::panel::RenderContext {
+                    theme: &config.theme,
+                    gradients: &gradients,
+                    focused: true,
+                    watch: &crate::watch::WatchLog::default(),
+                },
+            );
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
 /// A flat meter: `percent` of `width` cells filled in one colour, the rest in
 /// the track colour. The pomodoro's progress bar and the battery's charge bar
 /// are both this; the graded version, coloured by level, is [`meter_spans`].
@@ -334,6 +446,12 @@ pub fn meter_line(percent: u16, width: u16, fill: Color, track: Color) -> Vec<Sp
         .collect()
 }
 
+/// A horizontal bar meter.
+///
+/// The gradient is indexed by each cell's *position*, not by the value, so a
+/// bar at 40% shows the cool end of the ramp and a bar at 95% runs the whole
+/// way to hot. The unfilled tail keeps the same glyph in the track colour, so
+/// the meter's footprint never changes as the value moves.
 pub fn meter_spans(
     value: u64,
     max: u64,
@@ -554,6 +672,66 @@ mod tests {
 
         let mut buf = Buffer::empty(area);
         BrailleGraph::new(&[1, 2, 3], 0, &gradient).render(area, &mut buf);
+
+        let mut buf = Buffer::empty(area);
+        BrailleGraph::of_history(&VecDeque::new(), 100, &gradient).render(area, &mut buf);
+    }
+
+    /// A history drawn where it lies in its deque is the same picture as the
+    /// same samples copied out into one slice, wherever the ring happens to
+    /// break — which is the case the copy existed to hide. Every rotation of
+    /// a full ring is tried, at widths that show part of it, exactly all of
+    /// it and more than there is, and the ring is checked to be broken in
+    /// two so the second run is really read.
+    #[test]
+    fn a_history_is_drawn_from_its_deque_as_it_would_be_from_a_copy() {
+        let gradient = Gradient::new(c(0, 255, 0), Some(c(255, 255, 0)), Some(c(255, 0, 0)));
+        let mut ring: VecDeque<u64> = VecDeque::with_capacity(48);
+        let full = ring.capacity();
+        ring.extend((0..full as u64).map(|i| i * 37 % 101));
+        let mut broken = 0;
+        for step in 0..full as u64 {
+            ring.pop_front();
+            ring.push_back(step * 53 % 101);
+            assert_eq!(ring.capacity(), full, "the ring must not reallocate");
+            if !ring.as_slices().1.is_empty() && !ring.as_slices().0.is_empty() {
+                broken += 1;
+            }
+            let copy: Vec<u64> = ring.iter().copied().collect();
+            for width in [1u16, 5, 20, (full / 2) as u16, 40, 70] {
+                let area = Rect::new(0, 0, width, 3);
+                let mut from_ring = Buffer::empty(area);
+                BrailleGraph::of_history(&ring, 100, &gradient).render(area, &mut from_ring);
+                let mut from_copy = Buffer::empty(area);
+                BrailleGraph::new(&copy, 100, &gradient).render(area, &mut from_copy);
+                assert_eq!(from_ring, from_copy, "rotated {step}, {width} wide");
+            }
+        }
+        assert!(
+            broken > full / 2,
+            "the ring broke in two only {broken} times"
+        );
+    }
+
+    /// One routine, where the memory and disk panels each had a copy that
+    /// differed only in the type it returned.
+    #[test]
+    fn a_percentage_saturates_and_never_divides_by_zero() {
+        assert_eq!(percent(0, 0), 0, "nothing at all reads as nothing used");
+        assert_eq!(percent(5, 0), 0);
+        assert_eq!(percent(1, 4), 25);
+        assert_eq!(percent(4, 4), 100);
+        assert_eq!(
+            percent(9, 4),
+            100,
+            "used past total saturates rather than overflowing"
+        );
+        assert_eq!(
+            percent(u64::MAX, u64::MAX),
+            100,
+            "the widest inputs multiply without overflow"
+        );
+        assert_eq!(percent(u64::MAX - 1, u64::MAX), 99, "and round down");
     }
 
     #[test]

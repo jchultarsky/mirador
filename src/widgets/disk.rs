@@ -43,12 +43,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::chart::{BrailleGraph, meter_line};
+use crate::chart::{BrailleGraph, draw_notice, meter_line, percent};
 use crate::config::DiskConfig;
 use crate::frame::{Binding, FRAME_HEIGHT};
 use crate::keymap::{KeysConfig, Meta, PanelKeymap};
 use crate::panel::{Panel, RenderContext};
-use crate::widgets::network::format_rate;
 
 /// One mounted volume as the platform reports it, before grouping.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,15 +84,6 @@ impl Device {
     }
 }
 
-/// `part` as a whole percentage of `whole`, saturating at 100 and reading `0`
-/// for a whole of zero.
-fn percent(part: u64, whole: u64) -> u16 {
-    if whole == 0 {
-        return 0;
-    }
-    ((u128::from(part.min(whole)) * 100) / u128::from(whole)) as u16
-}
-
 /// Bytes the way a disk is sold and Finder states it: decimal units, one
 /// decimal above a terabyte and below ten gigabytes, whole figures between.
 pub(crate) fn human(bytes: u64) -> String {
@@ -112,6 +102,13 @@ pub(crate) fn human(bytes: u64) -> String {
     } else {
         format!("{} kB", bytes / 1000)
     }
+}
+
+/// A read or write rate in the same units as the capacity beside it. The
+/// network panel's formatter divides by 1024 under the same letters, so
+/// borrowing it put two meanings of `MB` on one device.
+fn rate(bytes_per_sec: u64) -> String {
+    format!("{}/s", human(bytes_per_sec))
 }
 
 /// File systems that are never a disk filling up: a snap's squashfs image is
@@ -245,8 +242,9 @@ impl Reader {
 /// The smallest ceiling a device's graphs are drawn against. Every disk
 /// carries a trickle of background writes, and scaled to its own peak that
 /// trickle would fill the graph; a megabyte a second is where I/O starts
-/// to be worth a full-height mark.
-const SCALE_FLOOR: u64 = 1 << 20;
+/// to be worth a full-height mark. A decimal megabyte, as the rates beside
+/// the graphs are, so `1.0 MB/s` is the first rate drawn at full height.
+const SCALE_FLOOR: u64 = 1_000_000;
 
 /// The disk panel.
 #[derive(Debug)]
@@ -530,16 +528,15 @@ impl Panel for DiskPanel {
             return;
         }
         let Some(devices) = self.cache.as_deref() else {
-            draw_message(frame, area, theme, "Reading disks", "");
+            draw_notice(frame, area, theme, &["Reading disks", ""]);
             return;
         };
         if devices.is_empty() {
-            draw_message(
+            draw_notice(
                 frame,
                 area,
                 theme,
-                "No disks readable",
-                "Nothing listed can fill up",
+                &["No disks readable", "Nothing listed can fill up"],
             );
             return;
         }
@@ -552,8 +549,10 @@ impl Panel for DiskPanel {
         // there is room, and the rest of the panel is the row's to give away.
         let show_io = self.config.show_io && area.height >= 3;
         if show_io {
+            // Recorded so the next reading sizes the histories to the panel.
+            // Every region is a full-width slice of `area`.
+            self.graph_cells = usize::from(area.width);
             let regions = Layout::vertical(vec![Constraint::Fill(1); devices.len()]).split(area);
-            let devices = devices.to_vec();
             for (device, region) in devices.iter().zip(regions.iter()) {
                 self.draw_device_with_io(frame, *region, device, ctx);
             }
@@ -635,7 +634,7 @@ impl DiskPanel {
     /// the rows left split between a read graph and a write graph — or one
     /// graph of both when only a row is left.
     fn draw_device_with_io(
-        &mut self,
+        &self,
         frame: &mut Frame,
         region: Rect,
         device: &Device,
@@ -688,11 +687,11 @@ impl DiskPanel {
                     vec![
                         vec![
                             Span::styled("↓ ", muted),
-                            Span::styled(format_rate(device.read_rate), text),
+                            Span::styled(rate(device.read_rate), text),
                         ],
                         vec![
                             Span::styled("   ↑ ", muted),
-                            Span::styled(format_rate(device.write_rate), text),
+                            Span::styled(rate(device.write_rate), text),
                         ],
                     ],
                     rows[2].width,
@@ -701,7 +700,6 @@ impl DiskPanel {
             );
         }
 
-        self.graph_cells = usize::from(region.width);
         let scale = self.scale(&device.mount);
         let Some((reads, writes)) = self.histories.get(&device.mount) else {
             return;
@@ -709,9 +707,14 @@ impl DiskPanel {
         if rows[4].height == 0 && rows[3].height > 0 {
             // One row: both directions in one graph, since a reader with a
             // row to spare wants to know whether the disk is busy at all.
+            // The sums are a new series, so only the newest two a cell are
+            // made — the graph would read no further back than that.
+            let shown = usize::from(rows[3].width) * 2;
+            let skip = reads.len().min(writes.len()).saturating_sub(shown);
             let both: Vec<u64> = reads
                 .iter()
                 .zip(writes.iter())
+                .skip(skip)
                 .map(|(r, w)| r.saturating_add(*w))
                 .collect();
             BrailleGraph::new(&both, scale.saturating_mul(2), gradient)
@@ -721,8 +724,7 @@ impl DiskPanel {
         }
         for (data, rect) in [(reads, rows[3]), (writes, rows[4])] {
             if rect.height > 0 {
-                let data: Vec<u64> = data.iter().copied().collect();
-                BrailleGraph::new(&data, scale, gradient)
+                BrailleGraph::of_history(data, scale, gradient)
                     .track_style(track)
                     .render(rect, frame.buffer_mut());
             }
@@ -730,30 +732,10 @@ impl DiskPanel {
     }
 }
 
-/// Two centred muted lines, for a panel with nothing to draw.
-fn draw_message(
-    frame: &mut Frame,
-    area: Rect,
-    theme: &crate::theme::Theme,
-    first: &str,
-    second: &str,
-) {
-    let top = area.y + area.height.saturating_sub(2) / 2;
-    for (i, text) in [first, second].into_iter().enumerate() {
-        let y = top + u16::try_from(i).unwrap_or(0);
-        if y < area.y + area.height && !text.is_empty() {
-            let text = crate::grid::truncate(text, usize::from(area.width));
-            frame.render_widget(
-                Paragraph::new(Span::styled(text, Style::default().fg(theme.muted))).centered(),
-                Rect::new(area.x, y, area.width, 1),
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chart::screen;
 
     fn volume(mount: &str, fs: &str, total: u64, available: u64, read_only: bool) -> Volume {
         Volume {
@@ -788,38 +770,6 @@ mod tests {
 
     fn panel(devices: Vec<Device>) -> DiskPanel {
         DiskPanel::with_devices(quiet(), devices)
-    }
-
-    fn screen(panel: &mut DiskPanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     #[test]
@@ -1095,22 +1045,84 @@ mod tests {
             "{rows:?}"
         );
         assert!(rows[1].starts_with('■'), "{rows:?}");
-        assert_eq!(rows[2], "↓ 0 B/s   ↑ 320.0 KB/s", "{rows:?}");
+        assert_eq!(rows[2], "↓ 0 kB/s   ↑ 327 kB/s", "{rows:?}");
         assert!(
             rows[3].starts_with('⣀') && rows[4].starts_with('⣀'),
             "two graphs: {rows:?}"
         );
         assert!(rows[5].starts_with("/Volumes/T7"), "{rows:?}");
-        assert_eq!(rows[7], "↓ 50.0 MB/s   ↑ 0 B/s", "{rows:?}");
+        assert_eq!(rows[7], "↓ 52 MB/s   ↑ 0 kB/s", "{rows:?}");
 
         for width in 1..=40u16 {
             for height in 1..=12u16 {
                 for row in screen(&mut p, width, height) {
                     let t = row.trim();
-                    for bad in ["B/", "KB", "MB", "↑", "↓", "fre", "USE"] {
+                    for bad in ["B/", "kB", "MB", "↑", "↓", "fre", "USE"] {
                         assert!(!t.ends_with(bad), "fragment {t:?} at {width}x{height}");
                     }
                 }
+            }
+        }
+    }
+
+    /// The rates are stated in the units the capacity beside them is, so a
+    /// `MB` on the readout is the `MB` in `61 GB free`'s scale. They went
+    /// through the network panel's formatter, which divides by 1024 under
+    /// the same letters, and a disk moving a hundred million bytes a second
+    /// read `95.4 MB/s` over a capacity counted in powers of ten.
+    #[test]
+    fn the_rates_are_stated_in_the_units_of_the_capacity_beside_them() {
+        let mut busy = device("/", 1_000_000_000_000, 400_000_000_000);
+        busy.read_rate = 100_000_000;
+        busy.write_rate = 4_096;
+        let mut p = DiskPanel::with_devices(DiskConfig::default(), vec![busy]);
+        let rows = screen(&mut p, 60, 5);
+        assert_eq!(
+            rows[0], "/   60% USED   400 GB free   of 1.0 TB",
+            "{rows:?}"
+        );
+        assert_eq!(rows[2], "↓ 100 MB/s   ↑ 4 kB/s", "{rows:?}");
+    }
+
+    /// A panel wider than `history` covers grows the histories to fill it
+    /// (invariant 12): drawn at 100 columns, the next readings keep two a
+    /// cell, not the configured 120. The width is recorded by `render` once
+    /// for every device, which nothing checked when it moved there.
+    #[test]
+    fn a_wide_panel_keeps_enough_history_to_fill_its_graphs() {
+        let mut p = DiskPanel::with_devices(DiskConfig::default(), vec![device("/", 100, 50)]);
+        screen(&mut p, 100, 8);
+        for _ in 0..300 {
+            p.take(vec![device("/", 100, 50)]);
+        }
+        assert_eq!(p.histories["/"].0.len(), 200);
+        assert_eq!(p.histories["/"].1.len(), 200);
+    }
+
+    /// With one row for graphs, reads and writes are summed into one, and
+    /// the sums are of the newest samples: a history longer than the graph
+    /// is wide shows its right-hand end, as every other graph does. Tried
+    /// both ways round, so a graph showing the oldest end fails one of them.
+    #[test]
+    fn the_one_row_graph_sums_the_newest_samples() {
+        let idle = "⣀".repeat(10);
+        for (old, new, busy_now) in [(100_000_000, 0, false), (0, 100_000_000, true)] {
+            let mut p = DiskPanel::with_devices(DiskConfig::default(), vec![]);
+            for i in 0..100 {
+                let mut d = device("/", 100, 50);
+                d.write_rate = if i < 80 { old } else { new };
+                p.take(vec![d]);
+            }
+            assert_eq!(p.histories["/"].1.len(), 100, "longer than 2 × 10 cells");
+            let rows = screen(&mut p, 10, 4);
+            assert!(
+                rows[2].starts_with('↓'),
+                "one row left for graphs: {rows:?}"
+            );
+            if busy_now {
+                assert!(!rows[3].contains('⣀'), "busy at the end: {rows:?}");
+            } else {
+                assert_eq!(rows[3], idle, "idle at the end: {rows:?}");
             }
         }
     }
@@ -1141,7 +1153,7 @@ mod tests {
     #[test]
     fn the_scale_is_the_devices_peak_floored_at_a_megabyte() {
         let p = DiskPanel::canned(DiskConfig::default());
-        assert_eq!(p.scale("/"), SCALE_FLOOR, "320 KB/s is under the floor");
+        assert_eq!(p.scale("/"), SCALE_FLOOR, "328 kB/s is under the floor");
         assert_eq!(p.scale("/Volumes/T7"), 52_428_800);
         assert_eq!(p.scale("/nowhere"), SCALE_FLOOR);
     }

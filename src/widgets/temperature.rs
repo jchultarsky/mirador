@@ -231,18 +231,7 @@ impl TemperaturePanel {
     fn draw_empty_with(frame: &mut Frame, area: Rect, theme: &crate::theme::Theme, hint: &str) {
         let mut lines = vec!["No temperature sensors".to_string()];
         lines.extend(crate::grid::wrap(hint, usize::from(area.width)));
-        lines.truncate(usize::from(area.height));
-        let count = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-        let top = area.y + area.height.saturating_sub(count) / 2;
-        for (i, text) in lines.into_iter().enumerate() {
-            let y = top + u16::try_from(i).unwrap_or(0);
-            if y < area.y + area.height {
-                frame.render_widget(
-                    Paragraph::new(Span::styled(text, Style::default().fg(theme.muted))).centered(),
-                    Rect::new(area.x, y, area.width, 1),
-                );
-            }
-        }
+        crate::chart::draw_notice(frame, area, theme, &lines);
     }
 }
 
@@ -505,8 +494,7 @@ impl Panel for TemperaturePanel {
 
         self.graph_cells = rows[1].width as usize;
         if rows[1].height > 0 {
-            let data: Vec<u64> = self.history.iter().copied().collect();
-            BrailleGraph::new(&data, 100, gradient)
+            BrailleGraph::of_history(&self.history, 100, gradient)
                 .track_style(track)
                 .render(rows[1], frame.buffer_mut());
         }
@@ -542,6 +530,7 @@ impl Panel for TemperaturePanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chart::screen;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn apple() -> Vec<(String, Option<f32>, Option<f32>)> {
@@ -573,38 +562,6 @@ mod tests {
 
     fn panel(sensors: Vec<Sensor>) -> TemperaturePanel {
         TemperaturePanel::with_sensors(TemperatureConfig::default(), sensors, &[38, 39, 40, 41, 40])
-    }
-
-    fn screen(panel: &mut TemperaturePanel, width: u16, height: u16) -> Vec<String> {
-        use ratatui::Terminal;
-        use ratatui::backend::TestBackend;
-        let config = crate::config::Config::default();
-        let gradients = config.theme.gradients();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal
-            .draw(|frame| {
-                panel.render(
-                    frame,
-                    frame.area(),
-                    RenderContext {
-                        theme: &config.theme,
-                        gradients: &gradients,
-                        focused: true,
-                        watch: &crate::watch::WatchLog::default(),
-                    },
-                );
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     /// Twenty-five platform entries become three rows a person would write:
@@ -809,6 +766,47 @@ mod tests {
             !text.contains("administrator") || cfg!(windows),
             "the administrator line is Windows' alone: {rows:?}"
         );
+    }
+
+    /// The headline over the reason is ellipsised when the panel is
+    /// narrower than it, as the disk and battery panels' empty states always
+    /// were. This one alone handed `No temperature sensors` over whole, and
+    /// what fitted was kept — `No temperatu` at twelve columns, with nothing
+    /// to say that the rest of a word had gone.
+    #[test]
+    fn the_headline_is_marked_when_the_panel_is_too_narrow_for_it() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let config = crate::config::Config::default();
+        let mut cut = 0;
+        for width in 1..=30u16 {
+            let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+            terminal
+                .draw(|frame| {
+                    TemperaturePanel::draw_empty_with(frame, frame.area(), &config.theme, "");
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows: Vec<String> = (0..6)
+                .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+                .collect();
+            let headline = rows
+                .iter()
+                .map(|row| row.trim())
+                .find(|row| !row.is_empty())
+                .unwrap_or_default();
+            if usize::from(width) >= "No temperature sensors".len() {
+                assert_eq!(headline, "No temperature sensors", "at {width}: {rows:?}");
+            } else {
+                assert!(
+                    headline.ends_with('…')
+                        && "No temperature sensors".starts_with(headline.trim_end_matches('…')),
+                    "at {width} the headline was {headline:?}"
+                );
+                cut += 1;
+            }
+        }
+        assert_eq!(cut, 21, "the sweep reached the widths that must cut it");
     }
 
     /// The reason is prose and wraps whole to the width — every word of the

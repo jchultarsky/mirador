@@ -235,8 +235,7 @@ impl Panel for CpuPanel {
         self.graph_cells = rows[1].width as usize;
 
         if rows[1].height > 0 {
-            let data: Vec<u64> = self.history.iter().copied().collect();
-            BrailleGraph::new(&data, 100, gradient)
+            BrailleGraph::of_history(&self.history, 100, gradient)
                 .track_style(track)
                 .render(rows[1], frame.buffer_mut());
         }
