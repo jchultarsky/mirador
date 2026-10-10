@@ -6,7 +6,6 @@ rust-version = "1.95"
 authors = ["Julian Chultarsky <jchultarsky@gmail.com>"]
 description = "An opinionated personal dashboard for your terminal: world clocks, a calendar, weather, tasks, notes, a market watchlist, and live CPU and network graphs."
 readme = "README.md"
-homepage = "https://github.com/jchultarsky/mirador"
 repository = "https://github.com/jchultarsky/mirador"
 license = "MIT"
 keywords = ["tui", "dashboard", "terminal", "ratatui", "todo"]

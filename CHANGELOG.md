@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The manifest no longer sets `homepage`**, which named the same URL as
+  `repository`. Cargo from Rust 1.100 warns about the pair
+  (`cargo::redundant_homepage`) on every build, which is how it was found:
+  by the NetBSD package building on a beta toolchain (#309). crates.io
+  still links the repository, and the release plan `dist` produces is
+  unchanged.
+
 ## [1.22.1] - 2026-10-08
 
 ### Changed
