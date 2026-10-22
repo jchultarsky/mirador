@@ -16,6 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still links the repository, and the release plan `dist` produces is
   unchanged.
 
+### Security
+
+- **`webpki-roots` 1.0.10**, for RUSTSEC-2026-0381: 1.0.9 still trusted
+  emSign ECC Root CA - G3, through which certificate paths could pass
+  distrusted emSign intermediates whose private keys are now known. These
+  are the roots every fetch mirador makes is checked against. Reported by
+  @0323pin (#313).
+- **`rustls` 0.23.46 and `rustls-webpki` 0.103.16**, for RUSTSEC-2026-0346
+  to 0349 and RUSTSEC-2026-0382, published alongside it. The last is the
+  same distrusted-intermediate problem from the verifier's side. Of the
+  four in `rustls`, the Brotli certificate decompression one needs a
+  feature mirador does not build with; the bump is taken whole rather than
+  argued advisory by advisory.
+
 ## [1.22.1] - 2026-10-08
 
 ### Changed
