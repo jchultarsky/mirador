@@ -2394,9 +2394,25 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.22.1` is released**, as a GitHub release with binaries for macOS
+- **`1.22.2` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a patch release cut on 2026-10-08
+  and published on crates.io. It is a patch release cut on 2026-10-22
+  for a security advisory reported by @0323pin (#313): RUSTSEC-2026-0381,
+  `webpki-roots` 1.0.9 still trusting an emSign root whose distrusted
+  intermediates' keys are known. Clearing it in `cargo deny` turned up
+  five more published alongside it — four in `rustls`, one in
+  `rustls-webpki` — and all three crates were bumped in one lockfile-only
+  change (#314). `supply chain` had been red on `main` and on Dependabot's
+  #312 since the advisories were published; nothing in either diff was at
+  fault. It also carries #310, the manifest dropping `homepage`, which
+  duplicated `repository` and drew a warning from Cargo 1.100 (#309, from
+  the same reporter's beta-toolchain package build).
+
+  Step 0 was the fix branch as a release build under tmux at 120x40 with a
+  fresh home: weather, markets and news all fetched over the bumped TLS
+  stack, and `q` quit.
+
+- **`1.22.1`** was a patch release cut on 2026-10-08
   carrying one change (#307): at most one `tick` waits in an external
   panel's input queue. The owner decided it after 1.22.0, which had
   shipped only the shutdown half of the same finding. A plugin that
