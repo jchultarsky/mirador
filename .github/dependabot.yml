@@ -12,6 +12,20 @@ updates:
       patch-updates:
         update-types:
           - patch
+    ignore:
+      # unicode-width 0.2.3 gives the halfwidth sound marks U+FF9E/U+FF9F
+      # width 1 (0.2.2 said 0). ratatui-core 0.1.2 already adds one cell per
+      # mark to make up for the old 0, so with 0.2.3 the mark is counted twice:
+      # `ｶﾞ` takes three cells where a terminal draws two, and
+      # `frame::tests::a_rule_measures_its_label_in_cells` fails on every OS
+      # (#320). Upstream: ratatui/ratatui#2886, fixed by ratatui/ratatui#2887,
+      # not yet released on 2026-11-08.
+      #
+      # Drop this entry when a ratatui-core release containing #2887 is out,
+      # and take it together with unicode-width 0.2.3.
+      - dependency-name: unicode-width
+        versions:
+          - "0.2.3"
 
   - package-ecosystem: github-actions
     directory: "/"
