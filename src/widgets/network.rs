@@ -23,7 +23,9 @@ use crate::samples::push_bounded;
 /// The network panel.
 pub struct NetworkPanel {
     config: NetworkConfig,
-    networks: Networks,
+    /// `None` where `sysinfo` cannot list interfaces at all; the panel then
+    /// reads no traffic, as it did when that was `sysinfo`'s own answer.
+    networks: Option<Networks>,
     /// Bytes per second received, oldest first.
     rx_history: VecDeque<u64>,
     /// Bytes per second transmitted, oldest first.
@@ -60,7 +62,7 @@ impl std::fmt::Debug for NetworkPanel {
 impl NetworkPanel {
     /// Build the panel and prime the interface list.
     pub fn new(config: NetworkConfig) -> Self {
-        let networks = Networks::new_with_refreshed_list();
+        let networks = Networks::new_with_refreshed_list().ok();
         Self {
             rx_history: VecDeque::with_capacity(config.history.max(1)),
             tx_history: VecDeque::with_capacity(config.history.max(1)),
@@ -97,15 +99,20 @@ impl NetworkPanel {
             return false;
         }
 
-        self.networks.refresh(true);
+        if let Some(networks) = self.networks.as_mut() {
+            networks.refresh(true);
+        }
 
         let mut rx_delta = 0u64;
         let mut tx_delta = 0u64;
         let mut rx_total = 0u64;
         let mut tx_total = 0u64;
 
-        for (name, data) in &self.networks {
-            if !self.includes(name) {
+        for (name, data) in self.networks.iter().flatten() {
+            // An interface name is an `OsString` since sysinfo 0.40. One that
+            // is not UTF-8 cannot be named in the config, and is counted
+            // unless the config names others.
+            if !self.includes(&name.to_string_lossy()) {
                 continue;
             }
             rx_delta = rx_delta.saturating_add(data.received());

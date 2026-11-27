@@ -278,7 +278,9 @@ fn shorter_order(a: &str, b: &str) -> std::cmp::Ordering {
 /// The platform's disk list, kept between readings so the I/O counters
 /// are deltas against the last one. Blocking; the thread's job.
 struct Reader {
-    disks: sysinfo::Disks,
+    /// `None` where `sysinfo` cannot list disks at all; every reading is
+    /// then empty, as it was when that was `sysinfo`'s own answer.
+    disks: Option<sysinfo::Disks>,
     last: Instant,
     last_listing: Instant,
     /// How often to re-list volumes and re-read capacity, which is the
@@ -291,7 +293,8 @@ impl Reader {
         use sysinfo::{DiskRefreshKind, Disks};
         let disks = Disks::new_with_refreshed_list_specifics(
             DiskRefreshKind::nothing().with_storage().with_io_usage(),
-        );
+        )
+        .ok();
         let now = Instant::now();
         Self {
             disks,
@@ -311,14 +314,16 @@ impl Reader {
         } else {
             DiskRefreshKind::nothing().with_io_usage()
         };
-        self.disks.refresh_specifics(relist, kind);
+        let Some(disks) = self.disks.as_mut() else {
+            return Vec::new();
+        };
+        disks.refresh_specifics(relist, kind);
         if relist {
             self.last_listing = now;
         }
         self.last = now;
         let per_second = |bytes: u64| (bytes as f64 / elapsed) as u64;
-        self.disks
-            .list()
+        disks
             .iter()
             .map(|d| Volume {
                 mount: d.mount_point().to_string_lossy().into_owned(),

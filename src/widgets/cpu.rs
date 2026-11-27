@@ -22,7 +22,9 @@ pub struct CpuPanel {
     config: CpuConfig,
     /// `[cpu.keys]` over the defaults.
     keys: PanelKeymap<CpuAction>,
-    system: System,
+    /// `None` where `sysinfo` cannot read this platform at all; the panel
+    /// then reads zero, as it did when that was `sysinfo`'s own answer.
+    system: Option<System>,
     /// Recent average-utilisation samples, oldest first.
     history: VecDeque<u64>,
     /// Per-core utilisation from the most recent sample.
@@ -51,10 +53,13 @@ impl CpuPanel {
     /// Build the panel and take a first sample.
     pub fn new(config: CpuConfig) -> Self {
         let mut system = System::new_with_specifics(
-            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_cpu_usage()),
-        );
-        system.refresh_cpu_usage();
-        let core_count = system.cpus().len();
+            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_usage()),
+        )
+        .ok();
+        let core_count = system.as_mut().map_or(0, |system| {
+            system.refresh_cpu_usage();
+            system.cpus().len()
+        });
 
         Self {
             history: VecDeque::with_capacity(config.history.max(1)),
@@ -86,14 +91,11 @@ impl CpuPanel {
             return false;
         }
 
-        self.system.refresh_cpu_usage();
-        self.current = self.system.global_cpu_usage();
-        self.per_core = self
-            .system
-            .cpus()
-            .iter()
-            .map(sysinfo::Cpu::cpu_usage)
-            .collect();
+        if let Some(system) = self.system.as_mut() {
+            system.refresh_cpu_usage();
+            self.current = system.global_cpu_usage();
+            self.per_core = system.cpus().iter().map(sysinfo::Cpu::usage).collect();
+        }
         self.core_count = self.per_core.len();
         self.last_sample = Some(Instant::now());
 
