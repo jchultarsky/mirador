@@ -98,3 +98,11 @@ unix-archive = ".tar.gz"
 windows-archive = ".zip"
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
+
+# dist 0.32 builds the Apple silicon archive on `macos-14`, an image GitHub no
+# longer offers: the job was cancelled in a second with "The configuration
+# 'macos-14-arm64-us-default' is not supported", which stopped 1.22.3 half-cut.
+# `macos-15` is arm64, and is the same release the Intel build already runs on
+# (`macos-15-intel`). Drop this once a dist upgrade picks a live image itself.
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
