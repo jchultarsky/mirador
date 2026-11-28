@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`sysinfo` 0.40.1**, which the cpu, memory, disk, network and temperature
+  panels read through. Its release notes list fixes those panels pass on
+  without a change here: free and available memory on FreeBSD and NetBSD,
+  thermal zone temperatures on Linux, and disk and network refreshes. 0.40
+  also made every reader fallible, so a platform `sysinfo` cannot read now
+  leaves a panel at zero by mirador's choice rather than by `sysinfo`'s; on
+  the shipped targets nothing changes on screen.
+
 ## [1.22.2] - 2026-10-22
 
 ### Changed

@@ -31,7 +31,9 @@ pub struct MemoryPanel {
     config: MemoryConfig,
     /// `[memory.keys]` over the defaults.
     keys: PanelKeymap<MemoryAction>,
-    system: System,
+    /// `None` where `sysinfo` cannot read this platform at all; the panel
+    /// then reads no memory, as it did when that was `sysinfo`'s own answer.
+    system: Option<System>,
     /// Recent used-percentage samples, oldest first.
     history: VecDeque<u64>,
     /// The most recent reading, in bytes.
@@ -86,9 +88,9 @@ impl MemoryPanel {
     pub fn new(config: MemoryConfig) -> Self {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
-        );
-        system.refresh_memory();
-        let reading = Self::read(&system);
+        )
+        .ok();
+        let reading = Self::read(system.as_mut());
 
         Self {
             history: VecDeque::with_capacity(config.history.max(1)),
@@ -117,7 +119,18 @@ impl MemoryPanel {
         panel
     }
 
-    fn read(system: &System) -> Reading {
+    /// Refresh and read. With no `sysinfo` behind the panel the reading is
+    /// all zeros, which `used_pct` and the swap row both already expect.
+    fn read(system: Option<&mut System>) -> Reading {
+        let Some(system) = system else {
+            return Reading {
+                used: 0,
+                total: 0,
+                swap_used: 0,
+                swap_total: 0,
+            };
+        };
+        system.refresh_memory();
         Reading {
             used: system.used_memory(),
             total: system.total_memory(),
@@ -133,8 +146,7 @@ impl MemoryPanel {
         if self.last_sample.is_some_and(|at| at.elapsed() < interval) {
             return false;
         }
-        self.system.refresh_memory();
-        self.reading = Self::read(&self.system);
+        self.reading = Self::read(self.system.as_mut());
         self.last_sample = Some(Instant::now());
 
         let capacity = crate::samples::capacity(self.config.history, self.graph_cells);

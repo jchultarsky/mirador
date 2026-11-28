@@ -112,7 +112,7 @@ impl TemperaturePanel {
             history: VecDeque::with_capacity(config.history.max(1)),
             keys: PanelKeymap::or_defaults("temperature", ACTIONS, &config.keys),
             config,
-            components: Some(sysinfo::Components::new_with_refreshed_list()),
+            components: sysinfo::Components::new_with_refreshed_list().ok(),
             sensors: Vec::new(),
             graph_cells: 0,
             last_sample: None,
