@@ -2394,9 +2394,32 @@ and had to be added back was the one that did not.
   paths went unexercised. Both have since been run on macOS against a real
   terminal under `tmux` and report sensible figures. Windows has since been run
   too — see the platform note below.
-- **`1.22.2` is released**, as a GitHub release with binaries for macOS
+- **`1.22.3` is released**, as a GitHub release with binaries for macOS
   arm64, macOS x86-64, Linux x86-64, Linux aarch64 and Windows x86-64,
-  and published on crates.io. It is a patch release cut on 2026-10-22
+  and published on crates.io. It is a patch release cut on 2026-11-28
+  carrying dependency updates and nothing a reader sees: `sysinfo` 0.40
+  (#325, then 0.40.3 in #327), `toml` 1.2.2 (#323), `ureq` 3.5.1 (#324),
+  and `anyhow` and `serde_json` patches (#327). Only `sysinfo` needed
+  code. 0.40 made every constructor return a `Result`, renamed the cpu
+  usage accessors and dropped `list()` from its collections, so the cpu,
+  memory, disk, network and temperature panels each hold their handle as
+  an `Option` and read zero or empty without one — which no shipped target
+  reaches. Interface names became `OsString`; the network panel compares
+  them lossily against `[network].interfaces`.
+
+  **Merging Dependabot PRs one after another closes a grouped one.** #326,
+  the patch group, was closed by Dependabot seconds after #323 and #324
+  moved `main`, and came back as #327 with different contents. Merge the
+  group first, or expect a replacement and read it before merging. And
+  the app's Auto-fix cannot be turned on for a PR Dependabot opened.
+
+  Step 0 was the merged `main` as a release build under tmux at 120x40
+  with a fresh home: every panel drew, weather, markets and news fetched
+  over the bumped `ureq`, cpu, memory and network read real figures, and
+  `q` quit. The disk and temperature panels, which the default layout
+  does not place, were driven the same way on the port commit.
+
+- **`1.22.2`** was a patch release cut on 2026-10-22
   for a security advisory reported by @0323pin (#313): RUSTSEC-2026-0381,
   `webpki-roots` 1.0.9 still trusting an emSign root whose distrusted
   intermediates' keys are known. Clearing it in `cargo deny` turned up

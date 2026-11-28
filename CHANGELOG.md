@@ -7,15 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.3] - 2026-11-28
+
 ### Changed
 
-- **`sysinfo` 0.40.1**, which the cpu, memory, disk, network and temperature
+- **`sysinfo` 0.40.3**, which the cpu, memory, disk, network and temperature
   panels read through. Its release notes list fixes those panels pass on
   without a change here: free and available memory on FreeBSD and NetBSD,
   thermal zone temperatures on Linux, and disk and network refreshes. 0.40
   also made every reader fallible, so a platform `sysinfo` cannot read now
   leaves a panel at zero by mirador's choice rather than by `sysinfo`'s; on
   the shipped targets nothing changes on screen.
+- **`ureq` 3.5.1, `toml` 1.2.2, `serde_json` 1.0.154 and `anyhow` 1.0.105**,
+  as lockfile updates. Nothing in mirador changed for them; `ureq` is what
+  the weather, markets and news panels fetch through.
 
 ## [1.22.2] - 2026-10-22
 
@@ -2879,7 +2884,8 @@ in an earlier version — they are kept because the reasoning is worth having.
 - Task rows no longer shift horizontally when a task has no due date.
 - Key hints are no longer duplicated between the panel body and its frame.
 
-[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.22.2...HEAD
+[Unreleased]: https://github.com/jchultarsky/mirador/compare/v1.22.3...HEAD
+[1.22.3]: https://github.com/jchultarsky/mirador/compare/v1.22.2...v1.22.3
 [1.22.2]: https://github.com/jchultarsky/mirador/compare/v1.22.1...v1.22.2
 [1.22.1]: https://github.com/jchultarsky/mirador/compare/v1.22.0...v1.22.1
 [1.22.0]: https://github.com/jchultarsky/mirador/compare/v1.21.0...v1.22.0
